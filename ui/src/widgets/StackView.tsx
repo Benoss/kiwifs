@@ -2,6 +2,7 @@ import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { hasMath } from "./widgetLabel";
 import { WidgetText } from "./WidgetText";
+import { summarizeStack } from "./widgetA11y";
 
 export interface StackPointer {
   index: number;
@@ -32,6 +33,8 @@ export interface StackViewProps {
   empty?: string;
   activeColor?: string;
   highlightColor?: string;
+  /** Accessible name. Defaults to a summary of the items, bottom to top. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -67,6 +70,7 @@ export function StackView({
   empty = "(empty)",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
+  ariaLabel,
 }: StackViewProps) {
   const highlightIndices = toSet(highlightIndicesIn);
   const dimIndices = toSet(dimIndicesIn);
@@ -102,7 +106,11 @@ export function StackView({
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
+    <div
+      role="img"
+      aria-label={ariaLabel ?? summarizeStack({ values, growth, title })}
+      style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}
+    >
       {title && (
         <div style={{ fontSize: "0.7rem", fontWeight: 700, color: DEFAULTS.dimColor, letterSpacing: "0.04em", marginBottom: 4 }}>
           {hasMath(title) ? <WidgetText text={title} /> : title.toUpperCase()}

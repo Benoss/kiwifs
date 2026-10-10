@@ -12,6 +12,7 @@ import {
   type CellValue,
   type OverlayShape,
 } from "./cellOverlay";
+import { canvasAria, summarizeMatrix } from "./widgetA11y";
 
 export interface MatrixArrow {
   /** Cell read from, as `[r, c]` or `"r,c"`. */
@@ -88,6 +89,8 @@ export interface MatrixViewProps {
   readColor?: string;
   /** Cell size in px. Defaults to 44, shrinking for wide tables. */
   cellSize?: number;
+  /** Accessible name. Defaults to a summary of the table's shape and highlights. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -150,6 +153,7 @@ export function MatrixView({
   highlightColor = DEFAULTS.highlightColor,
   readColor,
   cellSize,
+  ariaLabel,
 }: MatrixViewProps) {
   const [layerSel, setLayerSel] = useState(layer ?? 0);
   useEffect(() => {
@@ -259,8 +263,13 @@ export function MatrixView({
     onLayerChange?.(i);
   };
 
+  const aria = canvasAria(
+    ariaLabel ?? summarizeMatrix({ values, activeCells: active, highlightCells: highlight, path }),
+    Boolean(layers?.length),
+  );
+
   return (
-    <div style={{ overflowX: "auto", padding: "0.5rem 0" }}>
+    <div {...aria} style={{ overflowX: "auto", padding: "0.5rem 0" }}>
       <div style={{ width: "max-content", margin: "0 auto", display: "flex", flexDirection: "column", gap: 0 }}>
         {layers && layers.length > 0 && (
           <div role="tablist" style={{ display: "flex", gap: 4, flexWrap: "wrap", marginLeft: leftGutter, marginBottom: 8 }}>

@@ -1,6 +1,7 @@
 import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { SvgLabel } from "./WidgetText";
+import { summarizeBars } from "./widgetA11y";
 
 export interface BarPointer {
   /** Column index the pointer sits above. */
@@ -72,6 +73,8 @@ export interface BarViewProps {
   highlightColor?: string;
   /** Default overlay color (water). */
   overlayColor?: string;
+  /** Accessible name. Defaults to a summary of the columns and range. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -123,6 +126,7 @@ export function BarView({
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   overlayColor = DEFAULTS.overlay,
+  ariaLabel,
 }: BarViewProps) {
   const activeIndices = toSet(activeIndicesIn);
   const highlightIndices = toSet(highlightIndicesIn);
@@ -194,6 +198,7 @@ export function BarView({
         viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         style={{ fontVariantNumeric: "tabular-nums", maxWidth: "100%" }}
         role="img"
+        aria-label={ariaLabel ?? summarizeBars({ values, labels, activeIndices })}
       >
         {/* Zero baseline (only if we have negatives) */}
         {axisMin < 0 && (

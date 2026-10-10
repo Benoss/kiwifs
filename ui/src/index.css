@@ -423,6 +423,27 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+/* ─── Deep-linked widget flash ─── */
+/* A reader arriving on `#?step=7` lands mid-page; a one-second ring says
+   which widget the link was about. */
+.kiwi-widget-flash {
+  animation: kiwi-widget-flash 1.2s ease-out;
+}
+@keyframes kiwi-widget-flash {
+  0%, 60% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kiwi-widget-flash {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+}
+
 /* ─── Widget range scrubber ─── */
 /* Native range tracks follow the UA palette rather than the app theme, which
    leaves a dark bar sitting on a light page. Paint the whole control instead:

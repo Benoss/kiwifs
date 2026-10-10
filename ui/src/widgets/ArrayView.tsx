@@ -13,6 +13,7 @@ import {
   type CellValue,
   type OverlayShape,
 } from "./cellOverlay";
+import { summarizeArray, summarizeArrayStack } from "./widgetA11y";
 
 interface CellStyle {
   border: string;
@@ -114,6 +115,8 @@ interface SharedProps {
   flash?: boolean;
   /** Width of the row-label gutter. Defaults to fit the longest label. */
   labelWidth?: number;
+  /** Accessible name. Defaults to a summary of the values and highlights. */
+  ariaLabel?: string;
 }
 
 export interface ArrayViewProps extends ArrayRowProps, SharedProps {}
@@ -461,6 +464,7 @@ export function ArrayStack({
   flash = true,
   labelWidth,
   rowGap,
+  ariaLabel,
 }: ArrayStackProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -512,8 +516,19 @@ export function ArrayStack({
     else if (r.right > o.right - 8) outer.scrollLeft += r.right - o.right + 24;
   }, [activeSig, wrap]);
 
+  const label =
+    ariaLabel ??
+    (rows.length === 1
+      ? summarizeArray({ ...rows[0]!, values: rows[0]!.values })
+      : summarizeArrayStack(rows));
+
   return (
-    <div ref={outerRef} style={{ overflowX: wrap ? "visible" : "auto", padding: "0.75rem 0" }}>
+    <div
+      ref={outerRef}
+      role="img"
+      aria-label={label}
+      style={{ overflowX: wrap ? "visible" : "auto", padding: "0.75rem 0" }}
+    >
       <div
         ref={innerRef}
         style={{
@@ -551,6 +566,7 @@ export function ArrayStack({
 }
 
 export function ArrayView({
+  ariaLabel,
   activeColor,
   highlightColor,
   readColor,
@@ -565,6 +581,7 @@ export function ArrayView({
   return (
     <ArrayStack
       rows={[{ ...row, showIndices }]}
+      ariaLabel={ariaLabel}
       activeColor={activeColor}
       highlightColor={highlightColor}
       readColor={readColor}

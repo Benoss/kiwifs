@@ -20,34 +20,18 @@ import { KiwiBreadcrumb } from "./KiwiBreadcrumb";
 import { KiwiToC } from "./KiwiToC";
 import { KiwiBacklinks } from "./KiwiBacklinks";
 import { KiwiComments } from "./KiwiComments";
-import { KiwiQuery } from "./KiwiQuery";
 import { PageActions } from "./PageActions";
 import { PublishButton } from "./PublishButton";
-import { ShikiCode } from "./ShikiCode";
-import { MermaidDiagram } from "./MermaidDiagram";
-import { parseMermaidMeta } from "@kw/lib/mermaidTheme";
-import { KiwiSteps } from "./KiwiSteps";
-import { KiwiCalc } from "./KiwiCalc";
+import { FenceBlock } from "./FenceBlock";
 import { KiwiFigure } from "./KiwiFigure";
 import { KiwiEmbed } from "./KiwiEmbed";
 import { KiwiPageNav } from "./KiwiPageNav";
-import { KiwiChart } from "./KiwiChart";
-import { KiwiApp } from "./KiwiApp";
-import { KiwiDiff } from "./KiwiDiff";
-import { KiwiKanbanBlock } from "./KiwiKanbanBlock";
-import { KiwiDataBlock } from "./KiwiDataBlock";
-import { KiwiColor } from "./KiwiColor";
-import { KiwiProgress } from "./KiwiProgress";
-import { KiwiPlayground } from "./KiwiPlayground";
 import { KiwiTabs } from "./KiwiTabs";
 import { KiwiColumns } from "./KiwiColumns";
 import { KiwiClaim } from "./KiwiClaim";
 import { KiwiQuiz, KiwiQuizProvider, KiwiQuizScore } from "./KiwiQuiz";
 import { ExcalidrawMarkdownPreview, isExcalidrawMarkdown } from "./ExcalidrawMarkdownPreview";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { KiwiWidget } from "./KiwiWidget";
-import { CodeRunner } from "@kw/widgets/CodeRunner";
-import { PageTracker } from "@kw/widgets/PageTracker";
 import { useUIConfigStore } from "@kw/lib/uiConfigStore";
 import { bannerChips, labeledCount, parseFlowList, parseLabeledCounts, propertyHiddenKeys, type FrontmatterChip } from "@kw/lib/frontmatterTags";
 import { assignTagTones, hslTone, resolveTagTone, type TagTone } from "@kw/lib/tagStyle";
@@ -1062,73 +1046,13 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                         </a>
                       );
                     },
-                    code: ({ className, children, node, ...rest }: any) => {
-                      const match = /language-([A-Za-z0-9_:.-]+)/.exec(className || "");
-                      const lang = match ? match[1] : undefined;
-                      const raw = String(children).replace(/\n$/, "");
-                      if (lang === "widget:code") {
-                        const codeMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                        const codeLangMatch = codeMeta.match(/lang=(\w+)/);
-                        const codeLang = codeLangMatch ? codeLangMatch[1] : "python";
-                        return <CodeRunner source={raw} lang={codeLang} />;
-                      }
-                      if (lang === "widget:tracker") {
-                        return <PageTracker onNavigate={nav} source={raw} />;
-                      }
-                      if (lang?.startsWith("widget:")) {
-                        return <KiwiWidget name={lang.slice("widget:".length)} source={raw} />;
-                      }
-                      if (lang === "kiwi-query") {
-                        return <KiwiQuery source={raw} onNavigate={nav} isComputedView={parsed.meta?.["kiwi-view"] === true} />;
-                      }
-                      if (lang === "mermaid") {
-                        const { focus, dim } = parseMermaidMeta(node?.data?.meta || node?.properties?.metastring);
-                        return <MermaidDiagram chart={raw} onNavigate={nav} focus={focus} dim={dim} />;
-                      }
-                      if (lang === "kiwi-steps") {
-                        return <KiwiSteps source={raw} onNavigate={nav} />;
-                      }
-                      if (lang === "kiwi-calc") {
-                        return <KiwiCalc source={raw} />;
-                      }
-                      if (lang === "kiwi-chart") {
-                        return <KiwiChart source={raw} />;
-                      }
-                      if (lang === "kiwi-color") {
-                        return <KiwiColor source={raw} />;
-                      }
-                      if (lang === "kiwi-progress") {
-                        return <KiwiProgress source={raw} />;
-                      }
-                      if (lang === "kiwi-playground") {
-                        return <KiwiPlayground source={raw} />;
-                      }
-                      if (lang === "kiwi-kanban") {
-                        return <KiwiKanbanBlock source={raw} />;
-                      }
-                      if (lang === "kiwi-data") {
-                        // Dispatched before the single-line guard below: a
-                        // one-record block is still data, not inline code.
-                        const dataMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                        return <KiwiDataBlock source={raw} meta={dataMeta} />;
-                      }
-                      if (!lang || !raw.includes("\n")) {
-                        return <code className={className} {...rest}>{children}</code>;
-                      }
-                      // Extract meta string from the code fence (node.data.meta)
-                      const meta: string = node?.data?.meta || node?.properties?.metastring || "";
-                      if (lang === "kiwi-app") {
-                        return <KiwiApp source={raw} meta={meta} />;
-                      }
-                      if (lang === "kiwi-diff") {
-                        return <KiwiDiff source={raw} meta={meta} />;
-                      }
-                      const titleMatch = meta.match(/title="([^"]+)"/);
-                      const title = titleMatch ? titleMatch[1] : undefined;
-                      const hlMatch = meta.match(/\{([\d,\s-]+)\}/);
-                      const highlightLines = hlMatch ? parseLineRanges(hlMatch[1]) : undefined;
-                      return <ShikiCode code={raw} lang={lang} title={title} highlightLines={highlightLines} />;
-                    },
+                    code: (props: any) => (
+                      <FenceBlock
+                        {...props}
+                        onNavigate={nav}
+                        isComputedView={parsed.meta?.["kiwi-view"] === true}
+                      />
+                    ),
                     pre: ({ children }) => <>{children}</>,
                     span: ({ children, node: _node, ...rest }: any) => {
                       const props = rest as Record<string, unknown>;
@@ -1356,24 +1280,7 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             rehypeSlug,
                           ]}
                           components={{
-                            code: ({ className, children, node, ...rest }: any) => {
-                              const match = /language-([A-Za-z0-9_:.-]+)/.exec(className || "");
-                              const lang = match ? match[1] : undefined;
-                              const raw = String(children).replace(/\n$/, "");
-                              if (lang === "widget:code") {
-                                const codeMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                                const codeLangMatch = codeMeta.match(/lang=(\w+)/);
-                                const codeLang = codeLangMatch ? codeLangMatch[1] : "python";
-                                return <CodeRunner source={raw} lang={codeLang} />;
-                              }
-                              if (!lang || !raw.includes("\n")) {
-                                return <code className={className} {...rest}>{children}</code>;
-                              }
-                              const meta: string = node?.data?.meta || node?.properties?.metastring || "";
-                              const titleMatch = meta.match(/title="([^"]+)"/);
-                              const title = titleMatch ? titleMatch[1] : undefined;
-                              return <ShikiCode code={raw} lang={lang} title={title} />;
-                            },
+                            code: (props: any) => <FenceBlock {...props} onNavigate={nav} />,
                             pre: ({ children }) => <>{children}</>,
                             table: ScrollableTable,
                             div: ({ children, node: _node, ...rest }: any) => {
@@ -1770,24 +1677,6 @@ function formatFrontmatterValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatFrontmatterValue).join(", ");
   if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
-}
-
-/** Parse "{1,3-5,8}" into a Set of line numbers (1-indexed). */
-function parseLineRanges(spec: string): Set<number> {
-  const lines = new Set<number>();
-  for (const part of spec.split(",")) {
-    const trimmed = part.trim();
-    const range = trimmed.match(/^(\d+)-(\d+)$/);
-    if (range) {
-      const start = parseInt(range[1], 10);
-      const end = parseInt(range[2], 10);
-      for (let i = start; i <= end; i++) lines.add(i);
-    } else {
-      const n = parseInt(trimmed, 10);
-      if (!Number.isNaN(n)) lines.add(n);
-    }
-  }
-  return lines;
 }
 
 function frontmatterBadges(

@@ -19,6 +19,7 @@ import { arrivalOpacity, useFlowProgress } from "./useFlowProgress";
 import { useTweenedPositions, type Point } from "./useTweenedPositions";
 import { SvgLabel } from "./WidgetText";
 import { ZoomPanel } from "./ZoomPanel";
+import { summarizeGraph } from "./widgetA11y";
 
 export interface GraphNode {
   id: string | number;
@@ -149,6 +150,8 @@ export interface GraphViewProps {
   width?: number;
   /** Canvas height. Default 300 (ignored by "dagre", which sizes itself). */
   height?: number;
+  /** Accessible name. Defaults to a summary of the nodes, edges and groups. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -217,6 +220,7 @@ export function GraphView({
   nodeSize = DEFAULTS.nodeSize,
   width,
   height,
+  ariaLabel,
 }: GraphViewProps) {
   const activeNodes = toSet(activeNodesIn);
   const highlightNodes = toSet(highlightNodesIn);
@@ -499,7 +503,8 @@ export function GraphView({
       height={Math.round(displayH)}
       viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
       style={{ display: "block", maxWidth: "100%", height: "auto" }}
-      role="img"
+      role={onNodeClick ? "graphics-document" : "img"}
+      aria-label={ariaLabel ?? summarizeGraph({ nodes, edges, directed, groups })}
     >
       <defs>
         {[...markerColors].map(([color, id]) => (

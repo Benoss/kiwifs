@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Button } from "@kw/components/ui/button";
-import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Link, Pause, Play, RotateCcw } from "lucide-react";
 import type { PlaybackControlsBinding } from "./usePlayback";
+import { clockStepLink } from "./playbackClock";
 
 interface Props {
   /** The object returned by usePlayback; replaces every prop below. */
@@ -17,6 +19,8 @@ interface Props {
   onSeek?: (step: number) => void;
   /** Cycle speed (1x → 2x → 4x → 1x). If omitted, speed badge is hidden. */
   onCycleSpeed?: () => void;
+  /** Clock to build the "copy link to this step" URL from. */
+  clockId?: string;
   /** @deprecated Use onCycleSpeed instead. Kept for backward compat. */
   onSpeedChange?: (speed: number) => void;
 }
@@ -24,6 +28,7 @@ interface Props {
 const noop = () => {};
 
 export function PlaybackControls({ pb, ...props }: Props) {
+  const [copied, setCopied] = useState(false);
   const b = { ...pb?.controls, ...stripUndefined(props) };
   const currentStep = b.currentStep ?? 0;
   const totalSteps = b.totalSteps ?? 1;
@@ -36,6 +41,7 @@ export function PlaybackControls({ pb, ...props }: Props) {
   const onReset = b.onReset ?? noop;
   const onSeek = b.onSeek ?? noop;
   const onCycleSpeed = b.onCycleSpeed;
+  const clockId = b.clockId;
   const atStart = currentStep === 0;
   const atEnd = currentStep >= totalSteps - 1;
 
@@ -90,6 +96,28 @@ export function PlaybackControls({ pb, ...props }: Props) {
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">
           {currentStep + 1}/{totalSteps}
         </span>
+
+        {/* Deep link to the step the reader is looking at */}
+        {clockId && (
+          <button
+            onClick={() => {
+              const url = clockStepLink(clockId);
+              if (!url) return;
+              navigator.clipboard?.writeText(url).then(
+                () => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                },
+                () => {},
+              );
+            }}
+            className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
+            title="Copy link to this step"
+            aria-label="Copy link to this step"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Link className="h-3.5 w-3.5" />}
+          </button>
+        )}
 
         {/* Speed badge — single click cycles */}
         {onCycleSpeed && (

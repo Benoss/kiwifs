@@ -6,6 +6,7 @@ import { ShapeOutline } from "./ShapeOutline";
 import { arrivalOpacity, useFlowProgress } from "./useFlowProgress";
 import { SvgLabel } from "./WidgetText";
 import { ZoomPanel } from "./ZoomPanel";
+import { summarizeSequence } from "./widgetA11y";
 
 export interface SequenceParticipant {
   id: string;
@@ -64,6 +65,8 @@ export interface SequenceViewProps {
   activeColor?: string;
   /** Maximum display width; the diagram scales down to fit. */
   width?: number;
+  /** Accessible name. Defaults to a summary of participants and messages. */
+  ariaLabel?: string;
 }
 
 const C = {
@@ -90,6 +93,7 @@ export function SequenceView({
   zoomable = false,
   activeColor = C.active,
   width,
+  ariaLabel,
 }: SequenceViewProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const active = step === undefined ? -1 : step - 1;
@@ -196,6 +200,7 @@ export function SequenceView({
       viewBox={`0 0 ${totalW} ${totalH}`}
       style={{ display: "block", maxWidth: "100%", height: "auto" }}
       role="img"
+      aria-label={ariaLabel ?? summarizeSequence({ participants, items, step })}
     >
       <defs>
         {[

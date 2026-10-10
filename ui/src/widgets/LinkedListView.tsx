@@ -1,6 +1,7 @@
 import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { SvgLabel } from "./WidgetText";
+import { summarizeLinkedList } from "./widgetA11y";
 
 export interface LLNode {
   value: string | number;
@@ -47,6 +48,8 @@ export interface LinkedListViewProps {
   activeColor?: string;
   highlightColor?: string;
   nodeWidth?: number;
+  /** Accessible name. Defaults to a summary of the nodes and pointers. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -93,6 +96,7 @@ export function LinkedListView({
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   nodeWidth = DEFAULTS.nodeWidth,
+  ariaLabel,
 }: LinkedListViewProps) {
   const highlightIndices = toSet(highlightIndicesIn);
   const dimIndices = toSet(dimIndicesIn);
@@ -163,7 +167,13 @@ export function LinkedListView({
 
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0", overflow: "auto" }}>
-      <svg width={width} height={height} style={{ display: "block" }}>
+      <svg
+        width={width}
+        height={height}
+        role="img"
+        aria-label={ariaLabel ?? summarizeLinkedList({ nodes, doubly, pointers })}
+        style={{ display: "block" }}
+      >
         <defs>
           <marker id={ARROW} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
             <polygon points="0 0, 8 3, 0 6" fill={DEFAULTS.border} />

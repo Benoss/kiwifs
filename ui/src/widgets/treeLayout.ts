@@ -1,7 +1,15 @@
 /** Structural tree accepted by the layout. Matches `TreeNode` in TreeView. */
 export interface LayoutInput {
-  value: string | number;
+  value?: string | number;
   id?: string | number;
+  /**
+   * Several keys in one node — a B-tree or B+-tree page, a segment-tree
+   * summary row. Wins over `value` when present, and widens the node, which
+   * is why the layout tracks a width per node rather than one `nodeSize`.
+   */
+  keys?: (string | number)[];
+  /** Marks a B+-tree leaf, so the renderer can draw the sibling chain. */
+  leaf?: boolean;
   badge?: string | number;
   edgeLabel?: string | number;
   left?: LayoutInput | null;
@@ -12,10 +20,14 @@ export interface LayoutInput {
 export interface LayoutNode {
   value: string | number;
   key: string | number;
+  keys?: (string | number)[];
+  leaf?: boolean;
   badge?: string | number;
   edgeLabel?: string | number;
   x: number;
   y: number;
+  /** Outer width in px. `nodeSize` for a plain node, wider for a keyed page. */
+  width: number;
   children: LayoutNode[];
   /** Dashed empty slot for a missing binary child when the other side exists. */
   ghost?: boolean;
@@ -36,17 +48,39 @@ export interface TreeLayoutOptions {
   hGap: number;
   vGap: number;
   nodeSize: number;
+  /** Width of one key cell in a keyed page. Default 30. */
+  keyCell?: number;
   /** Place a ghost on the empty side of a one-child binary node. Default true. */
   showNulls?: boolean;
 }
 
+export const DEFAULT_KEY_CELL = 30;
+
 function nodeKey(node: LayoutInput): string | number {
-  return node.id ?? node.value;
+  return node.id ?? node.value ?? "";
+}
+
+/** A keyed page is as wide as its keys; everything else is `nodeSize`. */
+export function nodeWidth(node: LayoutInput, opts: TreeLayoutOptions): number {
+  const keys = node.keys;
+  if (!keys?.length) return opts.nodeSize;
+  return Math.max(opts.nodeSize, keys.length * (opts.keyCell ?? DEFAULT_KEY_CELL));
+}
+
+/**
+ * Where child `index` hangs off a keyed page: a page with k keys has k+1
+ * pointers, one in each gap between keys plus one at each end.
+ */
+export function childAnchorX(node: Pick<LayoutNode, "x" | "width" | "keys">, index: number): number {
+  const k = node.keys?.length ?? 0;
+  if (k === 0) return node.x;
+  const cell = node.width / k;
+  return node.x - node.width / 2 + Math.max(0, Math.min(index, k)) * cell;
 }
 
 function getTreeBounds(node: LayoutNode): { minX: number; maxX: number } {
-  let minX = node.x;
-  let maxX = node.x;
+  let minX = node.x - node.width / 2;
+  let maxX = node.x + node.width / 2;
   for (const child of node.children) {
     const cb = getTreeBounds(child);
     if (cb.minX < minX) minX = cb.minX;
@@ -64,13 +98,14 @@ function makeGhost(
   parentKey: string | number,
   side: "left" | "right",
   depth: number,
-  vGap: number,
+  opts: TreeLayoutOptions,
 ): LayoutNode {
   return {
     value: "",
     key: `${String(parentKey)}__null_${side}`,
-    y: depth * vGap,
+    y: depth * opts.vGap,
     x: 0,
+    width: opts.nodeSize,
     children: [],
     ghost: true,
   };
@@ -89,13 +124,17 @@ export function layoutTree(
 ): LayoutNode | null {
   if (!node) return null;
 
-  const { hGap, vGap, nodeSize, showNulls = true } = opts;
+  const { hGap, vGap, showNulls = true } = opts;
   const key = nodeKey(node);
+  const width = nodeWidth(node, opts);
   const base = {
-    value: node.value,
+    value: node.value ?? "",
     key,
+    keys: node.keys,
+    leaf: node.leaf,
     badge: node.badge,
     edgeLabel: node.edgeLabel,
+    width,
     y: depth * vGap,
   };
 
@@ -113,7 +152,7 @@ export function layoutTree(
     for (const child of childLayouts) {
       const bounds = getTreeBounds(child);
       shiftTree(child, offset - bounds.minX);
-      offset = getTreeBounds(child).maxX + hGap + nodeSize;
+      offset = getTreeBounds(child).maxX + hGap;
     }
     const firstX = childLayouts[0]!.x;
     const lastX = childLayouts[childLayouts.length - 1]!.x;
@@ -125,25 +164,27 @@ export function layoutTree(
   const leftLayout = hasLeft
     ? layoutTree(node.left, depth + 1, opts)
     : showNulls && hasRight
-      ? makeGhost(key, "left", depth + 1, vGap)
+      ? makeGhost(key, "left", depth + 1, opts)
       : null;
   const rightLayout = hasRight
     ? layoutTree(node.right, depth + 1, opts)
     : showNulls && hasLeft
-      ? makeGhost(key, "right", depth + 1, vGap)
+      ? makeGhost(key, "right", depth + 1, opts)
       : null;
 
   if (!leftLayout && !rightLayout) {
     return { ...base, x: 0, children: [] };
   }
 
-  const sep = hGap + nodeSize;
-  if (leftLayout) shiftTree(leftLayout, -sep - leftLayout.x);
-  if (rightLayout) shiftTree(rightLayout, sep - rightLayout.x);
+  // Centre-to-centre, so uniform nodes keep the spacing they always had and a
+  // wide keyed page pushes its siblings out by exactly its extra width.
+  const sepFor = (child: LayoutNode) => hGap + (width + child.width) / 2;
+  if (leftLayout) shiftTree(leftLayout, -sepFor(leftLayout) - leftLayout.x);
+  if (rightLayout) shiftTree(rightLayout, sepFor(rightLayout) - rightLayout.x);
 
   if (leftLayout && rightLayout) {
     const gap = getTreeBounds(rightLayout).minX - getTreeBounds(leftLayout).maxX;
-    const need = hGap + nodeSize;
+    const need = hGap;
     if (gap < need) {
       const extra = need - gap;
       shiftTree(leftLayout, -extra / 2);
@@ -213,7 +254,7 @@ export function layoutForest(
     const layout = layoutTree(root, 0, opts);
     if (!layout) continue;
     shiftTree(layout, offset - getTreeBounds(layout).minX);
-    offset = getTreeBounds(layout).maxX + opts.nodeSize + opts.hGap * 2;
+    offset = getTreeBounds(layout).maxX + opts.hGap * 2;
     layouts.push(layout);
   }
   return layouts;
@@ -249,4 +290,47 @@ export function positionsByKey(node: LayoutNode): Map<string | number, { x: numb
     map.set(n.key, { x: n.x, y: n.y });
   }
   return map;
+}
+
+export interface HeapTreeOptions {
+  /** Children per node. 2 for a binary heap, 4 for a 4-ary one. Default 2. */
+  arity?: number;
+  /** Values equal to this are treated as absent (a hole in the array). */
+  nullAs?: unknown;
+  /** Label each edge with the index formula, e.g. `2i+1`. Default false. */
+  edgeLabels?: boolean;
+}
+
+/**
+ * A complete tree read out of an array, the way a heap is stored: node ids are
+ * array indices, and the children of `i` are `arity*i + 1 … arity*i + arity`.
+ *
+ * Ids being indices is the whole point — an ` ```array ` fence over the same
+ * values lines up with this tree key-for-key, so `activeIndices` and
+ * `activeNodes` are the same set and one `link:` keeps them in step. The same
+ * shape serves segment trees and k-ary heaps; a HeapView would add nothing.
+ */
+export function heapTreeFromArray(
+  values: readonly unknown[],
+  opts: HeapTreeOptions = {},
+): LayoutInput | null {
+  const { arity = 2, nullAs, edgeLabels = false } = opts;
+  const k = Math.max(2, Math.trunc(arity));
+  const present = (i: number) =>
+    i < values.length && values[i] !== undefined && values[i] !== null && values[i] !== nullAs;
+  if (!present(0)) return null;
+
+  const build = (i: number, childOrder: number): LayoutInput => {
+    const node: LayoutInput = { value: values[i] as string | number, id: i };
+    if (edgeLabels && i > 0) node.edgeLabel = `${k}i+${childOrder}`;
+    const kids: LayoutInput[] = [];
+    for (let c = 1; c <= k; c++) {
+      const child = k * i + c;
+      if (present(child)) kids.push(build(child, c));
+    }
+    if (kids.length > 0) node.children = kids;
+    return node;
+  };
+
+  return build(0, 0);
 }

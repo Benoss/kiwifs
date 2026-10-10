@@ -1,5 +1,18 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { ensureRootTracking, keyBelongsTo, useWidgetRoot } from "./widgetRoot";
+import {
+  clockSnapshot,
+  consumeDeepLink,
+  isClockDriver,
+  joinClock,
+  leaveClock,
+  nextAnonymousClockId,
+  seekClock,
+  setClockPlaying,
+  setClockSpeed,
+  subscribeClock,
+} from "./playbackClock";
+import { useClockId } from "./clockContext";
 
 export interface Step<T> {
   state: T;
@@ -22,6 +35,8 @@ export interface PlaybackControlsBinding {
   onReset: () => void;
   onSeek: (step: number) => void;
   onCycleSpeed: () => void;
+  /** Identifies the clock for "copy link to this step". */
+  clockId?: string;
 }
 
 export interface PlaybackReturn<T> {
@@ -39,6 +54,8 @@ export interface PlaybackReturn<T> {
   setCurrentStep: (step: number) => void;
   /** Cycle through speed presets: 1 → 2 → 4 → 1 */
   cycleSpeed: () => void;
+  /** The clock this playback is driven by. */
+  clockId: string;
   /** Spread into PlaybackControls, or pass the whole object as `pb`. */
   controls: PlaybackControlsBinding;
 }
@@ -52,6 +69,12 @@ export interface PlaybackOptions {
   autoPlay?: boolean;
   /** Wrap to the first step instead of stopping at the end. */
   loop?: boolean;
+  /**
+   * Share a step counter with every other playback naming the same clock, and
+   * persist it as `#?step.<id>=N`. Without one, this playback gets a private
+   * clock, as it always had.
+   */
+  clock?: string;
 }
 
 const SPEED_PRESETS = [1, 2, 4];
@@ -74,14 +97,6 @@ function isRef(v: unknown): v is React.RefObject<HTMLElement | null> {
   return typeof v === "object" && v !== null && "current" in v && Object.keys(v).length === 1;
 }
 
-function readHashStep(total: number): number {
-  if (typeof window === "undefined") return 0;
-  const match = window.location.hash.match(/[?&]step=(\d+)/);
-  if (!match) return 0;
-  const s = parseInt(match[1]!, 10);
-  return isNaN(s) ? 0 : Math.max(0, Math.min(s, total - 1));
-}
-
 export function usePlayback<T>(
   steps: Step<T>[],
   /** A container ref (legacy) or options. */
@@ -92,65 +107,119 @@ export function usePlayback<T>(
   const list = Array.isArray(steps) ? steps : [];
   const total = Math.max(1, list.length);
   const widgetRoot = useWidgetRoot();
+  const inheritedClock = useClockId();
 
-  const [rawStep, setRawStep] = useState(() => readHashStep(list.length));
-  const [playing, setPlaying] = useState(autoPlay);
-  const [speed, setSpeed] = useState(1);
-  const currentStep = Math.max(0, Math.min(rawStep, total - 1));
+  // One token per hook instance: the clock's member identity, and the key it
+  // uses to decide which member runs the autoplay timer.
+  const member = useRef<object>({});
+  const idRef = useRef<{ id: string; named: boolean } | null>(null);
+  if (!idRef.current) {
+    const named = opts.clock ?? inheritedClock;
+    idRef.current = named
+      ? { id: named, named: true }
+      : { id: nextAnonymousClockId(), named: false };
+  }
+  const { id: clockId, named } = idRef.current;
 
-  const stop = useCallback(() => setPlaying(false), []);
+  // Register before the first subscribe so the clock knows its length (and
+  // therefore clamps a deep-linked step) on the very first render.
+  joinClock(clockId, named, member.current, total);
+
+  const subscribe = useCallback(
+    (fn: () => void) => subscribeClock(clockId, named, fn),
+    [clockId, named],
+  );
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => clockSnapshot(clockId),
+    () => clockSnapshot(clockId),
+  );
+
+  useEffect(() => {
+    const token = member.current;
+    joinClock(clockId, named, token, total);
+    return () => leaveClock(clockId, token);
+  }, [clockId, named, total]);
+
+  const currentStep = Math.max(0, Math.min(snapshot.step, total - 1));
+  const clockTotal = Math.max(total, snapshot.total);
+  const playing = snapshot.playing;
+  const speed = snapshot.speed;
+
+  const stop = useCallback(() => setClockPlaying(clockId, false), [clockId]);
   const play = useCallback(() => {
-    setRawStep((s) => (!loop && s >= total - 1 ? 0 : s));
-    setPlaying(true);
-  }, [loop, total]);
+    if (!loop && clockSnapshot(clockId).step >= clockSnapshot(clockId).total - 1) {
+      seekClock(clockId, 0, { persist: true });
+    }
+    setClockPlaying(clockId, true);
+  }, [clockId, loop]);
 
   const stepForward = useCallback(() => {
-    setRawStep((s) => Math.min(Math.min(s, total - 1) + 1, total - 1));
-  }, [total]);
+    seekClock(clockId, clockSnapshot(clockId).step + 1, { persist: true });
+  }, [clockId]);
 
   const stepBack = useCallback(() => {
-    setRawStep((s) => Math.max(Math.min(s, total - 1) - 1, 0));
-  }, [total]);
+    seekClock(clockId, clockSnapshot(clockId).step - 1, { persist: true });
+  }, [clockId]);
 
   const reset = useCallback(() => {
-    setPlaying(false);
-    setRawStep(0);
-  }, []);
+    setClockPlaying(clockId, false);
+    seekClock(clockId, 0, { persist: true });
+  }, [clockId]);
 
-  const seek = useCallback((s: number) => {
-    setRawStep(Math.max(0, Math.min(Math.round(s), total - 1)));
-  }, [total]);
+  const seek = useCallback(
+    (s: number) => seekClock(clockId, s, { persist: true }),
+    [clockId],
+  );
+
+  const setSpeed = useCallback((s: number) => setClockSpeed(clockId, s), [clockId]);
 
   const cycleSpeed = useCallback(() => {
-    setSpeed((prev) => {
-      const idx = SPEED_PRESETS.indexOf(prev);
-      return SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length]!;
-    });
-  }, []);
+    const idx = SPEED_PRESETS.indexOf(clockSnapshot(clockId).speed);
+    setClockSpeed(clockId, SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length]!);
+  }, [clockId]);
 
   const current = useMemo(
-    () => (list.length ? normalizeStep<T>(list[currentStep]) : (EMPTY_STEP as Step<T>)),
+    () => (list.length ? normalizeStep<T>(list[Math.min(currentStep, list.length - 1)]) : (EMPTY_STEP as Step<T>)),
     [list, currentStep],
   );
+
+  useEffect(() => {
+    if (autoPlay) setClockPlaying(clockId, true);
+  }, [autoPlay, clockId]);
+
+  /** Scroll a deep-linked widget into view once, so the link lands on it. */
+  useEffect(() => {
+    if (!consumeDeepLink(clockId)) return;
+    const el = containerRef?.current ?? widgetRoot?.current;
+    if (!el) return;
+    const timer = setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("kiwi-widget-flash");
+      setTimeout(() => el.classList.remove("kiwi-widget-flash"), 1200);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [clockId, containerRef, widgetRoot]);
 
   const listRef = useRef(list);
   listRef.current = list;
 
   useEffect(() => {
     if (!playing) return;
-    if (currentStep >= total - 1 && !loop) {
-      setPlaying(false);
+    if (!isClockDriver(clockId, member.current)) return;
+    if (currentStep >= clockTotal - 1 && !loop) {
+      setClockPlaying(clockId, false);
       return;
     }
     const here = normalizeStep<T>(listRef.current[currentStep]);
     const ms = (here.duration ?? interval) / speed;
     const timer = setTimeout(() => {
-      const next = currentStep >= total - 1 ? 0 : currentStep + 1;
-      setRawStep(next);
-      if (normalizeStep(listRef.current[next]).breakpoint) setPlaying(false);
+      const next = currentStep >= clockTotal - 1 ? 0 : currentStep + 1;
+      seekClock(clockId, next);
+      if (normalizeStep(listRef.current[next]).breakpoint) setClockPlaying(clockId, false);
     }, ms);
     return () => clearTimeout(timer);
-  }, [playing, currentStep, total, loop, interval, speed]);
+  }, [playing, currentStep, clockTotal, loop, interval, speed, clockId]);
 
   useEffect(() => {
     ensureRootTracking();
@@ -168,16 +237,16 @@ export function usePlayback<T>(
         case " ":
           if (tag === "BUTTON") return;
           ke.preventDefault();
-          setPlaying((p) => !p);
+          setClockPlaying(clockId, !clockSnapshot(clockId).playing);
           break;
         case "ArrowRight":
           ke.preventDefault();
-          setPlaying(false);
+          setClockPlaying(clockId, false);
           stepForward();
           break;
         case "ArrowLeft":
           ke.preventDefault();
-          setPlaying(false);
+          setClockPlaying(clockId, false);
           stepBack();
           break;
         case "r":
@@ -188,11 +257,11 @@ export function usePlayback<T>(
     };
     target.addEventListener("keydown", handler);
     return () => target.removeEventListener("keydown", handler);
-  }, [containerRef, widgetRoot, stepForward, stepBack, reset]);
+  }, [containerRef, widgetRoot, clockId, stepForward, stepBack, reset]);
 
   const controls = useMemo<PlaybackControlsBinding>(() => ({
     currentStep,
-    totalSteps: total,
+    totalSteps: clockTotal,
     playing,
     speed,
     onPlay: play,
@@ -202,12 +271,13 @@ export function usePlayback<T>(
     onReset: reset,
     onSeek: seek,
     onCycleSpeed: cycleSpeed,
-  }), [currentStep, total, playing, speed, play, stop, stepForward, stepBack, reset, seek, cycleSpeed]);
+    clockId,
+  }), [currentStep, clockTotal, playing, speed, play, stop, stepForward, stepBack, reset, seek, cycleSpeed, clockId]);
 
   return {
     current,
     currentStep,
-    totalSteps: total,
+    totalSteps: clockTotal,
     playing,
     speed,
     play,
@@ -218,6 +288,7 @@ export function usePlayback<T>(
     setSpeed,
     setCurrentStep: seek,
     cycleSpeed,
+    clockId,
     controls,
   };
 }

@@ -1,5 +1,6 @@
 import { ArrayStack, type ArrayArrow, type ArrayPointer } from "./ArrayView";
 import { toSet, type Many } from "./sets";
+import { summarizeBits } from "./widgetA11y";
 
 export interface BitsViewProps {
   /** The mask as a number. */
@@ -27,6 +28,8 @@ export interface BitsViewProps {
   cellSize?: number;
   activeColor?: string;
   highlightColor?: string;
+  /** Accessible name. Defaults to a summary of the value and set bits. */
+  ariaLabel?: string;
 }
 
 /** A bitmask as a row of 0/1 cells labelled by bit position. */
@@ -45,6 +48,7 @@ export function BitsView({
   cellSize,
   activeColor,
   highlightColor,
+  ariaLabel,
 }: BitsViewProps) {
   const v = Math.max(0, Math.trunc(value || 0));
   const width = Math.max(1, bits ?? v.toString(2).length);
@@ -78,6 +82,7 @@ export function BitsView({
           arrows: arcs,
         }]}
         indexLabels={order}
+        ariaLabel={ariaLabel ?? summarizeBits({ value: v, bits: width, label, activeBits })}
         showIndices
         cellSize={cellSize ?? 40}
         activeColor={activeColor}

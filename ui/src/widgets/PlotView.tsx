@@ -6,6 +6,7 @@ import {
   type PlotPoint,
 } from "./plotLayout";
 import { SvgLabel, WidgetText } from "./WidgetText";
+import { summarizePlot } from "./widgetA11y";
 
 export type { PlotPoint } from "./plotLayout";
 
@@ -75,6 +76,8 @@ export interface PlotViewProps {
   height?: number;
   activeColor?: string;
   highlightColor?: string;
+  /** Accessible name. Defaults to a summary of the series and axes. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -152,6 +155,7 @@ export function PlotView({
   height = DEFAULTS.height,
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
+  ariaLabel,
 }: PlotViewProps) {
   const hasPoints = series.some((s) => (s.points?.length ?? 0) > 0);
   if (!hasPoints && shades.length === 0 && guides.length === 0 && marks.length === 0) {
@@ -184,6 +188,7 @@ export function PlotView({
         viewBox={`0 0 ${width} ${height}`}
         style={{ fontVariantNumeric: "tabular-nums", maxWidth: "100%" }}
         role="img"
+        aria-label={ariaLabel ?? summarizePlot({ series, xLabel, yLabel })}
       >
         {/* Plot frame */}
         <rect
