@@ -1,5 +1,12 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { evaluateCalc, formatQuantity, parseCalcBlock, parseQuantity } from "./calcBlock";
+import {
+  evaluateCalc,
+  evaluateExpression,
+  formatQuantity,
+  parseCalcBlock,
+  parseQuantity,
+} from "./calcBlock";
 
 describe("parseQuantity", () => {
   it("scales word suffixes", () => {
@@ -46,5 +53,36 @@ describe("formatQuantity", () => {
   it("uses SI-ish grouping", () => {
     expect(formatQuantity(11574)).toMatch(/11[.,]57 k|11.6 k/);
     expect(formatQuantity(1024)).toBe("1 KiB");
+  });
+});
+
+describe("the expression engine behind kiwi-calc", () => {
+  it("no longer routes author text through Function()", async () => {
+    const source = await readFile(new URL("./calcBlock.ts", import.meta.url), "utf8");
+    // Comments are allowed to mention it; code is not.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toMatch(/\bFunction\s*\(/);
+    expect(code).not.toMatch(/\beval\s*\(/);
+  });
+
+  it("gained ^, %, and the named functions a capacity model wants", () => {
+    expect(evaluateExpression("2 ^ 10", {})).toBe(1024);
+    expect(evaluateExpression("10 % 3", {})).toBe(1);
+    expect(evaluateExpression("ceil(replicas / 3)", { replicas: 10 })).toBe(4);
+    expect(evaluateExpression("max(shards, 3)", { shards: 1 })).toBe(3);
+    expect(evaluateExpression("log2(partitions)", { partitions: 64 })).toBe(6);
+  });
+
+  it("still reads the unit words", () => {
+    expect(evaluateExpression("dau / day", { dau: 86400 })).toBe(1);
+    expect(evaluateExpression("2 * pi", {})).toBeCloseTo(Math.PI * 2);
+  });
+
+  it("reports an unknown name instead of silently producing NaN", () => {
+    expect(() => evaluateExpression("qps * 2", {})).toThrow(/unknown name "qps"/);
+  });
+
+  it("rejects a division that goes to infinity", () => {
+    expect(() => evaluateExpression("1 / 0", {})).toThrow(/finite/);
   });
 });

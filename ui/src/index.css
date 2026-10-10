@@ -423,6 +423,18 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+/* ─── Stepped code colours ─── */
+/* Python Tutor's convention: the line that just ran is a calm green, the one
+   about to run is an alert red. Tokens, so a theme can override them. */
+:root {
+  --kw-widget-code-ran: #3f9a4a;
+  --kw-widget-code-next: #d13b2f;
+}
+.dark {
+  --kw-widget-code-ran: #c9e6ca;
+  --kw-widget-code-next: #e93f34;
+}
+
 /* ─── Deep-linked widget flash ─── */
 /* A reader arriving on `#?step=7` lands mid-page; a one-second ring says
    which widget the link was about. */

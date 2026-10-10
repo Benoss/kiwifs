@@ -135,8 +135,9 @@ export function TypedFence({ spec, source, meta, onNavigate }: TypedFenceProps) 
                 <CodeHighlight
                   code={parsed.code}
                   lang={parsed.lang || "text"}
-                  activeLine={stepMeta?.line != null ? stepMeta.line - 1 : undefined}
-                  highlightLines={stepMeta?.next != null ? [stepMeta.next - 1] : undefined}
+                  indexBase={1}
+                  activeLine={stepMeta?.line}
+                  nextLine={stepMeta?.next}
                 />
               )}
 

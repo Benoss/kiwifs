@@ -22,6 +22,7 @@ import { stackSpec } from "./specs/stack";
 import { bitsSpec } from "./specs/bits";
 import { barsSpec } from "./specs/bars";
 import { sequenceSpec } from "./specs/sequence";
+import { queueSpec } from "./specs/queue";
 
 /** Docs order: the ones an author reaches for first come first. */
 export const BUILTIN_FENCES = [
@@ -38,6 +39,7 @@ export const BUILTIN_FENCES = [
   timelineSpec,
   listSpec,
   stackSpec,
+  queueSpec,
   bitsSpec,
   sequenceSpec,
   stepsSpec,

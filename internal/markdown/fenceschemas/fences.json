@@ -339,20 +339,21 @@
         "fields": {
           "type": "array",
           "items": "object",
-          "description": "Named bit ranges drawn as brackets: `{from, to, label, color?}` — sign, exponent, mantissa."
+          "description": "Named bit ranges drawn as brackets under the row: `{from, to, label, color?}` — a float's sign, exponent and mantissa; a flags register; a packed struct. Each bracket shows the field's value."
         },
         "decode": {
-          "type": "string",
+          "type": "string|array",
           "matches": [
             "uint",
+            "int",
             "twos",
             "ieee32",
             "ieee64",
             "hex",
+            "oct",
             "raw"
           ],
-          "description": "Summary row interpretation. Default uint.",
-          "steppable": false
+          "description": "How to read the pattern in the summary row. A list shows several readings at once. Default uint."
         },
         "lsbFirst": {
           "type": "boolean",
@@ -1266,7 +1267,16 @@
           "type": "array",
           "required": true,
           "items": "object",
-          "description": "`{id?, label?, points: [{x, y}, …], kind?: \"line\"|\"area\"|\"scatter\", color?, baseline?}`."
+          "description": "`{id?, label?, points: [{x, y}, …], kind?: \"line\"|\"area\"|\"scatter\", color?, baseline?}`, or `{expr: \"sin(x) + a\", samples?, domain?}` for a curve from a formula."
+        },
+        "regions": {
+          "type": "array",
+          "items": "object",
+          "description": "Shaded areas from a predicate: `{when: \"y < x^2\", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope."
+        },
+        "bind": {
+          "type": "object",
+          "description": "Values for the free names in an `expr` or a `when`, e.g. `{a: 2}`. Steppable, so a walkthrough can sweep a parameter."
         },
         "shades": {
           "type": "array",
@@ -1349,6 +1359,133 @@
         "height": {
           "type": "number",
           "description": "Canvas height, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "queue",
+      "aliases": [
+        "kiwi-queue",
+        "widget:queue",
+        "ringbuffer",
+        "ring-buffer"
+      ],
+      "description": "FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point.",
+      "required": [
+        "values"
+      ],
+      "example": "```queue id=ring layout=ring caption=\"A ring buffer wrapping past the end\"\ncapacity: 6\nvalues: [null, null, null, null, null, null]\nfront: 0\nback: 0\nsteps:\n  - note: \"Empty: front and back coincide\"\n    size: 0\n  - note: \"Enqueue three; back advances\"\n    values: [a, b, c, null, null, null]\n    back: 3\n    size: 3\n    activeIndices: [2]\n  - note: \"Dequeue two; front advances, the slots are not cleared\"\n    values: [a, b, c, null, null, null]\n    front: 2\n    back: 3\n    size: 1\n    dimIndices: [0, 1]\n  - note: \"Enqueue four more — back wraps past the end to slot 1\"\n    values: [g, h, c, d, e, f]\n    front: 2\n    back: 2\n    size: 6\n    activeIndices: [0, 1]\n```",
+      "attributes": {
+        "values": {
+          "type": "array",
+          "required": true,
+          "description": "Slot contents. In `ring` layout this is the whole buffer, with `null` for an empty slot."
+        },
+        "front": {
+          "type": "number",
+          "description": "Index of the head. Defaults to 0."
+        },
+        "back": {
+          "type": "number",
+          "description": "Index one past the tail — where the next enqueue lands."
+        },
+        "capacity": {
+          "type": "number",
+          "description": "Buffer size. Defaults to `values.length`.",
+          "steppable": false
+        },
+        "layout": {
+          "type": "string",
+          "matches": [
+            "horizontal",
+            "ring"
+          ],
+          "description": "Default horizontal.",
+          "steppable": false
+        },
+        "size": {
+          "type": "number",
+          "description": "How many slots hold data — what tells a full ring from an empty one."
+        },
+        "activeIndices": {
+          "type": "array|number|string",
+          "description": "Slots active this step."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted slots."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Dimmed slots."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Extra markers beside slots: `{index, label, color?}`."
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Show slot indices. Default true.",
+          "steppable": false
+        },
+        "frontLabel": {
+          "type": "string",
+          "description": "Label on the head end. Default \"front\".",
+          "steppable": false
+        },
+        "backLabel": {
+          "type": "string",
+          "description": "Label on the tail end. Default \"back\".",
+          "steppable": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Caption above the queue.",
+          "steppable": false
+        },
+        "empty": {
+          "type": "string",
+          "description": "Text shown when every slot is empty.",
+          "steppable": false
+        },
+        "slotSize": {
+          "type": "number",
+          "description": "Slot size, px. Default 44.",
+          "steppable": false
+        },
+        "radius": {
+          "type": "number",
+          "description": "Ring radius, px. Default 86.",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Slot index → explanation, revealed on select."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
           "steppable": false
         },
         "activeColor": {

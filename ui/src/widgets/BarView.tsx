@@ -33,9 +33,27 @@ export interface BarGuide {
   color?: string;
 }
 
+/** Raw samples turned into a histogram by the view. */
+export interface BarBinning {
+  samples: number[];
+  /** Number of equal-width bins. Default 10. */
+  binCount?: number;
+  /** Fixed range. Defaults to the extent of the samples. */
+  min?: number;
+  max?: number;
+  /** Label each bar with its interval rather than its index. Default true. */
+  labelBins?: boolean;
+}
+
 export interface BarViewProps {
   /** Bar heights. May include negatives (drawn below a zero baseline). */
-  values: number[];
+  values?: number[];
+  /**
+   * Build the bars by binning raw samples — a latency distribution, a hash
+   * spread. Replaces `values` when given; an author with measurements should
+   * not have to count them into buckets by hand.
+   */
+  from?: BarBinning;
   /** Labels under each bar. Defaults to the index. Pass null in a slot to hide. */
   labels?: (string | number | null)[];
   /**
@@ -55,6 +73,15 @@ export interface BarViewProps {
   barColors?: (string | undefined | null)[];
   /** Named pointers shown above their column. */
   pointers?: BarPointer[];
+  /**
+   * The two columns being compared this step, drawn with a connecting brace.
+   * Sorting is mostly comparisons, and "which two" is the whole state.
+   */
+  comparePair?: [number, number];
+  /** The two columns being exchanged, drawn with a crossed double arrow. */
+  swapPair?: [number, number];
+  /** Columns merely read this step — a softer mark than `activeIndices`. */
+  accessIndices?: Many<number>;
   /** Value-space rectangles: water fills, chosen sub-rectangles, etc. */
   overlays?: BarOverlay[];
   /** Horizontal reference lines (e.g. a water level). */
@@ -107,9 +134,43 @@ function resolveBarColor(
   return { fill: DEFAULTS.bar, stroke: DEFAULTS.bar, opacity: 0.85 };
 }
 
+/**
+ * Equal-width bins over raw samples.
+ *
+ * Exported so a caller that needs the counts without the chart — a summary
+ * line, a test — can reuse exactly the binning the picture shows.
+ */
+export function binSamples(spec: BarBinning): { counts: number[]; labels: string[] } {
+  const samples = spec.samples.filter((v) => Number.isFinite(v));
+  const count = Math.max(1, Math.min(200, Math.trunc(spec.binCount ?? 10)));
+  if (samples.length === 0) {
+    return { counts: new Array(count).fill(0), labels: new Array(count).fill("") };
+  }
+  const lo = spec.min ?? Math.min(...samples);
+  const hi = spec.max ?? Math.max(...samples);
+  const span = hi - lo || 1;
+  const counts = new Array(count).fill(0);
+  for (const v of samples) {
+    // The last bin is closed on the right, so the maximum sample lands in it
+    // instead of falling off the end.
+    const slot = v >= hi ? count - 1 : Math.floor(((v - lo) / span) * count);
+    if (slot >= 0 && slot < count) counts[slot] += 1;
+  }
+  const labelBins = spec.labelBins ?? true;
+  const round = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+  const labels = counts.map((_, i) =>
+    labelBins ? round(lo + (span * i) / count) : String(i),
+  );
+  return { counts, labels };
+}
+
 export function BarView({
-  values,
-  labels,
+  values: valuesIn,
+  from,
+  comparePair,
+  swapPair,
+  accessIndices: accessIndicesIn,
+  labels: labelsIn,
   valueLabels = true,
   activeIndices: activeIndicesIn,
   highlightIndices: highlightIndicesIn,
@@ -128,6 +189,10 @@ export function BarView({
   overlayColor = DEFAULTS.overlay,
   ariaLabel,
 }: BarViewProps) {
+  const binned = from ? binSamples(from) : null;
+  const values = binned ? binned.counts : (valuesIn ?? []);
+  const labels = binned?.labels ?? labelsIn;
+  const accessIndices = toSet(accessIndicesIn);
   const activeIndices = toSet(activeIndicesIn);
   const highlightIndices = toSet(highlightIndicesIn);
   const dimIndices = toSet(dimIndicesIn);
@@ -173,6 +238,7 @@ export function BarView({
   const svgHeight = plotTop + chartHeight + bottomPad;
 
   const yFor = (v: number) => plotTop + ((axisMax - v) / range) * chartHeight;
+  const plotBottom = plotTop + chartHeight;
   const xFor = (i: number) => sidePad + i * (barWidth + gap);
   const baselineY = yFor(0);
 
@@ -315,6 +381,66 @@ export function BarView({
             </g>
           );
         })}
+
+        {/* Accessed columns — a softer mark than active, for a read */}
+        {[...accessIndices].map((i) =>
+          i >= 0 && i < values.length ? (
+            <rect
+              key={`acc-${i}`}
+              x={xFor(i) - 1}
+              y={plotTop}
+              width={barWidth + 2}
+              height={plotBottom - plotTop}
+              fill={activeColor}
+              opacity={0.08}
+            />
+          ) : null,
+        )}
+
+        {/* The comparison this step: a brace under the two columns */}
+        {comparePair && (() => {
+          const [a, b] = comparePair;
+          if (a < 0 || b < 0 || a >= values.length || b >= values.length) return null;
+          const x1 = xFor(Math.min(a, b)) + barWidth / 2;
+          const x2 = xFor(Math.max(a, b)) + barWidth / 2;
+          const y = plotBottom + 8;
+          return (
+            <g>
+              <path
+                d={`M ${x1} ${y - 5} V ${y} H ${x2} V ${y - 5}`}
+                fill="none"
+                stroke={highlightColor}
+                strokeWidth={1.75}
+              />
+              <SvgLabel
+                x={(x1 + x2) / 2}
+                y={y + 10}
+                text="compare"
+                anchor="middle"
+                fontSize={9}
+                fontWeight={600}
+                fill={highlightColor}
+              />
+            </g>
+          );
+        })()}
+
+        {/* The swap this step: crossed arrows over the two columns */}
+        {swapPair && (() => {
+          const [a, b] = swapPair;
+          if (a < 0 || b < 0 || a >= values.length || b >= values.length) return null;
+          const x1 = xFor(Math.min(a, b)) + barWidth / 2;
+          const x2 = xFor(Math.max(a, b)) + barWidth / 2;
+          const y = plotTop - 4 - valueLabelPad;
+          const lift = Math.min(16, Math.max(8, (x2 - x1) * 0.18));
+          return (
+            <g stroke={activeColor} strokeWidth={2} fill="none">
+              <path d={`M ${x1} ${y} Q ${(x1 + x2) / 2} ${y - lift} ${x2} ${y}`} />
+              <path d={`M ${x2 - 5} ${y - 4} L ${x2} ${y} L ${x2 - 5} ${y + 4}`} />
+              <path d={`M ${x1 + 5} ${y - 4} L ${x1} ${y} L ${x1 + 5} ${y + 4}`} />
+            </g>
+          );
+        })()}
 
         {/* Pointers above their column */}
         {Array.from(pointerBuckets.entries()).map(([idx, ptrs]) =>

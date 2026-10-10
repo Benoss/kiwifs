@@ -7,6 +7,8 @@
  * people actually write back-of-envelope math.
  */
 
+import { ExprError, evaluate } from "./expr";
+
 export type CalcBinding = {
   name: string;
   raw: string;
@@ -95,7 +97,29 @@ const TIME: Record<string, number> = {
   years: 86400 * 365,
 };
 
-const BUILTINS: Record<string, number> = { ...TIME, pi: Math.PI, e: Math.E };
+/**
+ * Magnitude units, in scope for a derivation line only.
+ *
+ * `lib/expr.ts` deliberately does not define these globally: in a plot curve,
+ * `m` means slope, not mega. In a capacity model it means mega, and a reader
+ * writing `dau * 2 k` means two thousand.
+ */
+const MAGNITUDE: Record<string, number> = {
+  k: 1e3,
+  thousand: 1e3,
+  m: 1e6,
+  million: 1e6,
+  b: 1e9,
+  billion: 1e9,
+  t: 1e12,
+  trillion: 1e12,
+  ki: 1024,
+  mi: 1024 ** 2,
+  gi: 1024 ** 3,
+  ti: 1024 ** 4,
+};
+
+const BUILTINS: Record<string, number> = { ...TIME, ...MAGNITUDE, pi: Math.PI, e: Math.E };
 
 function splitComment(line: string): { body: string; comment?: string } {
   const hash = line.indexOf("#");
@@ -221,46 +245,25 @@ export function formatQuantity(value: number): string {
   return value.toExponential(2);
 }
 
-const SAFE_EXPR = /^[A-Za-z_][A-Za-z0-9_]*|[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?|[+\-*/().,\s]+$/;
-
-function tokenizeExpr(expr: string): string[] {
-  return expr.match(/[A-Za-z_][A-Za-z0-9_]*|[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?|[+\-*/()]|\S/g) ?? [];
-}
-
+/**
+ * Arithmetic for a derivation line.
+ *
+ * This used to substitute the author's names into a string and hand it to
+ * `Function()`, which made every shared page an execution surface. It now goes
+ * through `lib/expr.ts`, which also brings `^`, `%`, comparisons and the named
+ * functions a capacity model actually wants.
+ */
 export function evaluateExpression(expr: string, scope: Record<string, number>): number {
-  const tokens = tokenizeExpr(expr);
-  if (tokens.some((t) => /[^A-Za-z0-9_+\-*/().eE]/.test(t) && !/^[+\-*/()]$/.test(t) && !/^[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?$/.test(t))) {
-    // allow only identifiers, numbers, and + - * / ( )
-    for (const t of tokens) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) continue;
-      if (/^[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?$/.test(t)) continue;
-      if (/^[+\-*/()]$/.test(t)) continue;
-      throw new CalcParseError(`unsafe token "${t}" in ${expr}`);
-    }
-  }
-  const replaced = tokens.map((t) => {
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) {
-      if (scope[t] != null) return String(scope[t]);
-      if (BUILTINS[t] != null) return String(BUILTINS[t]);
-      if (BUILTINS[t.toLowerCase()] != null) return String(BUILTINS[t.toLowerCase()]);
-      throw new CalcParseError(`unknown name "${t}"`);
-    }
-    return t;
-  }).join(" ");
-  if (!/^[\d+\-*/().eE\s]+$/.test(replaced)) {
-    throw new CalcParseError(`cannot evaluate "${expr}"`);
-  }
+  let result: number;
   try {
-    // Expression is digits and arithmetic only after substitution.
-    const result = Function(`"use strict"; return (${replaced});`)();
-    if (typeof result !== "number" || !Number.isFinite(result)) {
-      throw new CalcParseError(`"${expr}" did not produce a finite number`);
-    }
-    return result;
+    result = evaluate(expr, { ...BUILTINS, ...scope });
   } catch (err) {
-    if (err instanceof CalcParseError) throw err;
-    throw new CalcParseError(`cannot evaluate "${expr}"`);
+    throw new CalcParseError(err instanceof ExprError ? err.message : `cannot evaluate "${expr}"`);
   }
+  if (!Number.isFinite(result)) {
+    throw new CalcParseError(`"${expr}" did not produce a finite number`);
+  }
+  return result;
 }
 
 export function evaluateCalc(doc: CalcDoc, overrides: Record<string, number> = {}): CalcResult {
@@ -320,4 +323,3 @@ export function evaluateCalc(doc: CalcDoc, overrides: Record<string, number> = {
   return { values, rows };
 }
 
-void SAFE_EXPR;

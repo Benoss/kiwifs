@@ -21,7 +21,14 @@ export const plotSpec: FenceSpec = {
         items: "object",
         required: true,
         description:
-          '`{id?, label?, points: [{x, y}, …], kind?: "line"|"area"|"scatter", color?, baseline?}`.',
+          '`{id?, label?, points: [{x, y}, …], kind?: "line"|"area"|"scatter", color?, baseline?}`, or `{expr: "sin(x) + a", samples?, domain?}` for a curve from a formula.',
+      },
+      regions: objectList(
+        'Shaded areas from a predicate: `{when: "y < x^2", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope.',
+      ),
+      bind: {
+        type: "object",
+        description: "Values for the free names in an `expr` or a `when`, e.g. `{a: 2}`. Steppable, so a walkthrough can sweep a parameter.",
       },
       shades: objectList("Shaded bands: `{from, to, series?, fromY?, toY?, color?, label?}`."),
       guides: objectList("Reference lines: `{x?, y?, label?, color?}` — an SLO, a threshold, a crossover."),

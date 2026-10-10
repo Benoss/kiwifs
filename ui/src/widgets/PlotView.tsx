@@ -1,9 +1,12 @@
+import { useMemo } from "react";
 import { alpha } from "./colors";
 import {
   niceTicks,
   plotDomain,
   slicePoints,
   type PlotPoint,
+  sampleRegion,
+  sampleSeries,
 } from "./plotLayout";
 import { SvgLabel, WidgetText } from "./WidgetText";
 import { summarizePlot } from "./widgetA11y";
@@ -18,6 +21,17 @@ export interface PlotSeries {
   /** Caption in the legend. */
   label?: string;
   points?: PlotPoint[];
+  /**
+   * The curve as a formula instead of a point list: `"sin(x) + a"`. Sampled
+   * across the x domain, with free names bound from `bind` (or an InputPanel
+   * driving the same scope), so a complexity curve or a predicate does not
+   * have to be precomputed into two hundred coordinates.
+   */
+  expr?: string;
+  /** Points to sample an `expr` at. Default 160. */
+  samples?: number;
+  /** Sample only over `[from, to]` rather than the whole x axis. */
+  domain?: [number, number];
   /** "line" (default), "area" (fill down to baseline), or "scatter". */
   kind?: PlotSeriesKind;
   color?: string;
@@ -54,8 +68,27 @@ export interface PlotMark {
   color?: string;
 }
 
+/** A shaded region defined by a predicate rather than by endpoints. */
+export interface PlotRegion {
+  id?: string | number;
+  /** `"y < x^2"`, sampled on a grid. `x` and `y` are in scope. */
+  when: string;
+  label?: string;
+  color?: string;
+  opacity?: number;
+  /** Grid resolution per axis. Default 48. */
+  resolution?: number;
+}
+
 export interface PlotViewProps {
   series: PlotSeries[];
+  /** Shaded areas from a predicate — the half-plane where a bound holds. */
+  regions?: PlotRegion[];
+  /**
+   * Values bound to the free names in an `expr` or a `when`. Steppable, so a
+   * walkthrough can sweep a parameter.
+   */
+  bind?: Record<string, number>;
   shades?: PlotShade[];
   guides?: PlotGuide[];
   marks?: PlotMark[];
@@ -134,7 +167,9 @@ function areaPath(
  * scatter clouds, any y = f(x).
  */
 export function PlotView({
-  series,
+  series: seriesIn,
+  regions = [],
+  bind,
   shades = [],
   guides = [],
   marks = [],
@@ -157,6 +192,12 @@ export function PlotView({
   highlightColor = DEFAULTS.highlightColor,
   ariaLabel,
 }: PlotViewProps) {
+  // Formula series are sampled before anything else looks at the data, so the
+  // domain, the ticks and the legend all see ordinary points.
+  const { series, exprErrors } = useMemo(
+    () => sampleSeries(seriesIn, bind, { xMin, xMax }),
+    [seriesIn, bind, xMin, xMax],
+  );
   const hasPoints = series.some((s) => (s.points?.length ?? 0) > 0);
   if (!hasPoints && shades.length === 0 && guides.length === 0 && marks.length === 0) {
     return (
@@ -179,6 +220,22 @@ export function PlotView({
 
   const findSeries = (id: string | number): PlotSeries | undefined =>
     series.find((s, i) => seriesId(s, i) === id);
+
+  const regionCells = useMemo(
+    () =>
+      regions.map((region) => {
+        const { cells, error } = sampleRegion(region.when, domain, bind, region.resolution);
+        return { region, cells, error };
+      }),
+    [regions, domain, bind],
+  );
+
+  // A broken formula says so under the chart rather than silently drawing
+  // nothing: an author sweeping a parameter needs to know which one failed.
+  const problems = [
+    ...exprErrors,
+    ...regionCells.map((r) => r.error).filter((e): e is string => Boolean(e)),
+  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0", overflow: "auto" }}>
@@ -277,6 +334,39 @@ export function PlotView({
             />
           </g>
         )}
+
+        {/* Predicate regions — the furthest back, since they are a backdrop */}
+        {regionCells.map(({ region, cells }, i) => {
+          const tone = region.color ?? highlightColor;
+          const id = region.id ?? `region${i}`;
+          const dim = dimIds?.has(id);
+          return (
+            <g key={`rg${i}`} opacity={dim ? 0.3 : 1}>
+              {cells.map((cell, j) => (
+                <rect
+                  key={j}
+                  x={sx(cell.x0)}
+                  y={sy(cell.y1)}
+                  width={Math.max(0.5, sx(cell.x1) - sx(cell.x0))}
+                  height={Math.max(0.5, sy(cell.y0) - sy(cell.y1))}
+                  fill={tone}
+                  opacity={region.opacity ?? 0.16}
+                />
+              ))}
+              {region.label && cells[0] && (
+                <SvgLabel
+                  x={sx(cells[Math.floor(cells.length / 2)]!.x0)}
+                  y={sy(cells[Math.floor(cells.length / 2)]!.y1) + 12}
+                  text={region.label}
+                  fill={tone}
+                  fontSize={10}
+                  fontWeight={600}
+                  halo={DEFAULTS.surface}
+                />
+              )}
+            </g>
+          );
+        })}
 
         {/* Shaded regions — behind series */}
         {shades.map((sh, i) => {
@@ -468,6 +558,21 @@ export function PlotView({
               </span>
             );
           })}
+        </div>
+      )}
+
+      {problems.length > 0 && (
+        <div
+          style={{
+            fontSize: 11,
+            padding: "2px 8px 6px",
+            color: "var(--kw-widget-accent-rose, #f43f5e)",
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          }}
+        >
+          {problems.map((message, i) => (
+            <div key={i}>{message}</div>
+          ))}
         </div>
       )}
     </div>

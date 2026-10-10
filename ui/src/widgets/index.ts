@@ -87,6 +87,17 @@ export {
   type ArrayStackArrow,
 } from "./ArrayView";
 export { BitsView, type BitsViewProps } from "./BitsView";
+export {
+  decodeBits,
+  fieldValue,
+  toggleBit,
+  asUint,
+  asTwos,
+  asFloat,
+  type BitField,
+  type BitsDecoding,
+  type DecodedBits,
+} from "./bitsDecode";
 export { PropertyBar, type PropertyBarProps, type PropertyEntry } from "./PropertyBar";
 export { CodeHighlight, type CodeHighlightProps } from "./CodeHighlight";
 export { TreeView, type TreeViewProps, type TreeNode } from "./TreeView";
@@ -111,7 +122,9 @@ export {
 export { ActivityGrid, type ActivityGridProps } from "./ActivityGrid";
 export {
   BarView,
+  binSamples,
   type BarViewProps,
+  type BarBinning,
   type BarPointer,
   type BarOverlay,
   type BarGuide,
@@ -119,6 +132,7 @@ export {
 export {
   PlotView,
   type PlotViewProps,
+  type PlotRegion,
   type PlotSeries,
   type PlotSeriesKind,
   type PlotPoint,
@@ -126,7 +140,7 @@ export {
   type PlotShade,
   type PlotMark,
 } from "./PlotView";
-export { type PlotDomain } from "./plotLayout";
+export { type PlotDomain, sampleSeries, sampleRegion, niceTicks, expandRange } from "./plotLayout";
 export {
   GraphView,
   edgeKey,
@@ -197,6 +211,7 @@ export {
   type XY,
 } from "./PlaneView";
 export { MapView, type MapViewProps, type MapEntry, type MapSlot } from "./MapView";
+export { QueueView, type QueueViewProps, type QueuePointer } from "./QueueView";
 export { AnnotationBar, type AnnotationBarProps } from "./AnnotationBar";
 export { WidgetLayout, WidgetPanel, type WidgetLayoutProps, type WidgetPanelProps } from "./WidgetLayout";
 export { StateInspector, type StateInspectorProps } from "./StateInspector";

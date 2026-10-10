@@ -71,6 +71,7 @@ workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
 | [`numberline`](#numberline) | A single value axis: inequalities, interval arithmetic, binary-search-on-answer buckets, SLO thresholds. Closed endpoints are filled, open ones hollow. |
 | [`plane`](#plane) | A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps. |
 | [`plot`](#plot) | An x–y plot: complexity curves, predicate curves for binary search on the answer, latency against load, convergence. |
+| [`queue`](#queue) | FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point. |
 | [`sequence`](#sequence) | A message sequence between participants: API flows, consensus rounds, handshakes, retries. Steps reveal one message at a time. |
 | [`stack`](#stack) | A LIFO stack: monotonic stacks, bracket matching, call stacks, undo histories. |
 | [`table`](#table) | A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `"rowKey.colKey"`. |
@@ -213,8 +214,8 @@ Also spelled: `kiwi-bits`, `widget:bits`, `bitmask`, `kiwi-bits`.
 | `arrows` | `array` of `object` | Arcs between bit positions: `{from, to, label?, dashed?}`. |
 | `bits` | `number` | How many bits to draw. Defaults to the value's bit length. — fixed across steps |
 | `cellSize` | `number` | Cell size, px. — fixed across steps |
-| `decode` | `uint` or `twos` or `ieee32` or `ieee64` or `hex` or `raw` | Summary row interpretation. Default uint. — fixed across steps |
-| `fields` | `array` of `object` | Named bit ranges drawn as brackets: `{from, to, label, color?}` — sign, exponent, mantissa. |
+| `decode` | `uint` or `int` or `twos` or `ieee32` or `ieee64` or `hex` or `oct` or `raw` | How to read the pattern in the summary row. A list shows several readings at once. Default uint. |
+| `fields` | `array` of `object` | Named bit ranges drawn as brackets under the row: `{from, to, label, color?}` — a float's sign, exponent and mantissa; a flags register; a packed struct. Each bracket shows the field's value. |
 | `highlightBits` | `array` or `number` or `string` | Secondary-highlighted bit positions. |
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `label` | `string` | Row title, e.g. `mask`. |
@@ -669,10 +670,11 @@ Also spelled: `kiwi-plot`, `widget:plot`, `chart-xy`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `series` | `array` of `object` | `{id?, label?, points: [{x, y}, …], kind?: "line"\|"area"\|"scatter", color?, baseline?}`. — **required** |
+| `series` | `array` of `object` | `{id?, label?, points: [{x, y}, …], kind?: "line"\|"area"\|"scatter", color?, baseline?}`, or `{expr: "sin(x) + a", samples?, domain?}` for a curve from a formula. — **required** |
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
 | `activeIds` | `array` or `number` or `string` | Series ids drawn in the active color. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
+| `bind` | `object` | Values for the free names in an `expr` or a `when`, e.g. `{a: 2}`. Steppable, so a walkthrough can sweep a parameter. |
 | `dimIds` | `array` or `number` or `string` | Dimmed series ids. |
 | `guides` | `array` of `object` | Reference lines: `{x?, y?, label?, color?}` — an SLO, a threshold, a crossover. |
 | `height` | `number` | Canvas height, px. — fixed across steps |
@@ -680,6 +682,7 @@ Also spelled: `kiwi-plot`, `widget:plot`, `chart-xy`.
 | `highlightIds` | `array` or `number` or `string` | Secondary-highlighted series ids. |
 | `marks` | `array` of `object` | Single annotated points: `{x, y?, label?, color?}`. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
+| `regions` | `array` of `object` | Shaded areas from a predicate: `{when: "y < x^2", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope. |
 | `shades` | `array` of `object` | Shaded bands: `{from, to, series?, fromY?, toY?, color?, label?}`. |
 | `showAxes` | `boolean` | Draw the axes and frame. Default true. — fixed across steps |
 | `showLegend` | `boolean` | Draw the legend. Default true. — fixed across steps |
@@ -710,6 +713,69 @@ steps:
   - note: "The smallest capacity that fits the budget is 20"
     marks: [{x: 20, y: 7, label: "answer"}]
     breakpoint: true
+```
+````
+
+### queue
+
+FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point.
+
+A bare `queue` fence renders as a widget when its body carries `values`.
+
+Also spelled: `kiwi-queue`, `widget:queue`, `ringbuffer`, `ring-buffer`.
+
+| Key | Type | Notes |
+|---|---|---|
+| `values` | `array` | Slot contents. In `ring` layout this is the whole buffer, with `null` for an empty slot. — **required** |
+| `activeColor` | `string` | Primary highlight color. — fixed across steps |
+| `activeIndices` | `array` or `number` or `string` | Slots active this step. |
+| `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
+| `back` | `number` | Index one past the tail — where the next enqueue lands. |
+| `backLabel` | `string` | Label on the tail end. Default "back". — fixed across steps |
+| `capacity` | `number` | Buffer size. Defaults to `values.length`. — fixed across steps |
+| `dimIndices` | `array` or `number` or `string` | Dimmed slots. |
+| `empty` | `string` | Text shown when every slot is empty. — fixed across steps |
+| `front` | `number` | Index of the head. Defaults to 0. |
+| `frontLabel` | `string` | Label on the head end. Default "front". — fixed across steps |
+| `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
+| `highlightIndices` | `array` or `number` or `string` | Secondary-highlighted slots. |
+| `layout` | `horizontal` or `ring` | Default horizontal. — fixed across steps |
+| `pointers` | `array` of `object` | Extra markers beside slots: `{index, label, color?}`. |
+| `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
+| `radius` | `number` | Ring radius, px. Default 86. — fixed across steps |
+| `showIndices` | `boolean` | Show slot indices. Default true. — fixed across steps |
+| `size` | `number` | How many slots hold data — what tells a full ring from an empty one. |
+| `slotSize` | `number` | Slot size, px. Default 44. — fixed across steps |
+| `title` | `string` | Caption above the queue. — fixed across steps |
+| `why` | `any` | Slot index → explanation, revealed on select. |
+| `widgetId` | `string` | Name for the inspect bus. — fixed across steps |
+
+````markdown
+```queue id=ring layout=ring caption="A ring buffer wrapping past the end"
+capacity: 6
+values: [null, null, null, null, null, null]
+front: 0
+back: 0
+steps:
+  - note: "Empty: front and back coincide"
+    size: 0
+  - note: "Enqueue three; back advances"
+    values: [a, b, c, null, null, null]
+    back: 3
+    size: 3
+    activeIndices: [2]
+  - note: "Dequeue two; front advances, the slots are not cleared"
+    values: [a, b, c, null, null, null]
+    front: 2
+    back: 3
+    size: 1
+    dimIndices: [0, 1]
+  - note: "Enqueue four more — back wraps past the end to slot 1"
+    values: [g, h, c, d, e, f]
+    front: 2
+    back: 2
+    size: 6
+    activeIndices: [0, 1]
 ```
 ````
 
