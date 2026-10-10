@@ -220,3 +220,33 @@ export function fenceDiagnostics(state: EditorState): FenceDiagnostic[] {
 }
 
 export const fenceCompletion: CompletionSource = fenceKeyCompletionSource;
+
+// ── Live preview ────────────────────────────────────────────────────────────
+
+export interface FencePreviewTarget {
+  lang: string;
+  /** The fence's YAML body, without the delimiter lines. */
+  body: string;
+  /** The meta string after the language on the opening line. */
+  meta: string;
+}
+
+/**
+ * What a source-mode preview pane should render: the fence the caret is in.
+ *
+ * Returns the raw strings rather than a parsed fence, so the pane can mount
+ * the same `TypedFence` the page uses — a preview that renders through a
+ * second code path is a preview that lies.
+ */
+export function fencePreviewAt(state: EditorState, pos: number): FencePreviewTarget | null {
+  const fence = fenceAtCursor(state, pos);
+  if (!fence) return null;
+  const openLine = state.doc.lineAt(fence.from).number - 1;
+  const opening = openLine >= 1 ? state.doc.line(openLine).text.trim() : "";
+  const meta = opening.replace(/^(`{3,}|~{3,})\s*\S*\s*/, "");
+  return {
+    lang: fence.lang,
+    body: state.doc.sliceString(fence.from, fence.to),
+    meta,
+  };
+}

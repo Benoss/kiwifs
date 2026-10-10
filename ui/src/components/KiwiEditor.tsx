@@ -34,6 +34,8 @@ import {
 } from "@kw/lib/editorMode";
 import { formatDistanceToNow } from "date-fns";
 import { MarkdownSourceEditor } from "./editor/MarkdownSourceEditor";
+import { FencePreview } from "./editor/FencePreview";
+import type { FencePreviewTarget } from "./editor/fenceAssist";
 import { blockNoteSlashItems, loadSlashCommandTemplate } from "@kw/lib/editorSlashCommands";
 import { useEditorSlashCommands } from "../hooks/useEditorSlashCommands";
 import {
@@ -401,6 +403,7 @@ function EditorInner({
 }) {
   const [editorMode, setEditorMode] = useState<EditorMode>(() => loadEditorModePreference());
   const [sourceText, setSourceText] = useState(initialMd);
+  const [fenceUnderCursor, setFenceUnderCursor] = useState<FencePreviewTarget | null>(null);
   const syncedMdRef = useRef(initialMd);
   const editorModeRef = useRef(editorMode);
   editorModeRef.current = editorMode;
@@ -844,17 +847,23 @@ function EditorInner({
 
           <div className="max-w-3xl min-h-[50vh]">
             {editorMode === "source" ? (
-              <MarkdownSourceEditor
-                value={sourceText}
-                onChange={handleSourceTextChange}
-                dark={isDark}
-                onSaveShortcut={() => onSaveRef.current({ close: true })}
-                pages={wikiPages}
-                minHeight="60vh"
-                customSlashCommands={customSlashCommands}
-                loadSlashTemplate={loadSlashTemplate}
-                onSlashTemplateError={onSlashTemplateError}
-              />
+              <div className="flex flex-col gap-2">
+                <MarkdownSourceEditor
+                  value={sourceText}
+                  onChange={handleSourceTextChange}
+                  dark={isDark}
+                  onSaveShortcut={() => onSaveRef.current({ close: true })}
+                  pages={wikiPages}
+                  minHeight="60vh"
+                  customSlashCommands={customSlashCommands}
+                  loadSlashTemplate={loadSlashTemplate}
+                  onSlashTemplateError={onSlashTemplateError}
+                  onFenceUnderCursor={setFenceUnderCursor}
+                />
+                {/* Only while the caret is in a widget fence, so the pane does
+                    not take height from ordinary prose editing. */}
+                <FencePreview target={fenceUnderCursor} />
+              </div>
             ) : visualParseError ? (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
                 <p className="font-medium">Could not open in Visual mode</p>

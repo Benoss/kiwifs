@@ -14,7 +14,7 @@ import {
   wikiLinkCompletionSource,
   type WikiPage,
 } from "./wikiLinkCompletion";
-import { fenceCompletion } from "./fenceAssist";
+import { fenceCompletion, fencePreviewAt, type FencePreviewTarget } from "./fenceAssist";
 
 export type MarkdownSourceEditorProps = {
   value: string;
@@ -28,6 +28,11 @@ export type MarkdownSourceEditorProps = {
   customSlashCommands?: EditorSlashCommandConfig[];
   loadSlashTemplate?: (templatePath: string) => Promise<string>;
   onSlashTemplateError?: (message: string) => void;
+  /**
+   * Fires with the widget fence the caret is in, or null. A source-mode pane
+   * can render it live, so an author editing YAML can see the picture.
+   */
+  onFenceUnderCursor?: (fence: FencePreviewTarget | null) => void;
 };
 
 export function MarkdownSourceEditor({
@@ -42,6 +47,7 @@ export function MarkdownSourceEditor({
   customSlashCommands = [],
   loadSlashTemplate,
   onSlashTemplateError,
+  onFenceUnderCursor,
 }: MarkdownSourceEditorProps) {
   const extensions = useMemo(() => {
     const saveKeymap = keymap.of([
@@ -83,8 +89,25 @@ export function MarkdownSourceEditor({
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       saveKeymap,
     ];
+
+    if (onFenceUnderCursor) {
+      exts.push(
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged && !update.selectionSet) return;
+          const pos = update.state.selection.main.head;
+          onFenceUnderCursor(fencePreviewAt(update.state, pos));
+        }),
+      );
+    }
     return exts;
-  }, [onSaveShortcut, pages, customSlashCommands, loadSlashTemplate, onSlashTemplateError]);
+  }, [
+    onSaveShortcut,
+    pages,
+    customSlashCommands,
+    loadSlashTemplate,
+    onSlashTemplateError,
+    onFenceUnderCursor,
+  ]);
 
   const theme = useMemo(() => markdownEditorTheme({ dark }), [dark]);
 

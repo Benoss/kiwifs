@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { fenceAtCursor, fenceDiagnostics, fenceKeyCompletionSource } from "./fenceAssist";
+import { fenceAtCursor, fenceDiagnostics, fenceKeyCompletionSource, fencePreviewAt } from "./fenceAssist";
 import type { CompletionContext } from "@codemirror/autocomplete";
 
 function state(doc: string): EditorState {
@@ -143,5 +143,25 @@ describe("fenceDiagnostics", () => {
       "",
     ].join("\n");
     expect(fenceDiagnostics(state(doc))).toHaveLength(2);
+  });
+});
+
+describe("fencePreviewAt", () => {
+  it("returns the body and meta of the fence the caret is in", () => {
+    const { state: st, pos } = at('```array id=a caption="hi"\nvalues: [1, 2]\n|\n```\n');
+    const target = fencePreviewAt(st, pos);
+    expect(target?.lang).toBe("array");
+    expect(target?.body).toContain("values: [1, 2]");
+    expect(target?.meta).toBe('id=a caption="hi"');
+  });
+
+  it("has an empty meta when the opening line is just a tag", () => {
+    const { state: st, pos } = at("```array\nvalues: [1]\n|\n```\n");
+    expect(fencePreviewAt(st, pos)?.meta).toBe("");
+  });
+
+  it("returns nothing outside a widget fence", () => {
+    const { state: st, pos } = at("# Heading\n\n|\n");
+    expect(fencePreviewAt(st, pos)).toBeNull();
   });
 });

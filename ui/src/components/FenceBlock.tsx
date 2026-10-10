@@ -12,25 +12,44 @@
  *     string that is only read past that point.
  */
 
-import type { ReactNode } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import { ShikiCode } from "./ShikiCode";
-import { MermaidDiagram } from "./MermaidDiagram";
 import { parseMermaidMeta } from "@kw/lib/mermaidTheme";
-import { KiwiSteps } from "./KiwiSteps";
 import { KiwiCalc } from "./KiwiCalc";
-import { KiwiChart } from "./KiwiChart";
-import { KiwiApp } from "./KiwiApp";
 import { KiwiDiff } from "./KiwiDiff";
 import { KiwiKanbanBlock } from "./KiwiKanbanBlock";
 import { KiwiDataBlock } from "./KiwiDataBlock";
 import { KiwiColor } from "./KiwiColor";
 import { KiwiProgress } from "./KiwiProgress";
-import { KiwiPlayground } from "./KiwiPlayground";
 import { KiwiQuery } from "./KiwiQuery";
-import { KiwiWidget } from "./KiwiWidget";
-import { CodeRunner } from "@kw/widgets/CodeRunner";
-import { PageTracker } from "@kw/widgets/PageTracker";
 import { getFence, sniffFence, TypedFence } from "@kw/fences";
+
+/**
+ * The blocks that drag a large library in — react-live, pyodide, mermaid,
+ * recharts — load only on a page that uses one.
+ *
+ * This is the half of the lazy-loading story that the specs alone could not
+ * deliver: `KiwiWidget`'s `liveScope` names every view component, so as long
+ * as it was statically imported, every page paid for GraphView and dagre
+ * whether or not it drew anything.
+ */
+const KiwiWidget = lazy(() => import("./KiwiWidget").then((m) => ({ default: m.KiwiWidget })));
+const CodeRunner = lazy(() => import("@kw/widgets/CodeRunner").then((m) => ({ default: m.CodeRunner })));
+const PageTracker = lazy(() => import("@kw/widgets/PageTracker").then((m) => ({ default: m.PageTracker })));
+const MermaidDiagram = lazy(() => import("./MermaidDiagram").then((m) => ({ default: m.MermaidDiagram })));
+const KiwiSteps = lazy(() => import("./KiwiSteps").then((m) => ({ default: m.KiwiSteps })));
+const KiwiChart = lazy(() => import("./KiwiChart").then((m) => ({ default: m.KiwiChart })));
+const KiwiApp = lazy(() => import("./KiwiApp").then((m) => ({ default: m.KiwiApp })));
+const KiwiPlayground = lazy(() => import("./KiwiPlayground").then((m) => ({ default: m.KiwiPlayground })));
+
+/** A block-shaped placeholder, so the page does not jump as a chunk arrives. */
+function Loading() {
+  return <div className="my-4 h-24 animate-pulse rounded-lg bg-muted" />;
+}
+
+function Deferred({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<Loading />}>{children}</Suspense>;
+}
 
 export interface FenceBlockProps {
   /** `language-xxx` class react-markdown puts on the <code> element. */
@@ -89,26 +108,30 @@ export function FenceBlock({
 
   if (lang === "widget:code") {
     const codeLangMatch = fenceMeta(node).match(/lang=(\w+)/);
-    return <CodeRunner source={raw} lang={codeLangMatch ? codeLangMatch[1]! : "python"} />;
+    return <Deferred><CodeRunner source={raw} lang={codeLangMatch ? codeLangMatch[1]! : "python"} /></Deferred>;
   }
   if (lang === "widget:tracker") {
-    return <PageTracker onNavigate={onNavigate} source={raw} />;
+    return <Deferred><PageTracker onNavigate={onNavigate} source={raw} /></Deferred>;
   }
   if (lang?.startsWith("widget:")) {
-    return <KiwiWidget name={lang.slice("widget:".length)} source={raw} meta={fenceMeta(node)} />;
+    return (
+      <Deferred>
+        <KiwiWidget name={lang.slice("widget:".length)} source={raw} meta={fenceMeta(node)} onNavigate={onNavigate} />
+      </Deferred>
+    );
   }
   if (lang === "kiwi-query") {
     return <KiwiQuery source={raw} onNavigate={onNavigate} isComputedView={isComputedView} />;
   }
   if (lang === "mermaid") {
     const { focus, dim } = parseMermaidMeta(fenceMeta(node));
-    return <MermaidDiagram chart={raw} onNavigate={onNavigate} focus={focus} dim={dim} />;
+    return <Deferred><MermaidDiagram chart={raw} onNavigate={onNavigate} focus={focus} dim={dim} /></Deferred>;
   }
   if (lang === "kiwi-calc") {
     return <KiwiCalc source={raw} />;
   }
   if (lang === "kiwi-chart") {
-    return <KiwiChart source={raw} />;
+    return <Deferred><KiwiChart source={raw} /></Deferred>;
   }
   if (lang === "kiwi-color") {
     return <KiwiColor source={raw} />;
@@ -117,7 +140,7 @@ export function FenceBlock({
     return <KiwiProgress source={raw} />;
   }
   if (lang === "kiwi-playground") {
-    return <KiwiPlayground source={raw} />;
+    return <Deferred><KiwiPlayground source={raw} /></Deferred>;
   }
   if (lang === "kiwi-kanban") {
     return <KiwiKanbanBlock source={raw} />;
@@ -142,7 +165,7 @@ export function FenceBlock({
   }
 
   if (lang === "kiwi-steps") {
-    return <KiwiSteps source={raw} onNavigate={onNavigate} />;
+    return <Deferred><KiwiSteps source={raw} onNavigate={onNavigate} /></Deferred>;
   }
 
   if (!lang || !raw.includes("\n")) {
@@ -155,7 +178,7 @@ export function FenceBlock({
 
   const meta = fenceMeta(node);
   if (lang === "kiwi-app") {
-    return <KiwiApp source={raw} meta={meta} />;
+    return <Deferred><KiwiApp source={raw} meta={meta} /></Deferred>;
   }
   if (lang === "kiwi-diff") {
     return <KiwiDiff source={raw} meta={meta} />;
