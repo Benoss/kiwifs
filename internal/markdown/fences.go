@@ -45,12 +45,16 @@ func (a FenceAttribute) CanStep() bool {
 
 // FenceSpec is one widget fence: its language tag, its keys, and an example.
 type FenceSpec struct {
-	Lang        string                    `json:"lang"`
-	Aliases     []string                  `json:"aliases"`
-	Description string                    `json:"description"`
-	Required    []string                  `json:"required"`
-	Example     string                    `json:"example"`
-	Attributes  map[string]FenceAttribute `json:"attributes"`
+	Lang        string   `json:"lang"`
+	Aliases     []string `json:"aliases"`
+	Description string   `json:"description"`
+	Required    []string `json:"required"`
+	// RequireOneOf names keys of which at least one has to be present. A
+	// table needs its rows from somewhere — `rows:` or `fromData:` — and no
+	// single key can be marked required to say that.
+	RequireOneOf []string                  `json:"requireOneOf,omitempty"`
+	Example      string                    `json:"example"`
+	Attributes   map[string]FenceAttribute `json:"attributes"`
 }
 
 // FenceCatalogue is the whole generated file.
@@ -368,6 +372,22 @@ func lintWidgetFence(block widgetFenceBlock) []LintIssue {
 		}
 		if _, ok := props[key]; !ok {
 			add(key, fmt.Sprintf("missing required key %q", key), "error")
+		}
+	}
+	if len(spec.RequireOneOf) > 0 {
+		satisfied := false
+		for _, key := range spec.RequireOneOf {
+			if _, ok := props[key]; ok {
+				satisfied = true
+				break
+			}
+		}
+		if !satisfied {
+			quoted := make([]string, len(spec.RequireOneOf))
+			for i, key := range spec.RequireOneOf {
+				quoted[i] = fmt.Sprintf("%q", key)
+			}
+			add(spec.RequireOneOf[0], fmt.Sprintf("needs one of %s", strings.Join(quoted, ", ")), "error")
 		}
 	}
 

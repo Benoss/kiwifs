@@ -7,7 +7,7 @@
  * without a spec having to ask for any of them.
  */
 
-import { Suspense, useMemo, useRef } from "react";
+import { Suspense, useMemo, useRef, useSyncExternalStore } from "react";
 import { usePlayback } from "@kw/widgets/usePlayback";
 import { PlaybackControls } from "@kw/widgets/PlaybackControls";
 import { AnnotationBar } from "@kw/widgets/AnnotationBar";
@@ -17,6 +17,7 @@ import { InspectContext, parseLinks, useInspectState, whyFor } from "@kw/widgets
 import { WidgetLayout, WidgetPanel } from "@kw/widgets/WidgetLayout";
 import { ErrorBoundary } from "@kw/components/ErrorBoundary";
 import { figureClassName } from "@kw/lib/figureLayout";
+import { pageVars, referencedVars, subscribePageVars, substitutePageVars } from "@kw/lib/pageVars";
 import { parseFence } from "./parseFence";
 import { parseFenceMeta } from "./meta";
 import type { FencePanel, FenceSpec } from "./registry";
@@ -32,10 +33,21 @@ export interface TypedFenceProps {
 export function TypedFence({ spec, source, meta, onNavigate }: TypedFenceProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const fenceMeta = useMemo(() => parseFenceMeta(meta), [meta]);
+  // A fence can read a page variable a reader is dragging: `values: [1, $n]`.
+  // Substituted into the YAML text rather than the parsed tree, because a
+  // placeholder has to be able to stand where a number does.
+  const vars = useSyncExternalStore(subscribePageVars, pageVars, pageVars);
+  const referenced = useMemo(() => referencedVars(source), [source]);
+  const bound = useMemo(
+    () => Object.fromEntries(referenced.filter((n) => n in vars).map((n) => [n, vars[n]!])),
+    [referenced, vars],
+  );
+  const resolvedSource = useMemo(() => substitutePageVars(source, bound), [source, bound]);
+
   const parsed = useMemo(() => {
-    const raw = parseFence(spec, source);
+    const raw = parseFence(spec, resolvedSource);
     return spec.prepare ? spec.prepare(raw) : raw;
-  }, [spec, source]);
+  }, [spec, resolvedSource]);
 
   const steps = useMemo(
     () =>
@@ -66,6 +78,15 @@ export function TypedFence({ spec, source, meta, onNavigate }: TypedFenceProps) 
   );
   const links = useMemo(() => parseLinks(parsed.link), [parsed.link]);
   const bus = useInspectState({ why, links });
+
+  /**
+   * A step with `expect: {select: "3"}` is a question, not a frame: playback
+   * holds until the reader selects that part. The JSAV "constructing" level,
+   * done as data — grading on the key, never on a colour.
+   */
+  const expected = stepMeta?.expect?.select;
+  const awaiting =
+    expected !== undefined && String(bus.selected?.key ?? "") !== String(expected);
 
   const errors = parsed.issues.filter((i) => i.severity === "error");
   if (parsed.error || errors.length > 0) {
@@ -141,11 +162,24 @@ export function TypedFence({ spec, source, meta, onNavigate }: TypedFenceProps) 
                 />
               )}
 
+              {awaiting && (
+                <AnnotationBar
+                  text={
+                    typeof stepMeta?.expect?.prompt === "string"
+                      ? stepMeta.expect.prompt
+                      : "Select the part this step is about to continue."
+                  }
+                  label="Your turn"
+                  variant="warning"
+                />
+              )}
+
               {hasSteps && (
                 <div className="mt-3">
                   <PlaybackControls
                     pb={pb}
                     snapshot={{ root: rootRef, name: fenceMeta.id || spec.lang }}
+                    blocked={awaiting}
                   />
                 </div>
               )}

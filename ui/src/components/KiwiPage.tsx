@@ -45,6 +45,7 @@ import remarkEmoji from "remark-emoji";
 import remarkSupersub from "remark-supersub";
 import remarkDefinitionList from "remark-definition-list";
 import { buildResolver, remarkWikiLinks } from "@kw/lib/wikiLinks";
+import { KiwiControl } from "./KiwiControl";
 import {
   applyPageMeta,
   applyTitles,
@@ -56,7 +57,7 @@ import {
   type BookOrder,
 } from "@kw/lib/bookOrder";
 import type { FigureWidth } from "@kw/lib/figureLayout";
-import { remarkMark, stripObsidianComments, remarkInlineTags, rehypeCodeMeta } from "@kw/lib/remarkPlugins";
+import { remarkMark, stripObsidianComments, remarkInlineTags, remarkPageControls, rehypeCodeMeta } from "@kw/lib/remarkPlugins";
 import remarkDirective from "remark-directive";
 import { CLAIM_DATA_ATTRIBUTES, remarkKiwiDirectives } from "@kw/lib/remarkDirectives";
 import { remarkKiwiQuiz } from "@kw/lib/remarkQuiz";
@@ -138,6 +139,7 @@ const sanitizeSchema = {
       "data-footnotes", "data-footnote-ref", "data-footnote-backref",
       "data-tag", "metastring",
       "data-kiwi-directive", "data-quiz", "data-label", "data-ratio", "data-cols",
+      "data-control", "data-control-attrs", "data-var",
       "data-width", "data-pin", "data-caption",
       "data-kiwi-embed", "data-kiwi-target", "data-kiwi-width", "data-kiwi-pin",
       // This schema is a copy of kiwiSanitizeSchema in lib/kiwiMarkdown.ts.
@@ -922,6 +924,7 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                     remarkMath,
                     remarkMark,
                     remarkInlineTags,
+                    remarkPageControls,
                     remarkEmoji,
                     remarkSupersub,
                     remarkDefinitionList,
@@ -1070,6 +1073,14 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                           >
                             {children}
                           </KiwiClaim>
+                        );
+                      }
+                      if (props["data-kiwi-directive"] === "control") {
+                        return (
+                          <KiwiControl
+                            kind={String(props["data-control"] ?? "value")}
+                            attrs={parseControlAttrs(props["data-control-attrs"])}
+                          />
                         );
                       }
                       return <span {...(rest as any)}>{children}</span>;
@@ -1269,6 +1280,7 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             remarkMath,
                             remarkMark,
                             remarkInlineTags,
+                            remarkPageControls,
                             remarkEmoji,
                             remarkSupersub,
                             remarkDefinitionList,
@@ -1294,6 +1306,18 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             ),
                             pre: ({ children }) => <>{children}</>,
                             table: ScrollableTable,
+                            span: ({ children, node: _node, ...rest }: any) => {
+                              const props = rest as Record<string, unknown>;
+                              if (props["data-kiwi-directive"] === "control") {
+                                return (
+                                  <KiwiControl
+                                    kind={String(props["data-control"] ?? "value")}
+                                    attrs={parseControlAttrs(props["data-control-attrs"])}
+                                  />
+                                );
+                              }
+                              return <span {...(rest as any)}>{children}</span>;
+                            },
                             div: ({ children, node: _node, ...rest }: any) => {
                               const props = rest as Record<string, unknown>;
                               if (props["data-kiwi-directive"] === "quiz") {
@@ -1688,6 +1712,17 @@ function formatFrontmatterValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatFrontmatterValue).join(", ");
   if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
+}
+
+/** The attrs a `{% … /%}` tag carried, round-tripped through its data attribute. */
+function parseControlAttrs(raw: unknown): Record<string, string | number | boolean> {
+  if (typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function frontmatterBadges(

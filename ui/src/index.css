@@ -423,6 +423,61 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+/* ─── Inline page controls ─── */
+/* A number a reader can drag, inside a sentence. Baseline-aligned so the line
+   of prose does not jump when one appears. */
+.kiwi-control-range {
+  @apply inline-flex items-baseline gap-1.5 align-baseline;
+}
+.kiwi-control-range input[type="range"] {
+  @apply align-middle;
+  width: 5rem;
+  height: 5px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 999px;
+  outline: none;
+  background: linear-gradient(
+    to right,
+    var(--primary) 0%,
+    var(--primary) var(--kw-range-progress, 0%),
+    var(--border) var(--kw-range-progress, 0%),
+    var(--border) 100%
+  );
+}
+.kiwi-control-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  cursor: ew-resize;
+}
+.kiwi-control-range input[type="range"]::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  cursor: ew-resize;
+}
+.kiwi-control-readout,
+.kiwi-control-value {
+  @apply font-mono tabular-nums font-semibold;
+  color: var(--primary);
+}
+.kiwi-control-toggle,
+.kiwi-control-select {
+  @apply inline-flex items-center rounded px-1.5 text-sm font-medium border border-border bg-transparent align-baseline;
+  color: var(--primary);
+  cursor: pointer;
+}
+.kiwi-control-error {
+  @apply text-destructive;
+}
+
 /* ─── Code notation comments ─── */
 /* `// [!code focus]` dims everything else, so the eye lands on the two lines
    that matter; the markers themselves are stripped before highlighting. */

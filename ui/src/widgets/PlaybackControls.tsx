@@ -24,6 +24,12 @@ interface Props {
   clockId?: string;
   /** Widget root to snapshot, and the filename to offer. */
   snapshot?: { root: React.RefObject<HTMLElement | null>; name: string };
+  /**
+   * Hold the transport: the current step is waiting on the reader. Stepping
+   * back and resetting still work — being stuck is not the same as being
+   * trapped.
+   */
+  blocked?: boolean;
   /** @deprecated Use onCycleSpeed instead. Kept for backward compat. */
   onSpeedChange?: (speed: number) => void;
 }
@@ -46,8 +52,9 @@ export function PlaybackControls({ pb, ...props }: Props) {
   const onCycleSpeed = b.onCycleSpeed;
   const clockId = b.clockId;
   const snapshot = b.snapshot;
+  const blocked = b.blocked ?? false;
   const atStart = currentStep === 0;
-  const atEnd = currentStep >= totalSteps - 1;
+  const atEnd = currentStep >= totalSteps - 1 || blocked;
 
   return (
     <div
@@ -64,7 +71,10 @@ export function PlaybackControls({ pb, ...props }: Props) {
         value={currentStep}
         onChange={(e) => {
           onStop();
-          onSeek(Number(e.target.value));
+          const next = Number(e.target.value);
+          // Scrubbing forward past a step that is waiting on the reader would
+          // skip the question; scrubbing back is always allowed.
+          onSeek(blocked ? Math.min(next, currentStep) : next);
         }}
         className="w-full h-1.5 cursor-pointer"
         style={{

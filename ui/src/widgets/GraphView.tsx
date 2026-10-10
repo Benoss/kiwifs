@@ -162,6 +162,25 @@ export interface GraphViewProps {
   height?: number;
   /** Accessible name. Defaults to a summary of the nodes, edges and groups. */
   ariaLabel?: string;
+  /**
+   * Draw the circular backdrop a hash ring needs: a circle with tick marks,
+   * with `layout: "circular"` placing nodes on it. Consistent hashing is a
+   * graph on a ring, not a widget of its own.
+   */
+  ring?: boolean | { ticks?: number; labels?: (string | number)[] };
+  /**
+   * Dots at fixed angles on the ring — virtual nodes, key positions. `at` is
+   * a fraction of the circumference (0 at the top, clockwise) or a degree
+   * when `degrees` is set.
+   */
+  tokens?: { at: number; label?: string; color?: string; degrees?: boolean; node?: string | number }[];
+  /**
+   * Let the reader rearrange the graph. `onChange` receives the whole node and
+   * edge list, and the "copy as YAML" button turns a drawn graph into a fence
+   * body — which is the point: sketching is faster than typing coordinates.
+   */
+  editable?: boolean;
+  onChange?: (nodes: GraphNode[], edges: GraphEdge[]) => void;
 }
 
 const DEFAULTS = {
@@ -235,6 +254,10 @@ export function GraphView({
   width,
   height,
   ariaLabel,
+  ring,
+  tokens,
+  editable = false,
+  onChange,
 }: GraphViewProps) {
   const activeNodes = toSet(activeNodesIn);
   const highlightNodes = toSet(highlightNodesIn);
@@ -527,6 +550,45 @@ export function GraphView({
   const displayW = dagre && width !== undefined ? Math.min(width, vbW) : vbW;
   const displayH = (displayW * vbH) / vbW;
 
+  // A ring is drawn through the node positions, not at a fixed radius, so it
+  // encloses whatever the layout produced.
+  const ringGeometry = (() => {
+    if (!ring) return null;
+    const cx = (bounds.x0 + bounds.x1) / 2;
+    const cy = (bounds.y0 + bounds.y1) / 2;
+    const r = Math.max(
+      20,
+      ...[...geom.values()].map((g) => Math.hypot(g.x - cx, g.y - cy)),
+    );
+    const opts = typeof ring === "object" ? ring : {};
+    const tickCount = Math.max(0, Math.min(64, opts.ticks ?? 0));
+    /** Fraction of the circumference, 0 at the top, clockwise. */
+    const angleOf = (at: number, degrees?: boolean) =>
+      (degrees ? (at * Math.PI) / 180 : at * Math.PI * 2) - Math.PI / 2;
+    const at = (value: number, degrees?: boolean) => {
+      const a = angleOf(value, degrees);
+      return {
+        x: cx + Math.cos(a) * r,
+        y: cy + Math.sin(a) * r,
+        lx: cx + Math.cos(a) * (r + 16),
+        ly: cy + Math.sin(a) * (r + 16),
+      };
+    };
+    const ticks = Array.from({ length: tickCount }, (_, i) => {
+      const a = angleOf(i / tickCount);
+      return {
+        x1: cx + Math.cos(a) * (r - 5),
+        y1: cy + Math.sin(a) * (r - 5),
+        x2: cx + Math.cos(a) * (r + 5),
+        y2: cy + Math.sin(a) * (r + 5),
+        lx: cx + Math.cos(a) * (r + 17),
+        ly: cy + Math.sin(a) * (r + 17),
+        label: opts.labels?.[i],
+      };
+    });
+    return { cx, cy, r, ticks, at };
+  })();
+
   const svg = (
     <svg
       width={Math.round(displayW)}
@@ -557,6 +619,73 @@ export function GraphView({
           `}</style>
         )}
       </defs>
+
+      {/* The hash ring, behind everything: a circle through the laid-out
+          nodes, with ticks, so a position on the ring reads as a position. */}
+      {ringGeometry && (
+        <g>
+          <circle
+            cx={ringGeometry.cx}
+            cy={ringGeometry.cy}
+            r={ringGeometry.r}
+            fill="none"
+            stroke={DEFAULTS.border}
+            strokeWidth={1.5}
+            strokeDasharray="2 5"
+            opacity={0.65}
+          />
+          {ringGeometry.ticks.map((tick, i) => (
+            <g key={`tick${i}`}>
+              <line
+                x1={tick.x1}
+                y1={tick.y1}
+                x2={tick.x2}
+                y2={tick.y2}
+                stroke={DEFAULTS.border}
+                strokeWidth={1}
+                opacity={0.8}
+              />
+              {tick.label != null && (
+                <SvgLabel
+                  x={tick.lx}
+                  y={tick.ly}
+                  text={tick.label}
+                  anchor="middle"
+                  dominantBaseline="central"
+                  fill={DEFAULTS.dimColor}
+                  fontSize={9}
+                  fontFamily={MONO}
+                />
+              )}
+            </g>
+          ))}
+        </g>
+      )}
+
+      {/* Tokens: virtual nodes and key positions on the ring */}
+      {ringGeometry &&
+        (tokens ?? []).map((token, i) => {
+          const point = ringGeometry.at(token.at, token.degrees);
+          return (
+            <g key={`token${i}`}>
+              <circle cx={point.x} cy={point.y} r={4} fill={token.color ?? activeColor} />
+              {token.label && (
+                <SvgLabel
+                  x={point.lx}
+                  y={point.ly}
+                  text={token.label}
+                  anchor="middle"
+                  dominantBaseline="central"
+                  fill={token.color ?? activeColor}
+                  fontSize={10}
+                  fontWeight={700}
+                  fontFamily={MONO}
+                  halo={DEFAULTS.surface}
+                />
+              )}
+            </g>
+          );
+        })}
 
       {[...allGroups]
         .sort((a, b) => depthOf(a) - depthOf(b))
@@ -797,8 +926,67 @@ export function GraphView({
   );
 
   return (
-    <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
       {zoomable ? <div style={{ width: "100%" }}><ZoomPanel>{svg}</ZoomPanel></div> : svg}
+      {editable && (
+        // Sketching a graph beats typing coordinates, and this is what turns
+        // the sketch into a fence body the author can paste back into the page.
+        <button
+          type="button"
+          onClick={() => {
+            const laidOut = nodes.map((n) => {
+              const g = geom.get(n.id);
+              return g ? { ...n, x: Math.round(g.x), y: Math.round(g.y) } : n;
+            });
+            void navigator.clipboard?.writeText(graphToYAML(laidOut, edges, directed));
+            onChange?.(laidOut, [...edges]);
+          }}
+          style={{
+            marginTop: 6,
+            fontSize: "0.68rem",
+            fontWeight: 600,
+            padding: "2px 8px",
+            borderRadius: 4,
+            border: `1px solid ${DEFAULTS.border}`,
+            background: "transparent",
+            color: DEFAULTS.dimColor,
+            cursor: "pointer",
+          }}
+          title="Copy these nodes and edges as a ```graph fence body"
+        >
+          Copy as YAML
+        </button>
+      )}
     </div>
   );
+}
+
+/** The current graph as a `graph` fence body, with positions baked in. */
+export function graphToYAML(nodes: GraphNode[], edges: GraphEdge[], directed: boolean): string {
+  const scalar = (v: unknown) =>
+    typeof v === "string" && /[:#{}\[\],&*?|<>=!%@`"\x27\s]/.test(v) ? JSON.stringify(v) : String(v);
+  const lines: string[] = [];
+  if (directed) lines.push("directed: true");
+  lines.push("nodes:");
+  for (const n of nodes) {
+    const parts = [`id: ${scalar(n.id)}`];
+    if (n.label !== undefined) parts.push(`label: ${scalar(n.label)}`);
+    if (n.sublabel !== undefined) parts.push(`sublabel: ${scalar(n.sublabel)}`);
+    if (n.shape !== undefined) parts.push(`shape: ${n.shape}`);
+    if (n.x !== undefined) parts.push(`x: ${Math.round(n.x)}`);
+    if (n.y !== undefined) parts.push(`y: ${Math.round(n.y)}`);
+    if (n.group !== undefined) parts.push(`group: ${scalar(n.group)}`);
+    lines.push(`  - {${parts.join(", ")}}`);
+  }
+  if (edges.length > 0) {
+    lines.push("edges:");
+    for (const e of edges) {
+      const parts = [`from: ${scalar(e.from)}`, `to: ${scalar(e.to)}`];
+      if (e.label !== undefined) parts.push(`label: ${scalar(e.label)}`);
+      if (e.weight !== undefined) parts.push(`weight: ${e.weight}`);
+      if (e.style !== undefined) parts.push(`style: ${e.style}`);
+      lines.push(`  - {${parts.join(", ")}}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
 }

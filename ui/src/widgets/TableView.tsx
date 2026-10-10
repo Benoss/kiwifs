@@ -1,4 +1,6 @@
+import { useSyncExternalStore } from "react";
 import { alpha } from "./colors";
+import { getPageData, pageDataVersion, subscribePageData } from "@kw/lib/pageData";
 import { toSet, type Many } from "./sets";
 import { WidgetText } from "./WidgetText";
 import { summarizeTable } from "./widgetA11y";
@@ -38,8 +40,13 @@ export interface TableArrow {
 }
 
 export interface TableViewProps {
-  columns: TableColumn[];
-  rows: Record<string, CellValue>[];
+  /**
+   * Columns. Omit them to infer one per key seen in `rows`, in first-seen
+   * order — which is what you want when the rows came from a dataset rather
+   * than from an author.
+   */
+  columns?: TableColumn[];
+  rows?: Record<string, CellValue>[];
   /** Column whose value identifies a row. Defaults to the `pk` column, else the index. */
   rowKey?: string;
   /** Cells being written this step, as `"rowKey.colKey"`. */
@@ -67,6 +74,11 @@ export interface TableViewProps {
   maxHeight?: number;
   /** Widget id for the inspect bus. Defaults to "table". */
   widgetId?: string;
+  /**
+   * Render the records of a `kiwi-data` block on the same page, by kind.
+   * `rows` wins when both are given, so a fence can override a dataset.
+   */
+  fromData?: string;
   /** Key → explanation, revealed when the reader selects that cell or row. */
   why?: Record<string, string>;
   activeColor?: string;
@@ -85,6 +97,19 @@ const DEFAULTS = {
   deleted: "var(--kw-widget-accent-rose, #f43f5e)",
 };
 
+/** One column per key seen across the rows, in the order they first appear. */
+export function inferColumns(rows: readonly Record<string, CellValue>[]): TableColumn[] {
+  const seen: string[] = [];
+  for (const row of rows) {
+    for (const key of Object.keys(row)) if (!seen.includes(key)) seen.push(key);
+  }
+  return seen.map((key) => ({
+    key,
+    label: key,
+    align: rows.every((r) => r[key] == null || typeof r[key] === "number") ? "right" : "left",
+  }));
+}
+
 function format(v: CellValue): string {
   if (v == null) return "∅";
   if (v === Infinity) return "∞";
@@ -94,8 +119,9 @@ function format(v: CellValue): string {
 }
 
 export function TableView({
-  columns,
-  rows,
+  columns: columnsIn,
+  rows: rowsIn,
+  fromData,
   rowKey,
   activeCells,
   highlightCells,
@@ -118,6 +144,14 @@ export function TableView({
   ariaLabel,
 }: TableViewProps) {
   const bus = useInspect();
+  // Re-read on every registration so a data block that mounts after this
+  // fence still fills it.
+  useSyncExternalStore(subscribePageData, pageDataVersion, pageDataVersion);
+  const linked_ = fromData ? getPageData(fromData) : undefined;
+  const rows = rowsIn ?? (linked_?.records as Record<string, CellValue>[] | undefined) ?? [];
+  // Inferred columns keep first-seen key order, so a dataset reads in the
+  // order it was written rather than alphabetically.
+  const columns = columnsIn ?? inferColumns(rows);
   const pkColumn = columns.find((c) => c.pk)?.key;
   const idOf = (row: Record<string, CellValue>, i: number) => {
     const key = rowKey ?? pkColumn;

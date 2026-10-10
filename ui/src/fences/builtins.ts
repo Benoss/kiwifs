@@ -23,6 +23,7 @@ import { bitsSpec } from "./specs/bits";
 import { barsSpec } from "./specs/bars";
 import { sequenceSpec } from "./specs/sequence";
 import { queueSpec } from "./specs/queue";
+import { memorySpec } from "./specs/memory";
 
 /** Docs order: the ones an author reaches for first come first. */
 export const BUILTIN_FENCES = [
@@ -42,6 +43,7 @@ export const BUILTIN_FENCES = [
   queueSpec,
   bitsSpec,
   sequenceSpec,
+  memorySpec,
   stepsSpec,
 ];
 

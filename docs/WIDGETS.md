@@ -68,6 +68,7 @@ workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
 | [`list`](#list) | A linked list: reversal, cycle detection, LRU chains, random pointers. A numeric `next` is how you draw a cycle back into the middle. |
 | [`map`](#map) | Hash slots, chains and probe paths: hash tables, caches, symbol tables, routing tables, or a plain unordered dictionary. |
 | [`matrix`](#matrix) | An index-addressed table: DP tables, grids, adjacency matrices, confusion matrices. Cells take `[r, c]` or `"r,c"`. |
+| [`memory`](#memory) | Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in. |
 | [`numberline`](#numberline) | A single value axis: inequalities, interval arithmetic, binary-search-on-answer buckets, SLO thresholds. Closed endpoints are filled, open ones hollow. |
 | [`plane`](#plane) | A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps. |
 | [`plot`](#plot) | An x–y plot: complexity curves, predicate curves for binary search on the answer, latency against load, convergence. |
@@ -267,6 +268,7 @@ Also spelled: `kiwi-graph`, `widget:graph`.
 | `direction` | `TB` or `BT` or `LR` or `RL` | Dagre rank direction. Default TB. — fixed across steps |
 | `edgeColors` | `object` | Base color per edge key — tree vs back edges in a DFS. |
 | `edges` | `array` of `object` | `{from, to, weight?, label?, id?, style?, color?, animated?, bidirectional?}`. |
+| `editable` | `boolean` | Show a "copy as YAML" button that turns the laid-out graph into a fence body. — fixed across steps |
 | `flow` | `down` or `up` | Layered layout: "up" draws edge targets on top (child → parent pointers). — fixed across steps |
 | `groups` | `array` of `object` | Labelled containers behind their members: `{id, label?, nodes?, parent?, color?}`. |
 | `height` | `number` | Canvas height in px. — fixed across steps |
@@ -282,7 +284,9 @@ Also spelled: `kiwi-graph`, `widget:graph`.
 | `pointers` | `array` of `object` | Labels beside nodes: `{id, label, color?}`. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
 | `rankSpacing` | `number` | Dagre: gap between ranks, px. Default 52. — fixed across steps |
+| `ring` | `boolean` or `object` | Draw a circular backdrop with tick marks: `true`, or `{ticks, labels}`. With `layout: circular` this is a hash ring — consistent hashing is a graph on a ring, not a widget of its own. |
 | `shape` | `string` | Default node outline: circle, box, person, cylinder, queue, pill, cloud, … — fixed across steps |
+| `tokens` | `array` of `object` | Dots on the ring: `{at, label?, color?, degrees?}`. `at` is a fraction of the circumference from the top, clockwise, or a degree when `degrees: true`. |
 | `width` | `number` | Canvas width in px. — fixed across steps |
 | `zoomable` | `boolean` | Wrap in a zoom / pan viewport. — fixed across steps |
 
@@ -541,6 +545,56 @@ code: |
           else:
               dp[i][j] = max(dp[i-1][j], dp[i][j-1])
 lang: python
+```
+````
+
+### memory
+
+Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in.
+
+A bare `memory` fence renders as a widget when its body carries `frames` or `heap`.
+
+Also spelled: `kiwi-memory`, `widget:memory`, `heap`, `stack-heap`.
+
+| Key | Type | Notes |
+|---|---|---|
+| `activeColor` | `string` | Primary highlight color. — fixed across steps |
+| `activeFrame` | `string` or `number` | Which frame is executing. Defaults to the innermost. |
+| `activeIds` | `array` or `number` or `string` | Heap ids to emphasise this step. |
+| `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
+| `dimIds` | `array` or `number` or `string` | Dimmed heap ids — garbage, or a frame about to return. |
+| `frames` | `array` of `object` | Call stack, outermost first: `{name, id?, vars: {k: value}, order?, returned?, active?}`. A value of `[REF, id]` points into the heap. |
+| `framesLabel` | `string` | Caption above the frames column. Default "Frames". — fixed across steps |
+| `heap` | `object` | Objects by id, tagged: `["LIST", 1, 2]`, `["DICT", ["k", 1]]`, `["INSTANCE", "Node", ["val", 1]]`, `["TUPLE", …]`, `["SET", …]`. |
+| `heapLabel` | `string` | Caption above the heap column. Default "Objects". — fixed across steps |
+| `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
+| `highlightIds` | `array` or `number` or `string` | Secondary-highlighted heap ids. |
+| `inlinePrimitives` | `boolean` | Draw a primitive inside its slot rather than as its own box. Default true. — fixed across steps |
+| `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
+| `why` | `any` | Heap id → explanation, revealed on select. |
+| `widgetId` | `string` | Name for the inspect bus. — fixed across steps |
+
+````markdown
+```memory id=alias caption="Why mutating b changed a"
+frames:
+  - name: "<module>"
+    vars: {a: [REF, 1], b: [REF, 1]}
+heap:
+  1: [LIST, 1, 2, 3]
+steps:
+  - note: "a = [1, 2, 3] allocates one list"
+    frames:
+      - {name: "<module>", vars: {a: [REF, 1]}}
+    activeIds: [1]
+  - note: "b = a copies the pointer, not the list — both names are the one object"
+    frames:
+      - {name: "<module>", vars: {a: [REF, 1], b: [REF, 1]}}
+    activeIds: [1]
+  - note: "b.append(4) mutates that object, so a sees it too"
+    heap:
+      1: [LIST, 1, 2, 3, 4]
+    activeIds: [1]
+    breakpoint: true
 ```
 ````
 
@@ -879,23 +933,23 @@ steps:
 
 A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `"rowKey.colKey"`.
 
-A bare `table` fence renders as a widget when its body carries `columns`.
+A bare `table` fence renders as a widget when its body carries `columns` or `rows` or `fromData`.
 
 Also spelled: `kiwi-table`, `widget:table`, `relation`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `columns` | `array` of `object` | `{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. — **required** — fixed across steps |
-| `rows` | `array` of `object` | One object per row, keyed by column `key`. — **required** |
 | `activeCells` | `array` or `number` or `string` | Cells written this step, as `"rowKey.colKey"`. |
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
 | `activeRows` | `array` or `number` or `string` | Row keys active this step. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
 | `arrows` | `array` of `object` | Cell-to-cell references: `{from: "r.c", to: "r.c", label?}`. |
 | `caption` | `string` | Caption under the table. — fixed across steps |
+| `columns` | `array` of `object` | `{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order. — fixed across steps |
 | `deletedRows` | `array` or `number` or `string` | Rows removed this step, struck through. |
 | `dimCells` | `array` or `number` or `string` | Dimmed cells. |
 | `dimRows` | `array` or `number` or `string` | Dimmed row keys. |
+| `fromData` | `string` | Render the records of a `kiwi-data` block on the same page, by its kind. The dataset and the walkthrough that animates it then share one source. — fixed across steps |
 | `highlightCells` | `array` or `number` or `string` | Secondary-highlighted cells. |
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightCols` | `array` or `number` or `string` | Highlighted column keys — the join key, the column being scanned. |
@@ -905,6 +959,7 @@ Also spelled: `kiwi-table`, `widget:table`, `relation`.
 | `maxRows` | `number` | Render at most this many rows, then a "…n more" line. — fixed across steps |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
 | `rowKey` | `string` | Column whose value identifies a row. Defaults to the `pk` column. — fixed across steps |
+| `rows` | `array` of `object` | One object per row, keyed by column `key`. |
 | `showIndices` | `boolean` | Unused; accepted so `table` and `matrix` bodies are interchangeable. — fixed across steps |
 | `sort` | `object` | Sort indicator only: `{key, dir}`. Rows render in the order given. |
 | `why` | `any` | Cell key → explanation, revealed when the reader selects it. |

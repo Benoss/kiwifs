@@ -33,6 +33,12 @@ export interface FenceSpec<P = any> {
   required?: string[];
   /** Replaces the `required` test when a spec needs a sharper one. */
   sniff?: (body: Record<string, unknown>) => boolean;
+  /**
+   * Keys of which at least one has to be present. A `table` needs its rows
+   * from somewhere — `rows:`, or `fromData:` naming a dataset on the page —
+   * and no single key can be marked required to say that.
+   */
+  requireOneOf?: string[];
   /** Shape the validated body into the component's props. */
   normalize?: (body: Record<string, unknown>) => P;
   /**

@@ -119,8 +119,9 @@ function create(id: string, named: boolean): Clock {
   // The bare `step` key belongs to the first anonymous clock on the page.
   const hashKey = !named && anonymousCount === 0 ? LEGACY_KEY : `${LEGACY_KEY}.${id}`;
   if (!named) anonymousCount += 1;
+  // A deep link is a deliberate act and outranks a remembered position.
   const fromHash = readHashStep(hashKey);
-  const step = fromHash ?? 0;
+  const step = fromHash ?? persistence?.read(id) ?? 0;
   const clock: Clock = {
     id,
     step,
@@ -225,6 +226,7 @@ export function seekClock(id: string, step: number, opts: SeekOptions = {}) {
   if (opts.persist) scheduleHashWrite(clock.hashKey, next);
   if (next === clock.step) return;
   clock.step = next;
+  if (opts.persist) persistence?.write(clock.id, next);
   refresh(clock);
 }
 
@@ -256,10 +258,31 @@ export function clockStepLink(id: string): string {
   return `${origin}${pathname}${search}${query ? `#?${query}` : ""}`;
 }
 
+// ── Optional per-page persistence ───────────────────────────────────────────
+
+/**
+ * Where to remember the last step per clock, and a reader of that record.
+ *
+ * Off by default, and deliberately: a reader returning to a page should see
+ * the author's opening frame, not whatever they happened to leave it on.
+ * A workspace that wants resume behaviour supplies the two callbacks.
+ */
+export interface ClockPersistence {
+  read: (id: string) => number | undefined;
+  write: (id: string, step: number) => void;
+}
+
+let persistence: ClockPersistence | null = null;
+
+export function setClockPersistence(p: ClockPersistence | null) {
+  persistence = p;
+}
+
 /** Test seam: forget every clock and the anonymous counter. */
 export function resetClocks() {
   clocks.clear();
   anonymousCount = 0;
+  persistence = null;
   writeQueue.clear();
   if (writeTimer != null) {
     clearTimeout(writeTimer);

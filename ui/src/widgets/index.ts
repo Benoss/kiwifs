@@ -26,7 +26,9 @@ export {
   seekClock,
   setClockPlaying,
   setClockSpeed,
+  setClockPersistence,
   type ClockSnapshot,
+  type ClockPersistence,
 } from "./playbackClock";
 export {
   InspectContext,
@@ -212,6 +214,20 @@ export {
 } from "./PlaneView";
 export { MapView, type MapViewProps, type MapEntry, type MapSlot } from "./MapView";
 export { QueueView, type QueueViewProps, type QueuePointer } from "./QueueView";
+export { MemoryView, type MemoryViewProps } from "./MemoryView";
+export {
+  describeHeapObject,
+  formatValue,
+  frameOrder,
+  heapOrder,
+  isRef,
+  refTarget,
+  type HeapId,
+  type HeapObject,
+  type HeapEntry,
+  type StackFrame,
+  type TraceValue,
+} from "./memoryTrace";
 export { AnnotationBar, type AnnotationBarProps } from "./AnnotationBar";
 export { WidgetLayout, WidgetPanel, type WidgetLayoutProps, type WidgetPanelProps } from "./WidgetLayout";
 export { StateInspector, type StateInspectorProps } from "./StateInspector";

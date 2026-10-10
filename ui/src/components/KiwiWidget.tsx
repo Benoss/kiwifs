@@ -26,6 +26,7 @@ import { NumberLineView } from "@kw/widgets/NumberLineView";
 import { PlaneView } from "@kw/widgets/PlaneView";
 import { MapView } from "@kw/widgets/MapView";
 import { QueueView } from "@kw/widgets/QueueView";
+import { MemoryView } from "@kw/widgets/MemoryView";
 import { heapTreeFromArray } from "@kw/widgets/treeLayout";
 import { AnnotationBar } from "@kw/widgets/AnnotationBar";
 import { WidgetLayout, WidgetPanel } from "@kw/widgets/WidgetLayout";
@@ -71,6 +72,7 @@ const liveScope = {
   PlaneView,
   MapView,
   QueueView,
+  MemoryView,
   heapTreeFromArray,
   AnnotationBar,
   WidgetLayout,

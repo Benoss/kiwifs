@@ -17,6 +17,8 @@ export interface FenceDoc {
   description: string;
   /** Any one of these keys marks a bare fence as belonging to this widget. */
   required: string[];
+  /** At least one of these has to be present for the fence to be valid. */
+  requireOneOf?: string[];
   example: string;
   attributes: Record<string, SerializedAttribute>;
 }
@@ -44,6 +46,7 @@ export function fenceCatalogue(): FenceCatalogue {
         Object.entries(spec.schema.attributes)
           .filter(([, a]) => a.required)
           .map(([k]) => k),
+      requireOneOf: spec.requireOneOf,
       example: spec.example,
       attributes: serializeSchema(spec.schema),
     }))

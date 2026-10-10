@@ -89,13 +89,32 @@ func TestLintWidgetFenceUnknownKey(t *testing.T) {
 }
 
 func TestLintWidgetFenceMissingRequired(t *testing.T) {
-	page := "---\ntitle: t\n---\n\n```kiwi-table\nrows: []\n```\n"
+	page := "---\ntitle: t\n---\n\n```kiwi-bits\nbits: 4\n```\n"
 	issues := lintFenceSource(t, page)
 	if len(issues) != 1 || issues[0].Severity != "error" {
 		t.Fatalf("expected one error, got %+v", issues)
 	}
-	if !strings.Contains(issues[0].Message, `missing required key "columns"`) {
+	if !strings.Contains(issues[0].Message, `missing required key "value"`) {
 		t.Errorf("unexpected message %q", issues[0].Message)
+	}
+}
+
+func TestLintWidgetFenceRequireOneOf(t *testing.T) {
+	// A table needs its rows from somewhere: `rows:` or `fromData:`.
+	page := "---\ntitle: t\n---\n\n```kiwi-table\ncolumns: [{key: a}]\n```\n"
+	issues := lintFenceSource(t, page)
+	if len(issues) != 1 || issues[0].Severity != "error" {
+		t.Fatalf("expected one error, got %+v", issues)
+	}
+	if !strings.Contains(issues[0].Message, `needs one of "rows", "fromData"`) {
+		t.Errorf("unexpected message %q", issues[0].Message)
+	}
+
+	for _, body := range []string{"columns: [{key: a}]\nrows: []", "fromData: latency"} {
+		clean := "---\ntitle: t\n---\n\n```kiwi-table\n" + body + "\n```\n"
+		if got := lintFenceSource(t, clean); len(got) != 0 {
+			t.Errorf("%q should satisfy the one-of group, got %+v", body, got)
+		}
 	}
 }
 

@@ -532,6 +532,20 @@
           "description": "Wrap in a zoom / pan viewport.",
           "steppable": false
         },
+        "ring": {
+          "type": "boolean|object",
+          "description": "Draw a circular backdrop with tick marks: `true`, or `{ticks, labels}`. With `layout: circular` this is a hash ring — consistent hashing is a graph on a ring, not a widget of its own."
+        },
+        "tokens": {
+          "type": "array",
+          "items": "object",
+          "description": "Dots on the ring: `{at, label?, color?, degrees?}`. `at` is a fraction of the circumference from the top, clockwise, or a degree when `degrees: true`."
+        },
+        "editable": {
+          "type": "boolean",
+          "description": "Show a \"copy as YAML\" button that turns the laid-out graph into a fence body.",
+          "steppable": false
+        },
         "nodeSize": {
           "type": "number",
           "description": "Node diameter in px. Default 36.",
@@ -947,6 +961,91 @@
         "cellSize": {
           "type": "number",
           "description": "Cell size in px. Defaults to 44, shrinking for wide tables.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "memory",
+      "aliases": [
+        "kiwi-memory",
+        "widget:memory",
+        "heap",
+        "stack-heap"
+      ],
+      "description": "Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in.",
+      "required": [
+        "frames",
+        "heap"
+      ],
+      "example": "```memory id=alias caption=\"Why mutating b changed a\"\nframes:\n  - name: \"<module>\"\n    vars: {a: [REF, 1], b: [REF, 1]}\nheap:\n  1: [LIST, 1, 2, 3]\nsteps:\n  - note: \"a = [1, 2, 3] allocates one list\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b = a copies the pointer, not the list — both names are the one object\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1], b: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b.append(4) mutates that object, so a sees it too\"\n    heap:\n      1: [LIST, 1, 2, 3, 4]\n    activeIds: [1]\n    breakpoint: true\n```",
+      "attributes": {
+        "frames": {
+          "type": "array",
+          "items": "object",
+          "description": "Call stack, outermost first: `{name, id?, vars: {k: value}, order?, returned?, active?}`. A value of `[REF, id]` points into the heap."
+        },
+        "heap": {
+          "type": "object",
+          "description": "Objects by id, tagged: `[\"LIST\", 1, 2]`, `[\"DICT\", [\"k\", 1]]`, `[\"INSTANCE\", \"Node\", [\"val\", 1]]`, `[\"TUPLE\", …]`, `[\"SET\", …]`."
+        },
+        "activeFrame": {
+          "type": "string|number",
+          "description": "Which frame is executing. Defaults to the innermost."
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Heap ids to emphasise this step."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted heap ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed heap ids — garbage, or a frame about to return."
+        },
+        "inlinePrimitives": {
+          "type": "boolean",
+          "description": "Draw a primitive inside its slot rather than as its own box. Default true.",
+          "steppable": false
+        },
+        "framesLabel": {
+          "type": "string",
+          "description": "Caption above the frames column. Default \"Frames\".",
+          "steppable": false
+        },
+        "heapLabel": {
+          "type": "string",
+          "description": "Caption above the heap column. Default \"Objects\".",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Heap id → explanation, revealed on select."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
           "steppable": false
         },
         "activeColor": {
@@ -1703,22 +1802,31 @@
       ],
       "description": "A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `\"rowKey.colKey\"`.",
       "required": [
-        "columns"
+        "columns",
+        "rows",
+        "fromData"
+      ],
+      "requireOneOf": [
+        "rows",
+        "fromData"
       ],
       "example": "```table id=orders caption=\"A write skew: both transactions read, then both write\"\ncolumns:\n  - {key: id, label: id, pk: true, type: int}\n  - {key: user, label: user_id, fk: {table: users, column: id}}\n  - {key: total, label: total, align: right, type: numeric}\nrows:\n  - {id: 1, user: 7, total: 42.00}\n  - {id: 2, user: 7, total: 19.50}\n  - {id: 3, user: 9, total: 8.25}\nsteps:\n  - note: \"T1 scans user 7's orders\"\n    highlightCols: [user]\n    highlightRows: [\"1\", \"2\"]\n  - note: \"T2 inserts another order for the same user\"\n    insertedRows: [\"4\"]\n    rows:\n      - {id: 1, user: 7, total: 42.00}\n      - {id: 2, user: 7, total: 19.50}\n      - {id: 3, user: 9, total: 8.25}\n      - {id: 4, user: 7, total: 30.00}\n  - note: \"T1's invariant no longer holds — this is why it needs SERIALIZABLE\"\n    activeCells: [\"4.total\"]\n```",
       "attributes": {
         "columns": {
           "type": "array",
-          "required": true,
           "items": "object",
-          "description": "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`.",
+          "description": "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order.",
           "steppable": false
         },
         "rows": {
           "type": "array",
-          "required": true,
           "items": "object",
           "description": "One object per row, keyed by column `key`."
+        },
+        "fromData": {
+          "type": "string",
+          "description": "Render the records of a `kiwi-data` block on the same page, by its kind. The dataset and the walkthrough that animates it then share one source.",
+          "steppable": false
         },
         "rowKey": {
           "type": "string",

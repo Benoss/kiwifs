@@ -15,22 +15,26 @@ export const tableSpec: FenceSpec = {
   component: TableView,
   // A markdown pipe table in a ```table fence has no `columns:` key and falls
   // through to a code block, which is what an imported vault expects.
-  required: ["columns"],
+  required: ["columns", "rows", "fromData"],
+  requireOneOf: ["rows", "fromData"],
   schema: {
     attributes: {
       columns: {
         type: "array",
         items: "object",
-        required: true,
-        description: "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`.",
+        description:
+          "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order.",
         steppable: false,
       },
       rows: {
         type: "array",
         items: "object",
-        required: true,
         description: "One object per row, keyed by column `key`.",
       },
+      fromData: string(
+        "Render the records of a `kiwi-data` block on the same page, by its kind. The dataset and the walkthrough that animates it then share one source.",
+        false,
+      ),
       rowKey: string("Column whose value identifies a row. Defaults to the `pk` column.", false),
       activeCells: many('Cells written this step, as `"rowKey.colKey"`.'),
       highlightCells: many("Secondary-highlighted cells."),

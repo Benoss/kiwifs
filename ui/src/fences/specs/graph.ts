@@ -49,6 +49,18 @@ export const graphSpec: FenceSpec = {
       badges: { type: "object", description: "Small value at each node's corner: distance, degree, rank." },
       animate: bool("Glide nodes to new positions between steps. Default true.", false),
       zoomable: bool("Wrap in a zoom / pan viewport.", false),
+      ring: {
+        type: ["boolean", "object"],
+        description:
+          "Draw a circular backdrop with tick marks: `true`, or `{ticks, labels}`. With `layout: circular` this is a hash ring — consistent hashing is a graph on a ring, not a widget of its own.",
+      },
+      tokens: objectList(
+        "Dots on the ring: `{at, label?, color?, degrees?}`. `at` is a fraction of the circumference from the top, clockwise, or a degree when `degrees: true`.",
+      ),
+      editable: bool(
+        'Show a "copy as YAML" button that turns the laid-out graph into a fence body.',
+        false,
+      ),
       nodeSize: number("Node diameter in px. Default 36.", false),
       width: number("Canvas width in px.", false),
       height: number("Canvas height in px.", false),
@@ -84,3 +96,23 @@ steps:
     badges: {A: 0, B: 1, C: 1, D: 2}
 \`\`\``,
 };
+
+/** Consistent hashing, which is why there is no ConsistentHashView. */
+export const GRAPH_RING_EXAMPLE = `\`\`\`graph id=hashring layout=circular caption="Three nodes, and where a key lands"
+ring: {ticks: 8, labels: [0, 32, 64, 96, 128, 160, 192, 224]}
+nodes:
+  - {id: A, label: "node A"}
+  - {id: B, label: "node B"}
+  - {id: C, label: "node C"}
+edges: []
+steps:
+  - note: "Nodes hash onto the ring"
+    tokens: []
+  - note: "A key hashes to 75, so it walks clockwise to the next node"
+    tokens: [{at: 0.29, label: "key"}]
+    activeNodes: [B]
+  - note: "C leaves; its keys move to the next node clockwise, and no others do"
+    dimNodes: [C]
+    activeNodes: [A]
+    tokens: [{at: 0.29, label: "key"}, {at: 0.72, label: "was C's"}]
+\`\`\``;

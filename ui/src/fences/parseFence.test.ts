@@ -5,6 +5,7 @@ import { didYouMean, editDistance, serializeSchema, validateAttributes } from ".
 import { arraySpec } from "./specs/array";
 import { treeSpec } from "./specs/tree";
 import { tableSpec } from "./specs/table";
+import { bitsSpec } from "./specs/bits";
 import { stepsSpec } from "./specs/steps";
 import { allFences, getFence } from "./index";
 
@@ -119,8 +120,20 @@ props:
   });
 
   it("errors on a missing required key", () => {
-    const parsed = parseFence(tableSpec, `rows: []\n`);
-    expect(parsed.issues.some((i) => i.severity === "error" && i.path === "columns")).toBe(true);
+    const parsed = parseFence(bitsSpec, `bits: 4\n`);
+    expect(parsed.issues.some((i) => i.severity === "error" && i.path === "value")).toBe(true);
+  });
+
+  it("errors when none of a one-of group is present", () => {
+    // A table needs its rows from somewhere: `rows:` or `fromData:`.
+    const parsed = parseFence(tableSpec, `columns: [{key: a}]\n`);
+    const issue = parsed.issues.find((i) => i.severity === "error");
+    expect(issue?.message).toContain('needs one of "rows", "fromData"');
+  });
+
+  it("accepts either member of a one-of group", () => {
+    expect(parseFence(tableSpec, `columns: [{key: a}]\nrows: []\n`).issues).toEqual([]);
+    expect(parseFence(tableSpec, `fromData: latency\n`).issues).toEqual([]);
   });
 
   it("errors on the wrong type", () => {

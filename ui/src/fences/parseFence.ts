@@ -174,6 +174,14 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
         });
       }
     }
+    const oneOf = spec.requireOneOf ?? [];
+    if (oneOf.length > 0 && !oneOf.some((key) => key in first)) {
+      issues.push({
+        path: oneOf[0]!,
+        message: `needs one of ${oneOf.map((k) => `"${k}"`).join(", ")}`,
+        severity: "error",
+      });
+    }
   }
 
   if (rawSteps && rawFrames) {

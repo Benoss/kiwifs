@@ -7,6 +7,7 @@
 import { visit } from "unist-util-visit";
 import type { Root } from "mdast";
 import type { Root as HastRoot } from "hast";
+import { KNOWN_INLINE_TAGS, parseInlineTags } from "./inlineTags";
 
 // ── ==highlight== → <mark> ──────────────────────────────────────────────────
 // Converts `==text==` syntax to emphasis-mark nodes that render as <mark>.
@@ -102,6 +103,44 @@ export function remarkInlineTags() {
       }
 
       if (parts.length === 0) return;
+      if (last < node.value.length) {
+        parts.push({ type: "text", value: node.value.slice(last) });
+      }
+      (parent as any).children.splice(index, 1, ...parts);
+      return index + parts.length;
+    });
+  };
+}
+
+// ── remarkPageControls ─────────────────────────────────────────────────────
+// Turns `{% range name="n" min=1 max=20 /%}` and `{% value n /%}` into spans
+// the page renderer swaps for live controls. Parsed from text nodes, so a tag
+// inside a code fence or inline code is left alone — an example of the syntax
+// must not become a control.
+
+export function remarkPageControls() {
+  return (tree: Root) => {
+    visit(tree, "text", (node, index, parent) => {
+      if (!parent || index === undefined) return;
+      const parentType = (parent as any).type;
+      if (parentType === "code" || parentType === "inlineCode") return;
+      const tags = parseInlineTags(node.value).filter((t) => KNOWN_INLINE_TAGS.has(t.name));
+      if (tags.length === 0) return;
+
+      const parts: any[] = [];
+      let last = 0;
+      for (const tag of tags) {
+        if (tag.start > last) {
+          parts.push({ type: "text", value: node.value.slice(last, tag.start) });
+        }
+        const attrs = { ...tag.attrs };
+        if (tag.positional !== undefined && attrs.name === undefined) attrs.name = tag.positional;
+        parts.push({
+          type: "html",
+          value: `<span data-kiwi-directive="control" data-control="${escapeAttr(tag.name)}" data-control-attrs="${escapeAttr(JSON.stringify(attrs))}"></span>`,
+        });
+        last = tag.end;
+      }
       if (last < node.value.length) {
         parts.push({ type: "text", value: node.value.slice(last) });
       }
