@@ -143,7 +143,10 @@ export function TypedFence({ spec, source, meta, onNavigate }: TypedFenceProps) 
 
               {hasSteps && (
                 <div className="mt-3">
-                  <PlaybackControls pb={pb} />
+                  <PlaybackControls
+                    pb={pb}
+                    snapshot={{ root: rootRef, name: fenceMeta.id || spec.lang }}
+                  />
                 </div>
               )}
             </div>

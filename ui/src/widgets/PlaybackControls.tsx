@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Button } from "@kw/components/ui/button";
-import { Check, ChevronLeft, ChevronRight, Link, Pause, Play, RotateCcw } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Download, Link, Pause, Play, RotateCcw } from "lucide-react";
 import type { PlaybackControlsBinding } from "./usePlayback";
 import { clockStepLink } from "./playbackClock";
+import { downloadSnapshot } from "./snapshot";
 
 interface Props {
   /** The object returned by usePlayback; replaces every prop below. */
@@ -21,6 +22,8 @@ interface Props {
   onCycleSpeed?: () => void;
   /** Clock to build the "copy link to this step" URL from. */
   clockId?: string;
+  /** Widget root to snapshot, and the filename to offer. */
+  snapshot?: { root: React.RefObject<HTMLElement | null>; name: string };
   /** @deprecated Use onCycleSpeed instead. Kept for backward compat. */
   onSpeedChange?: (speed: number) => void;
 }
@@ -42,6 +45,7 @@ export function PlaybackControls({ pb, ...props }: Props) {
   const onSeek = b.onSeek ?? noop;
   const onCycleSpeed = b.onCycleSpeed;
   const clockId = b.clockId;
+  const snapshot = b.snapshot;
   const atStart = currentStep === 0;
   const atEnd = currentStep >= totalSteps - 1;
 
@@ -116,6 +120,28 @@ export function PlaybackControls({ pb, ...props }: Props) {
             aria-label="Copy link to this step"
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Link className="h-3.5 w-3.5" />}
+          </button>
+        )}
+
+        {/* Download the frame the reader is looking at */}
+        {snapshot && (
+          <button
+            onClick={() => {
+              const el = snapshot.root.current;
+              if (!el) return;
+              // Shift-click gives SVG, which stays sharp and stays editable.
+              void downloadSnapshot(el, snapshot.name, "png").catch(() => {});
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const el = snapshot.root.current;
+              if (el) void downloadSnapshot(el, snapshot.name, "svg").catch(() => {});
+            }}
+            className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
+            title="Download this step as PNG (right-click for SVG)"
+            aria-label="Download this step as an image"
+          >
+            <Download className="h-3.5 w-3.5" />
           </button>
         )}
 

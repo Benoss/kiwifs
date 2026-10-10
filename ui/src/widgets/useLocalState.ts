@@ -18,6 +18,9 @@ export interface LocalStateResult<T> {
  * the caller's own state document — this is not a general-purpose network
  * escape hatch.
  *
+ * An empty `name` makes the hook inert — no request, no write — so a caller
+ * whose persistence is optional can still call it unconditionally.
+ *
  * `save` updates local data optimistically so widgets stay responsive, then
  * persists. A failed write surfaces through `error` and leaves the optimistic
  * value in place so the reader can retry rather than lose their edit; it never
@@ -41,6 +44,15 @@ export function useLocalState<T = Record<string, unknown>>(name: string): LocalS
   }, []);
 
   useEffect(() => {
+    // An empty name means "no state document": a caller whose persistence is
+    // optional (InputPanel's `persist`) can hold the hook unconditionally
+    // without firing a request for `.me/.json`.
+    if (!name) {
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -63,6 +75,7 @@ export function useLocalState<T = Record<string, unknown>>(name: string): LocalS
 
   const save = useCallback(
     async (next: T) => {
+      if (!name) return;
       setData(next);
       setSaving(true);
       setError(null);

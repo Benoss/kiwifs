@@ -132,6 +132,15 @@ interface SharedProps {
   hoverPredecessors?: boolean;
   /** Name for the inspect bus, so a `link:` can address this row. */
   widgetId?: string;
+  /**
+   * Let the reader type a new value into a cell.
+   *
+   * Two pointers over *their* array, not the author's, is the difference
+   * between watching a walkthrough and running one. Nothing is written to the
+   * page: the handler owns the new value.
+   */
+  editable?: boolean;
+  onCellEdit?: (index: number, value: string, row: number) => void;
 }
 
 export interface ArrayViewProps extends ArrayRowProps, SharedProps {}
@@ -340,6 +349,8 @@ function ArrayRow({
   onSelect,
   linked,
   predecessors,
+  editable,
+  onCellEdit,
 }: {
   rowIdx: number;
   row: ArrayRowProps;
@@ -358,6 +369,8 @@ function ArrayRow({
   onSelect?: (ref: InspectRef) => void;
   linked: Set<string>;
   predecessors: Set<string>;
+  editable: boolean;
+  onCellEdit?: (index: number, value: string, row: number) => void;
 }) {
   const sets = {
     active: activeSet(row),
@@ -474,7 +487,34 @@ function ArrayRow({
                   boxSizing: "border-box",
                 }}
               >
-                <span><WidgetText text={cell.text} /></span>
+                {editable && onCellEdit ? (
+                  // contentEditable rather than an <input>: the cell keeps its
+                  // own geometry, and a grid of inputs is a grid of focus rings.
+                  <span
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-label={`Cell ${i}`}
+                    onBlur={(e) => onCellEdit(i, e.currentTarget.textContent ?? "", rowIdx)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLElement).blur();
+                      }
+                      if (e.key === "Escape") {
+                        e.currentTarget.textContent = cell.text;
+                        (e.currentTarget as HTMLElement).blur();
+                      }
+                      // Arrows inside a cell move the caret, not the clock.
+                      e.stopPropagation();
+                    }}
+                    style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
+                  >
+                    {cell.text}
+                  </span>
+                ) : (
+                  <span><WidgetText text={cell.text} /></span>
+                )}
                 {hasSub && (
                   <span style={{ fontSize: "0.55rem", fontWeight: 500, opacity: 0.6, lineHeight: 1 }}>
                     <WidgetText text={sub} />
@@ -516,6 +556,8 @@ export function ArrayStack({
   why,
   hoverPredecessors = false,
   widgetId = "array",
+  editable = false,
+  onCellEdit,
 }: ArrayStackProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -631,6 +673,8 @@ export function ArrayStack({
             onSelect={onSelect}
             linked={linked}
             predecessors={predecessors}
+            editable={editable}
+            onCellEdit={onCellEdit}
           />
         ))}
         {needsOverlay && (
@@ -647,6 +691,8 @@ export function ArrayView({
   why,
   hoverPredecessors,
   widgetId,
+  editable,
+  onCellEdit,
   activeColor,
   highlightColor,
   readColor,
@@ -666,6 +712,8 @@ export function ArrayView({
       why={why}
       hoverPredecessors={hoverPredecessors}
       widgetId={widgetId}
+      editable={editable}
+      onCellEdit={onCellEdit}
       activeColor={activeColor}
       highlightColor={highlightColor}
       readColor={readColor}

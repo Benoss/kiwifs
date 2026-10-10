@@ -100,6 +100,13 @@ export interface MatrixViewProps {
   hoverPredecessors?: boolean;
   /** Name for the inspect bus, so a `link:` can address this table. */
   widgetId?: string;
+  /**
+   * Let the reader type a new value into a cell. Filling in a DP table by
+   * hand, with the dependencies lit, is the difference between reading the
+   * recurrence and knowing it.
+   */
+  editable?: boolean;
+  onCellEdit?: (r: number, c: number, value: string) => void;
 }
 
 const DEFAULTS = {
@@ -167,6 +174,8 @@ export function MatrixView({
   why,
   hoverPredecessors = false,
   widgetId = "matrix",
+  editable = false,
+  onCellEdit,
 }: MatrixViewProps) {
   const [layerSel, setLayerSel] = useState(layer ?? 0);
   useEffect(() => {
@@ -523,7 +532,33 @@ export function MatrixView({
                         zIndex: isActive || isRead || onPath ? 1 : undefined,
                       }}
                     >
-                      {!isMask && <WidgetText text={cell.text} />}
+                      {!isMask &&
+                        (editable && onCellEdit ? (
+                          <span
+                            contentEditable
+                            suppressContentEditableWarning
+                            role="textbox"
+                            aria-label={`Cell ${r}, ${c}`}
+                            onBlur={(e) => onCellEdit(r, c, e.currentTarget.textContent ?? "")}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                (e.currentTarget as HTMLElement).blur();
+                              }
+                              if (e.key === "Escape") {
+                                e.currentTarget.textContent = cell.text;
+                                (e.currentTarget as HTMLElement).blur();
+                              }
+                              // Arrows inside a cell move the caret, not the clock.
+                              e.stopPropagation();
+                            }}
+                            style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
+                          >
+                            {cell.text}
+                          </span>
+                        ) : (
+                          <WidgetText text={cell.text} />
+                        ))}
                       {!isMask && hasSub && (
                         <span style={{ fontSize: "0.55rem", fontWeight: 500, opacity: 0.65, lineHeight: 1 }}>
                           <WidgetText text={sub} />

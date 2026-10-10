@@ -423,6 +423,26 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+/* ─── Code notation comments ─── */
+/* `// [!code focus]` dims everything else, so the eye lands on the two lines
+   that matter; the markers themselves are stripped before highlighting. */
+.kiwi-shiki .kiwi-line-blur {
+  @apply block opacity-40 blur-[0.4px] transition-all;
+}
+.kiwi-shiki:hover .kiwi-line-blur {
+  @apply opacity-100 blur-none;
+}
+.kiwi-shiki .kiwi-line-error {
+  @apply block -mx-4 px-4 border-l-2;
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  border-left-color: var(--destructive);
+}
+.kiwi-shiki .kiwi-line-warning {
+  @apply block -mx-4 px-4 border-l-2;
+  background: color-mix(in srgb, #eab308 14%, transparent);
+  border-left-color: #eab308;
+}
+
 /* ─── Stepped code colours ─── */
 /* Python Tutor's convention: the line that just ran is a calm green, the one
    about to run is an alert red. Tokens, so a theme can override them. */
