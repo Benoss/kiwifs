@@ -22,6 +22,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = resolve(here, "..");
 const repoRoot = resolve(uiRoot, "..");
 const OUT = resolve(repoRoot, "internal/markdown/fenceschemas/fences.json");
+const DOCS = resolve(repoRoot, "docs/WIDGETS.md");
 
 /** `@kw/widgets/ArrayView` is a component; `@kw/widgets/sets` is a helper. */
 const componentPath = /^@kw\/(widgets|components)\/[A-Z]/;
@@ -52,27 +53,36 @@ await build({
   plugins: [externalComponents],
 });
 
-const { fenceCatalogueJSON } = await import(`file://${bundlePath}`);
-const next = fenceCatalogueJSON();
+const { fenceCatalogueJSON, referenceMarkdown } = await import(`file://${bundlePath}`);
+const outputs = [
+  { path: OUT, content: fenceCatalogueJSON() },
+  { path: DOCS, content: `${referenceMarkdown().replace(/\n*$/, "")}\n` },
+];
 await rm(bundlePath, { force: true });
 
-const previous = await readFile(OUT, "utf8").catch(() => null);
+const checking = process.argv.includes("--check");
+let stale = false;
 
-if (process.argv.includes("--check")) {
-  if (previous !== next) {
-    process.stderr.write(
-      `${OUT} is out of date.\nRun \`npm run emit-schemas\` in ui/ and commit the result.\n`,
-    );
-    process.exit(1);
+for (const { path, content } of outputs) {
+  const previous = await readFile(path, "utf8").catch(() => null);
+  if (previous === content) {
+    if (!checking) process.stdout.write(`${path} unchanged.\n`);
+    continue;
   }
-  process.stdout.write(`${OUT} is up to date.\n`);
-  process.exit(0);
+  if (checking) {
+    process.stderr.write(`${path} is out of date.\n`);
+    stale = true;
+    continue;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+  process.stdout.write(`wrote ${path}\n`);
 }
 
-if (previous === next) {
-  process.stdout.write(`${OUT} unchanged.\n`);
-} else {
-  await mkdir(dirname(OUT), { recursive: true });
-  await writeFile(OUT, next);
-  process.stdout.write(`wrote ${OUT}\n`);
+if (checking) {
+  if (stale) {
+    process.stderr.write("Run `npm run emit-schemas` in ui/ and commit the result.\n");
+    process.exit(1);
+  }
+  process.stdout.write("Generated fence files are up to date.\n");
 }

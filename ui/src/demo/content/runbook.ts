@@ -284,12 +284,49 @@ First 15 minutes — stabilize, communicate, gather evidence. Full postmortem te
 
 ## Severity matrix
 
-| Sev | Criteria | Response |
-|-----|----------|----------|
-| SEV1 | Complete outage or data loss risk | Page IM + exec bridge |
-| SEV2 | Major degradation, no workaround | Page on-call + team lead |
-| SEV3 | Partial impact, workaround exists | Slack \`#platform-oncall\` |
-| SEV4 | Minor, next business day | Ticket only |
+${blk.fence(
+  "table",
+  `columns:
+  - {key: sev, label: Sev, pk: true}
+  - {key: criteria, label: Criteria}
+  - {key: response, label: Response}
+  - {key: ack, label: Ack target, align: right}
+rows:
+  - {sev: SEV1, criteria: Complete outage or data loss risk, response: Page IM + exec bridge, ack: 5m}
+  - {sev: SEV2, criteria: "Major degradation, no workaround", response: Page on-call + team lead, ack: 15m}
+  - {sev: SEV3, criteria: "Partial impact, workaround exists", response: "Slack #platform-oncall", ack: 1h}
+  - {sev: SEV4, criteria: Minor, next business day, response: Ticket only, ack: 1d}
+why:
+  SEV2.response: >
+    Team lead, not the exec bridge: a SEV2 that pulls in leadership stops being
+    a SEV2 and starts being a meeting.
+steps:
+  - note: "Pick the row by impact, not by how loud the alert is."
+  - note: "SEV1 and SEV2 page a human. SEV3 and SEV4 do not — that is the whole distinction."
+    highlightRows: [SEV1, SEV2]
+    highlightCols: [response]`,
+  'id=sev caption="Click a cell with an underline to see why it is written that way."',
+)}
+
+## Error budget
+
+${blk.fence(
+  "numberline",
+  `min: 0
+max: 100
+step: 20
+label: "% of monthly error budget spent"
+intervals:
+  - {from: 0, to: 50, label: "ship freely", id: green}
+  - {from: 50, to: 85, label: "ship with review", id: amber}
+  - {from: 85, to: 100, label: "freeze", id: red}
+marks:
+  - {at: 85, label: "freeze line"}
+pointers:
+  - {at: 62, label: "now"}
+highlightIds: [amber]`,
+  'id=budget caption="Where this month sits, and what it permits."',
+)}
 
 ## First 15 minutes
 

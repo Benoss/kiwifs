@@ -181,3 +181,13 @@ export const eventCounterApp = kiwiApp(
   </script>
 </body></html>`,
 );
+
+/**
+ * A widget fence. The demo uses these to show that the fence platform is for
+ * runbooks and ADRs, not only for algorithm walkthroughs — if a picture only
+ * ever makes sense on a LeetCode page, it failed the genericity test.
+ */
+export function fence(lang: string, body: string, meta = ""): string {
+  const opening = meta ? `${lang} ${meta}` : lang;
+  return `\`\`\`${opening}\n${body.trim()}\n\`\`\``;
+}

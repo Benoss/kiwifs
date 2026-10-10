@@ -23,13 +23,41 @@ ${blk.queryTable('TABLE adr_number, title, status, domain, date FROM "decisions/
 
 ${blk.queryTable('TABLE adr_number, title, status FROM "decisions/" WHERE status = "accepted" AND domain = "messaging"')}
 
-${blk.mermaid(`graph TD
-  ADR001[ADR-001 Monolith] --> ADR003[ADR-003 NATS]
-  ADR002[ADR-002 Kafka] -->|superseded| ADR005[ADR-005 Retire Kafka]
-  ADR003 --> ADR002
-  ADR005 --> ADR002
-  ADR004[ADR-004 PostgreSQL]
-  ADR006[ADR-006 SQLite search]`)}
+${blk.fence(
+  "graph",
+  `layout: dagre
+direction: LR
+directed: true
+nodes:
+  - {id: ADR001, label: "ADR-001", sublabel: Monolith, shape: box}
+  - {id: ADR002, label: "ADR-002", sublabel: Kafka, shape: box}
+  - {id: ADR003, label: "ADR-003", sublabel: NATS, shape: box}
+  - {id: ADR004, label: "ADR-004", sublabel: PostgreSQL, shape: box}
+  - {id: ADR005, label: "ADR-005", sublabel: Retire Kafka, shape: box}
+  - {id: ADR006, label: "ADR-006", sublabel: SQLite search, shape: box}
+edges:
+  - {from: ADR001, to: ADR003, label: led to}
+  - {from: ADR002, to: ADR005, label: superseded by, style: dashed}
+  - {from: ADR003, to: ADR002, label: contradicts}
+groups:
+  - {id: messaging, label: Messaging, nodes: [ADR002, ADR003, ADR005]}
+  - {id: storage, label: Storage, nodes: [ADR004, ADR006]}
+why:
+  ADR005: >
+    Retiring Kafka was only possible once ADR-003 had proved NATS in
+    production for two quarters. The dashed edge is the supersession.
+steps:
+  - note: "The messaging decisions argue with each other; storage does not."
+    highlightNodes: [ADR002, ADR003, ADR005]
+  - note: "ADR-003 is the one still load-bearing."
+    activeNodes: [ADR003]
+    activeEdges: ["ADR001->ADR003"]
+  - note: "Which is what finally allowed ADR-005."
+    activeNodes: [ADR005]
+    activeEdges: ["ADR002->ADR005"]
+    dimNodes: [ADR004, ADR006]`,
+  'id=adr-graph caption="Supersession chains. Click a node with an underline for the reasoning."',
+)}
 
 > [!NOTE]
 > Open the graph view to explore supersession chains. Agents should query accepted ADRs before proposing infra changes.

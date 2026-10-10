@@ -18,7 +18,8 @@ Practical workflows for agents, teams, and developers using KiwiFS.
 - [Data Import](#data-import)
 - [Data Export](#data-export)
 - [Init Templates](#init-templates)
-- [Widgets](#widgets)
+- [Widget fences](#widget-fences)
+- [Other blocks](#other-blocks)
 - [Workflows and Task Orchestration](#workflows-and-task-orchestration)
 - [Publishing](#publishing)
 - [Configuration](#configuration)
@@ -327,7 +328,188 @@ kiwifs init --template log --root ./audit            # Append-only event log
 
 ---
 
-## Widgets
+## Widget fences
+
+A fenced block whose body is YAML describing a picture. KiwiFS validates it on
+write, renders it interactively, steps it on a clock a reader can link to, and
+degrades to readable prose in `cat`, git, PDF and search. The full key-by-key
+reference is generated from the schema: [WIDGETS.md](WIDGETS.md). Over MCP, call
+`kiwi_widget_reference` and verify with `kiwi_lint`.
+
+The examples below are the ones worth copying because they are *not* about
+algorithms — a widget that only makes sense on a LeetCode page has failed the
+test for belonging in a knowledge base at all.
+
+### A decision table that explains itself
+
+A reader who disagrees with a row can click the cell and read why it is written
+that way. The explanation is yours, in the file — not a model's, at read time.
+
+````
+```table id=sev caption="Severity ladder"
+columns:
+  - {key: sev, label: Sev, pk: true}
+  - {key: response, label: Response}
+  - {key: ack, label: Ack target, align: right}
+rows:
+  - {sev: SEV1, response: Page IM + exec bridge, ack: 5m}
+  - {sev: SEV2, response: Page on-call + team lead, ack: 15m}
+  - {sev: SEV3, response: "Slack #platform-oncall", ack: 1h}
+why:
+  SEV2.response: >
+    Team lead, not the exec bridge: a SEV2 that pulls in leadership stops
+    being a SEV2 and starts being a meeting.
+```
+````
+
+### An architecture diagram that walks through a request
+
+````
+```graph id=write-path layout=dagre direction=LR caption="A write through the pipeline"
+directed: true
+nodes:
+  - {id: C, label: Client, shape: person}
+  - {id: S, label: Storage, shape: cylinder}
+  - {id: G, label: Git}
+  - {id: I, label: Index, shape: cylinder}
+  - {id: E, label: SSE}
+edges:
+  - {from: C, to: S}
+  - {from: S, to: G}
+  - {from: G, to: I}
+  - {from: I, to: E}
+steps:
+  - note: "Bytes land on disk first — files are the source of truth."
+    activeNodes: [S]
+    dimNodes: [G, I, E]
+  - note: "The commit makes that version addressable."
+    activeNodes: [G]
+    dimNodes: [I, E]
+  - note: "Indexes are derivative, so they come last and can be rebuilt."
+    activeNodes: [I, E]
+```
+````
+
+Each `steps:` entry is a **shallow patch over the previous step**, so you write
+only what changes. `#?step.write-path=2` links a reader straight to the third
+frame.
+
+### An incident timeline with causality
+
+`state: blocked` draws hatched, so "waiting" reads differently from "working"
+without a colour key. `links:` draws the happens-before edge.
+
+````
+```timeline id=lock caption="T2 blocks on the row lock T1 holds"
+lanes: [T1, T2]
+hoverPredecessors: true
+intervals:
+  - {id: t1, lane: T1, start: 0, end: 4, label: UPDATE, state: holding}
+  - {id: t1c, lane: T1, start: 4, end: 5, label: COMMIT, state: running}
+  - {id: t2w, lane: T2, start: 2, end: 5, label: "waiting for lock", state: blocked}
+  - {id: t2, lane: T2, start: 5, end: 8, label: UPDATE, state: holding}
+links:
+  - {from: t1c, to: t2, label: "lock released"}
+```
+````
+
+### An SLO threshold on a value axis
+
+````
+```numberline id=budget label="% of error budget spent"
+min: 0
+max: 100
+step: 20
+intervals:
+  - {from: 0, to: 50, label: ship freely}
+  - {from: 50, to: 85, label: ship with review}
+  - {from: 85, to: 100, label: freeze}
+marks: [{at: 85, label: freeze line}]
+pointers: [{at: 62, label: now}]
+```
+````
+
+### A B+-tree page, without a BPlusTreeView
+
+`keys` turns a node into a page of key cells with a child pointer in each gap.
+There is no separate widget: a B-tree is a tree whose nodes hold several keys.
+
+````
+```tree id=btree caption="B+-tree search for 42"
+root:
+  keys: [20, 60]
+  children:
+    - {keys: [5, 12], leaf: true}
+    - {keys: [25, 42], leaf: true}
+    - {keys: [75, 90], leaf: true}
+steps:
+  - note: "42 is between 20 and 60, so follow the middle pointer."
+    activeKeys: {0: [0]}
+  - note: "Found it in the leaf."
+    activeKeys: {2: [1]}
+```
+````
+
+### Two views of one structure
+
+`fromArray` draws a heap as a tree *and* as the array it lives in, with node
+ids equal to array indices, so one highlight set lights both.
+
+````
+```tree id=heap caption="Sift-down after a pop"
+fromArray: [1, 3, 2, 7, 5, 9]
+steps:
+  - note: "Pop the root; the last element moves up."
+    activeNodes: [0]
+  - note: "9 is larger than both children — swap with the smaller."
+    activeNodes: [0, 2]
+```
+````
+
+### Two widgets, one scrubber
+
+Give both fences the same `clock=`, and one set of controls drives them.
+
+````
+```kiwi-steps clock=probe
+diagram: |
+  flowchart LR
+    H[hash key] --> S[slot 3]
+    S --> P[probe forward]
+steps:
+  - {focus: [H], note: "h(mango) = 3"}
+  - {focus: [S], note: "Slot 3 is taken"}
+  - {focus: [P], note: "Probe forward to slot 4"}
+```
+
+```map clock=probe mode=open
+capacity: 8
+slots: [null, null, null, {key: apple}, null, null, null, null]
+steps:
+  - {activeKey: mango, probePath: [3]}
+  - {activeSlots: [3], probePath: [3]}
+  - {activeSlots: [4], probePath: [3, 4]}
+```
+````
+
+### Naming, collisions and opting out
+
+Each fence also answers to `kiwi-<name>` and `widget:<name>`. A bare name only
+claims a block whose YAML carries one of the fence's marker keys, so a vault
+that already uses ` ```tree ` for directory listings keeps its code blocks. To
+turn bare names off for a workspace:
+
+```toml
+# .kiwi/config.toml
+[ui]
+typed_fences = false
+# or allow only some:
+typed_fence_tags = ["array", "matrix", "table"]
+```
+
+---
+
+## Other blocks
 
 Embed interactive blocks in markdown using fenced code blocks:
 

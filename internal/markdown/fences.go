@@ -429,7 +429,11 @@ func yamlTypeName(value any) string {
 		return "number"
 	case []any:
 		return "array"
-	case map[string]any:
+	// `activeKeys: {0: [0]}` is a perfectly ordinary mapping keyed by node
+	// index. yaml.v3 hands those back as map[any]any, where js-yaml gives an
+	// object with string keys — so without this the Go linter rejects a fence
+	// the UI renders happily.
+	case map[string]any, map[any]any:
 		return "object"
 	default:
 		return "any"

@@ -42,7 +42,7 @@ No. Git runs under the hood (every write is an atomic commit) but users never in
 
 ### Is KiwiFS production-ready?
 
-KiwiFS is in active development (v0.19.x). The core is stable: file CRUD, search, versioning, web UI, MCP (68+ tools), data import/export, DQL queries, workflows, schemas, widgets, publishing, and all access protocols work. We use it in production internally. That said, APIs may evolve before v1.0.
+KiwiFS is in active development (v0.19.x). The core is stable: file CRUD, search, versioning, web UI, MCP (73 tools), data import/export, DQL queries, workflows, schemas, widgets, publishing, and all access protocols work. We use it in production internally. That said, APIs may evolve before v1.0.
 
 ---
 
@@ -103,11 +103,11 @@ Three ways, depending on what your agent has access to:
 
 1. **Filesystem** — if you mount KiwiFS via NFS or FUSE, the agent uses `cat`, `echo`, `grep`, `ls` directly. No SDK.
 2. **REST API** — `curl -X PUT localhost:3333/api/kiwi/file?path=page.md -d "content"`.
-3. **MCP** — `kiwifs mcp --root ~/knowledge` gives Claude, Cursor, or any MCP-compatible agent 68+ structured tools (`kiwi_read`, `kiwi_write`, `kiwi_search`, `kiwi_task_create`, `kiwi_remember`, etc.).
+3. **MCP** — `kiwifs mcp --root ~/knowledge` gives Claude, Cursor, or any MCP-compatible agent 73 structured tools (`kiwi_read`, `kiwi_write`, `kiwi_search`, `kiwi_task_create`, `kiwi_remember`, etc.).
 
 ### What is MCP and why does KiwiFS support it?
 
-[Model Context Protocol](https://modelcontextprotocol.io) is a standard for connecting AI agents to external tools. KiwiFS's MCP server exposes 68+ tools and 3 resources, so any MCP-compatible agent can read, write, search, query, create tasks, manage workflows, and remember observations without custom integration code. Call `kiwi_context` first to get the schema, playbook, and index in one shot.
+[Model Context Protocol](https://modelcontextprotocol.io) is a standard for connecting AI agents to external tools. KiwiFS's MCP server exposes 73 tools and 3 resources, so any MCP-compatible agent can read, write, search, query, create tasks, manage workflows, and remember observations without custom integration code. Call `kiwi_context` first to get the schema, playbook, and index in one shot.
 
 ### Can agents use KiwiFS without a running server?
 
@@ -349,7 +349,13 @@ State machines defined in `.kiwi/workflows/*.json` that govern frontmatter trans
 
 ### What are widgets?
 
-Rich blocks embedded in markdown pages using fenced code blocks. They render as interactive components in the web UI and degrade to plain code in other viewers. Available widgets: `kiwi-chart` (bar/line/area/pie/radar/scatter), `kiwi-query` (inline DQL tables), `kiwi-data` (queryable record tables), `kiwi-kanban` (inline boards), `kiwi-playground` (interactive controls), `kiwi-app` (sandboxed HTML/JS), `kiwi-diff` (annotated diffs), `kiwi-progress` (bars/gauges), `kiwi-color` (color swatches), `kiwi-steps` (stepped mermaid diagrams), `kiwi-calc` (assumption → derivation tables), `mermaid` (diagrams), `widget:live` (React Live), `widget:code` (Python via Pyodide).
+Rich blocks embedded in markdown pages using fenced code blocks. They render as interactive components in the web UI and degrade to plain code in other viewers.
+
+**Widget fences** are the main kind: a fenced block whose body is YAML describing a picture, validated on write and stepped on a clock a reader can link to. `array`, `matrix`, `table`, `tree`, `graph`, `plot`, `bars`, `numberline`, `plane`, `map`, `timeline`, `list`, `stack`, `bits`, `sequence`, and `kiwi-steps`. Each also answers to `kiwi-<name>`. Full reference, generated from the schema: [WIDGETS.md](WIDGETS.md). Over MCP, call `kiwi_widget_reference` and verify with `kiwi_lint`.
+
+**Other blocks:** `kiwi-chart` (bar/line/area/pie/radar/scatter), `kiwi-query` (inline DQL tables), `kiwi-data` (queryable record tables), `kiwi-kanban` (inline boards), `kiwi-playground` (interactive controls), `kiwi-app` (sandboxed HTML/JS), `kiwi-diff` (annotated diffs), `kiwi-progress` (bars/gauges), `kiwi-color` (color swatches), `kiwi-calc` (assumption → derivation tables), `mermaid` (diagrams), `widget:live` (React Live, the escape hatch), `widget:code` (Python via Pyodide).
+
+Several widgets on a page can share one scrubber with `clock=`, and a reader can link to a step: `#?step.<id>=N`.
 
 `![[drawing.excalidraw.md]]` and `![[board.canvas.json]]` embed a static preview of a whiteboard or canvas. Labels accept `wide`, `full`, a pixel size (`600x400`), and a caption.
 

@@ -128,6 +128,19 @@ props:
     expect(parsed.issues.find((i) => i.path === "columns")?.message).toContain("must be array");
   });
 
+  it("accepts a mapping keyed by node index", () => {
+    // `activeKeys: {0: [0]}` is how a B-tree page says "light the first key
+    // of the root". js-yaml gives string keys; the Go linter sees integer
+    // ones, and both have to call this an object.
+    const parsed = parseFence(treeSpec, `
+root:
+  keys: [20, 60]
+steps:
+  - activeKeys: {0: [0]}
+`);
+    expect(parsed.issues).toEqual([]);
+  });
+
   it("accepts a bare value where a highlight set is expected", () => {
     const parsed = parseFence(arraySpec, `values: [1, 2]\nactiveIndices: 1\n`);
     expect(parsed.issues).toEqual([]);
