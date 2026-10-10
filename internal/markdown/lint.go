@@ -92,6 +92,9 @@ func LintMarkdown(content []byte) []LintIssue {
 	// Rule 11: fence-widget-invalid
 	issues = append(issues, lintWidgetFences(body, fmLineOffset)...)
 
+	// Rule 12: widget-live-convertible (info only)
+	issues = append(issues, lintWidgetLiveSuggestions(body, fmLineOffset)...)
+
 	// Rule 7: heading-duplicate-slug
 	// Rule 8: heading-skip-level
 	issues = append(issues, lintHeadings(body, doc, fmLineOffset)...)

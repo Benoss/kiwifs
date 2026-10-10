@@ -14,6 +14,7 @@ import {
   wikiLinkCompletionSource,
   type WikiPage,
 } from "./wikiLinkCompletion";
+import { fenceCompletion } from "./fenceAssist";
 
 export type MarkdownSourceEditorProps = {
   value: string;
@@ -54,7 +55,9 @@ export function MarkdownSourceEditor({
       },
     ]);
 
-    const completionSources: CompletionSource[] = [slashCompletionSource];
+    // Fence keys come before the slash menu: inside a widget body an author
+    // wants `activeIndices`, not `/table`.
+    const completionSources: CompletionSource[] = [fenceCompletion, slashCompletionSource];
     if (customSlashCommands.length > 0 && loadSlashTemplate && onSlashTemplateError) {
       completionSources.push(
         customSlashCompletionSource(customSlashCommands, loadSlashTemplate, onSlashTemplateError),

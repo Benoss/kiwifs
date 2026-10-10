@@ -357,6 +357,8 @@ Rich blocks embedded in markdown pages using fenced code blocks. They render as 
 
 Several widgets on a page can share one scrubber with `clock=`, and a reader can link to a step: `#?step.<id>=N`.
 
+`kiwifs widgets list` prints the catalogue; `kiwifs widgets list tree` describes one key by key. `kiwifs widgets suggest <path>` finds `widget:live` blocks that are a static view call and prints the typed fence each would become — a draft, never a rewrite.
+
 `![[drawing.excalidraw.md]]` and `![[board.canvas.json]]` embed a static preview of a whiteboard or canvas. Labels accept `wide`, `full`, a pixel size (`600x400`), and a caption.
 
 Container directives `:::tabs`, `:::columns`, and `:::figure{width=wide}` provide layout control. A figure is always diagram then caption/prose, top to bottom. GitHub-style callouts (`> [!NOTE]`, `> [!WARNING]`, etc.) render as styled admonitions. A `_book.yaml` `parts:` list drives prev/next reading order on pages.

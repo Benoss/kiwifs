@@ -12,7 +12,7 @@ KiwiFS is a single Go binary that turns a folder of markdown files into a search
 
 ```
 kiwifs/
-|-- cmd/              # Cobra CLI commands (serve, init, mcp, query, import, export, ...)
+|-- cmd/              # Cobra CLI commands (serve, init, mcp, query, import, export, widgets, ...)
 |-- internal/         # All backend packages (~40 subpackages)
 |   |-- api/          # REST API handlers (Echo framework)
 |   |-- bootstrap/    # Dependency wiring
