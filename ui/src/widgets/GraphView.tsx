@@ -19,7 +19,8 @@ import { arrivalOpacity, useFlowProgress } from "./useFlowProgress";
 import { useTweenedPositions, type Point } from "./useTweenedPositions";
 import { SvgLabel } from "./WidgetText";
 import { ZoomPanel } from "./ZoomPanel";
-import { summarizeGraph } from "./widgetA11y";
+import { canvasAria, summarizeGraph } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 export interface GraphNode {
   id: string | number;
@@ -139,7 +140,16 @@ export interface GraphViewProps {
   animate?: boolean;
   /** Wrap in a zoom / pan viewport for large diagrams. */
   zoomable?: boolean;
+  /** @deprecated Kept as an alias; prefer `onSelect`, which reports a ref. */
   onNodeClick?: (id: string | number) => void;
+  /** Reported when the reader clicks or Enters a node. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Node id → explanation. Selecting such a node reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the nodes with an edge into the hovered one. */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this graph. */
+  widgetId?: string;
   activeColor?: string;
   highlightColor?: string;
   nodeSize?: number;
@@ -215,6 +225,10 @@ export function GraphView({
   animate = true,
   zoomable = false,
   onNodeClick,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "graph",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   nodeSize = DEFAULTS.nodeSize,
@@ -228,6 +242,22 @@ export function GraphView({
   const activeEdges = toSet(activeEdgesIn);
   const highlightEdges = toSet(highlightEdgesIn);
   const dimEdges = toSet(dimEdgesIn);
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linkedNodes = bus.linkedKeys(widgetId);
+  const clickable = (id: Id) =>
+    Boolean(onNodeClick) ||
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(id) }) !== undefined;
+  const firstClickable = String(nodes.find((n) => clickable(n.id))?.id ?? "");
+  // Incoming edges are the predecessors; walking them on hover is how a
+  // reader sees "what feeds this" without the author listing it again.
+  const incoming = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    for (const e of edges) {
+      if (String(e.to) === bus.hovered.key) incoming.add(String(e.from));
+    }
+  }
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const canvasW = width ?? DEFAULTS.width;
   const canvasH = height ?? DEFAULTS.height;
@@ -503,8 +533,10 @@ export function GraphView({
       height={Math.round(displayH)}
       viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
       style={{ display: "block", maxWidth: "100%", height: "auto" }}
-      role={onNodeClick ? "graphics-document" : "img"}
-      aria-label={ariaLabel ?? summarizeGraph({ nodes, edges, directed, groups })}
+      {...canvasAria(
+        ariaLabel ?? summarizeGraph({ nodes, edges, directed, groups }),
+        Boolean(onNodeClick) || onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+      )}
     >
       <defs>
         {[...markerColors].map(([color, id]) => (
@@ -630,6 +662,13 @@ export function GraphView({
           }
         }
 
+        // A hovered node's feeders, and whatever a linked widget is pointing
+        // at, read as highlights even when the author highlighted nothing.
+        if (incoming.has(String(n.id)) || linkedNodes.has(String(n.id))) {
+          stroke = highlightColor;
+          opacity = 1;
+        }
+
         const lineH = box.lineHeight;
         const subH = box.subFontSize + 3;
         const blockH = box.lines.length * lineH + box.sublines.length * subH;
@@ -644,8 +683,21 @@ export function GraphView({
         return (
           <g
             key={n.id}
-            style={{ transition: "opacity 0.25s ease", opacity, cursor: onNodeClick ? "pointer" : undefined }}
-            onClick={onNodeClick ? () => onNodeClick(n.id) : undefined}
+            {...(clickable(n.id)
+              ? partHandlers(widgetId, "node", String(n.id), bus, {
+                  why: mergedWhy,
+                  tabbable: String(n.id) === firstClickable,
+                  onSelect: (ref) => {
+                    onSelect?.(ref);
+                    onNodeClick?.(n.id);
+                  },
+                })
+              : {})}
+            style={{
+              transition: "opacity 0.25s ease",
+              opacity,
+              cursor: clickable(n.id) ? "pointer" : undefined,
+            }}
           >
             <ShapeOutline shape={g.shape} x={g.x} y={g.y} w={g.w} h={g.h} fill={fill} stroke={stroke} />
             {box.lines.map((line, j) => (

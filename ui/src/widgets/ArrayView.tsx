@@ -13,7 +13,8 @@ import {
   type CellValue,
   type OverlayShape,
 } from "./cellOverlay";
-import { summarizeArray, summarizeArrayStack } from "./widgetA11y";
+import { canvasAria, summarizeArray, summarizeArrayStack } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef, type InspectState } from "./inspect";
 
 interface CellStyle {
   border: string;
@@ -117,6 +118,20 @@ interface SharedProps {
   labelWidth?: number;
   /** Accessible name. Defaults to a summary of the values and highlights. */
   ariaLabel?: string;
+  /**
+   * Reported when the reader clicks or Enters a cell. Cells with a `why`
+   * entry are focusable and clickable without this.
+   */
+  onSelect?: (ref: InspectRef) => void;
+  /** Index → explanation. Selecting such a cell reveals it. */
+  why?: Record<string, string>;
+  /**
+   * On hover, light the cells the hovered one reads from — the incoming
+   * `arrows[].from`. Uses data the author already passed.
+   */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this row. */
+  widgetId?: string;
 }
 
 export interface ArrayViewProps extends ArrayRowProps, SharedProps {}
@@ -319,6 +334,12 @@ function ArrayRow({
   colors,
   flash,
   versions,
+  bus,
+  why,
+  widgetId,
+  onSelect,
+  linked,
+  predecessors,
 }: {
   rowIdx: number;
   row: ArrayRowProps;
@@ -331,6 +352,12 @@ function ArrayRow({
   colors: { active: string; read: string; highlight: string };
   flash: Set<string>;
   versions: Map<string, number>;
+  bus: InspectState;
+  why: Record<string, string>;
+  widgetId: string;
+  onSelect?: (ref: InspectRef) => void;
+  linked: Set<string>;
+  predecessors: Set<string>;
 }) {
   const sets = {
     active: activeSet(row),
@@ -338,6 +365,16 @@ function ArrayRow({
     highlight: toSet(row.highlightIndices),
     dim: toSet(row.dimIndices),
   };
+  /** A cell is clickable when it has an explanation, or the author asked. */
+  const selectable = (i: number) =>
+    onSelect !== undefined ||
+    whyFor(why, { widget: widgetId, kind: "cell", key: String(i) }) !== undefined;
+  /** Lit by a linked widget, or by the predecessor hover. */
+  const lit = (key: string, i: number) => predecessors.has(key) || linked.has(String(i));
+  // Roving tabindex: only the first selectable cell of the first row is a tab
+  // stop; the arrows walk the rest.
+  const firstSelectable =
+    rowIdx === 0 ? row.values.findIndex((_, i) => selectable(i)) : -1;
   const top = new Map<number, ArrayPointer[]>();
   const bottom = new Map<number, ArrayPointer[]>();
   for (const p of row.pointers ?? []) {
@@ -408,6 +445,13 @@ function ArrayRow({
                 data-active={sets.active.has(i) ? "" : undefined}
                 title={row.tooltips?.[i] ?? undefined}
                 className={flash.has(key) ? "kw-cell-flash" : undefined}
+                {...(selectable(i)
+                  ? partHandlers(widgetId, "cell", String(i), bus, {
+                      onSelect,
+                      why,
+                      tabbable: firstSelectable === i,
+                    })
+                  : {})}
                 style={{
                   width: cellSize,
                   height: cellSize,
@@ -415,7 +459,10 @@ function ArrayRow({
                   border: `2px ${style.borderStyle ?? "solid"} ${style.border}`,
                   background: style.background,
                   color: style.color,
-                  opacity: style.opacity ?? 1,
+                  opacity: lit(key, i) ? 1 : style.opacity ?? 1,
+                  outline: lit(key, i) ? `2px solid ${colors.highlight}` : undefined,
+                  outlineOffset: 1,
+                  cursor: selectable(i) ? "pointer" : undefined,
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
@@ -465,6 +512,10 @@ export function ArrayStack({
   labelWidth,
   rowGap,
   ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "array",
 }: ArrayStackProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -516,6 +567,26 @@ export function ArrayStack({
     else if (r.right > o.right - 8) outer.scrollLeft += r.right - o.right + 24;
   }, [activeSig, wrap]);
 
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const interactive = onSelect !== undefined || Object.keys(mergedWhy).length > 0;
+  const linked = bus.linkedKeys(widgetId);
+  // Hovering a cell lights what it reads from, using the arrows already drawn.
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    const target = bus.hovered.key;
+    for (const a of arrows ?? []) {
+      if (`${a.to[0]}:${a.to[1]}` === target || String(a.to[1]) === target) {
+        predecessors.add(`${a.from[0]}:${a.from[1]}`);
+      }
+    }
+    rows.forEach((r, ri) => {
+      for (const a of r.arrows ?? []) {
+        if (String(a.to) === target || `${ri}:${a.to}` === target) predecessors.add(`${ri}:${a.from}`);
+      }
+    });
+  }
+
   const label =
     ariaLabel ??
     (rows.length === 1
@@ -525,8 +596,7 @@ export function ArrayStack({
   return (
     <div
       ref={outerRef}
-      role="img"
-      aria-label={label}
+      {...canvasAria(label, interactive)}
       style={{ overflowX: wrap ? "visible" : "auto", padding: "0.75rem 0" }}
     >
       <div
@@ -555,6 +625,12 @@ export function ArrayStack({
             colors={colors}
             flash={flashSet}
             versions={versions}
+            bus={bus}
+            why={mergedWhy}
+            widgetId={widgetId}
+            onSelect={onSelect}
+            linked={linked}
+            predecessors={predecessors}
           />
         ))}
         {needsOverlay && (
@@ -567,6 +643,10 @@ export function ArrayStack({
 
 export function ArrayView({
   ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors,
+  widgetId,
   activeColor,
   highlightColor,
   readColor,
@@ -582,6 +662,10 @@ export function ArrayView({
     <ArrayStack
       rows={[{ ...row, showIndices }]}
       ariaLabel={ariaLabel}
+      onSelect={onSelect}
+      why={why}
+      hoverPredecessors={hoverPredecessors}
+      widgetId={widgetId}
       activeColor={activeColor}
       highlightColor={highlightColor}
       readColor={readColor}

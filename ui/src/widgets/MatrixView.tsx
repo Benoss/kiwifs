@@ -13,6 +13,7 @@ import {
   type OverlayShape,
 } from "./cellOverlay";
 import { canvasAria, summarizeMatrix } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 export interface MatrixArrow {
   /** Cell read from, as `[r, c]` or `"r,c"`. */
@@ -91,6 +92,14 @@ export interface MatrixViewProps {
   cellSize?: number;
   /** Accessible name. Defaults to a summary of the table's shape and highlights. */
   ariaLabel?: string;
+  /** Reported when the reader clicks or Enters a cell. */
+  onSelect?: (ref: InspectRef) => void;
+  /** `"r,c"` → explanation. Selecting such a cell reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the cells the hovered one reads from (`arrows[].from`). */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this table. */
+  widgetId?: string;
 }
 
 const DEFAULTS = {
@@ -154,6 +163,10 @@ export function MatrixView({
   readColor,
   cellSize,
   ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "matrix",
 }: MatrixViewProps) {
   const [layerSel, setLayerSel] = useState(layer ?? 0);
   useEffect(() => {
@@ -263,9 +276,31 @@ export function MatrixView({
     onLayerChange?.(i);
   };
 
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = bus.linkedKeys(widgetId);
+  const selectable = (cell: string) =>
+    onSelect !== undefined || whyFor(mergedWhy, { widget: widgetId, kind: "cell", key: cell }) !== undefined;
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    for (const a of arrows ?? []) {
+      if (cellKey(a.to) === bus.hovered.key) predecessors.add(cellKey(a.from));
+    }
+  }
+
+  const firstSelectable = (() => {
+    for (let r = 0; r < values.length; r++) {
+      for (let c = 0; c < values[r]!.length; c++) {
+        const k = `${r},${c}`;
+        if (selectable(k)) return k;
+      }
+    }
+    return undefined;
+  })();
+
   const aria = canvasAria(
     ariaLabel ?? summarizeMatrix({ values, activeCells: active, highlightCells: highlight, path }),
-    Boolean(layers?.length),
+    Boolean(layers?.length) || onSelect !== undefined || Object.keys(mergedWhy).length > 0,
   );
 
   return (
@@ -455,14 +490,24 @@ export function MatrixView({
                       data-cell={key}
                       title={tooltips?.[r]?.[c] ?? undefined}
                       className={flashSet.has(key) ? "kw-cell-flash" : undefined}
+                      {...(selectable(key)
+                        ? partHandlers(widgetId, "cell", key, bus, {
+                            onSelect,
+                            why: mergedWhy,
+                            tabbable: key === firstSelectable,
+                          })
+                        : {})}
                       style={{
                         width: size,
                         minHeight: size,
-                        border: `1.5px ${borderStyle} ${border}`,
+                        border: `1.5px ${borderStyle} ${
+                          predecessors.has(key) || linked.has(key) ? highlightColor : border
+                        }`,
                         borderRadius: roundCells ? "50%" : 0,
                         background: bg,
+                        opacity: predecessors.has(key) || linked.has(key) ? 1 : opacity,
+                        cursor: selectable(key) ? "pointer" : undefined,
                         color,
-                        opacity,
                         display: "flex",
                         flexDirection: "column",
                         alignItems: "center",

@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { toSet, type Many } from "./sets";
-import { summarizeTree } from "./widgetA11y";
+import { canvasAria, summarizeTree } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 import { alpha, lookupKeyed, type KeyedValues } from "./colors";
 import { SvgLabel } from "./WidgetText";
 import {
@@ -132,6 +133,14 @@ export interface TreeViewProps {
   nodeSize?: number;
   /** Accessible name. Defaults to a summary of the tree's size and shape. */
   ariaLabel?: string;
+  /** Reported when the reader clicks or Enters a node. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Node key → explanation. Selecting such a node reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the hovered node's parent and any `ghostEdges` into it. */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this tree. */
+  widgetId?: string;
 }
 
 const DEFAULTS = {
@@ -186,6 +195,10 @@ export function TreeView({
   vGap = DEFAULTS.vGap,
   nodeSize = DEFAULTS.nodeSize,
   ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "tree",
 }: TreeViewProps) {
   const activeNodes = toSet(activeNodesIn);
   const highlightNodes = toSet(highlightNodesIn);
@@ -272,6 +285,25 @@ export function TreeView({
     pointerMap.set(key, list);
   }
 
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = bus.linkedKeys(widgetId);
+  const selectable = (key: string | number) =>
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(key) }) !== undefined;
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    const target = bus.hovered.key;
+    for (const { parent, child } of edges) {
+      if (String(child.key) === target) predecessors.add(String(parent.key));
+    }
+    for (const g of ghostEdges) {
+      if (String(g.to) === target) predecessors.add(String(g.from));
+    }
+  }
+
+  const firstSelectable = nodes.find((n) => !n.ghost && selectable(n.key))?.key;
+
   const r = nodeSize / 2;
   const ghostR = r * 0.72;
   const radiusOf = (n: LayoutNode) => (n.ghost ? ghostR : r);
@@ -306,8 +338,10 @@ export function TreeView({
       <svg
         width={width}
         height={height}
-        role="img"
-        aria-label={ariaLabel ?? summarizeTree({ root, roots, parents, activeNodes })}
+        {...canvasAria(
+          ariaLabel ?? summarizeTree({ root, roots, parents, activeNodes }),
+          onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+        )}
         style={{ display: "block", overflow: "visible" }}
       >
         <defs>
@@ -484,8 +518,25 @@ export function TreeView({
             ? new Set(toSet(activeKeys?.[String(n.key)] as Many<number>))
             : null;
 
+          const isLinked = !isGhost && (predecessors.has(String(n.key)) || linked.has(String(n.key)));
+          if (isLinked) stroke = highlightColor;
+
           return (
-            <g key={renderKey.get(n)} style={{ opacity, transition: "opacity 0.25s ease" }}>
+            <g
+              key={renderKey.get(n)}
+              {...(!isGhost && selectable(n.key)
+                ? partHandlers(widgetId, "node", String(n.key), bus, {
+                    onSelect,
+                    why: mergedWhy,
+                    tabbable: n.key === firstSelectable,
+                  })
+                : {})}
+              style={{
+                opacity,
+                transition: "opacity 0.25s ease",
+                cursor: !isGhost && selectable(n.key) ? "pointer" : undefined,
+              }}
+            >
               {pageKeys?.length ? (
                 <>
                   <rect

@@ -128,7 +128,7 @@ export function MapView({
           return (
             <span
               key={`${key}-${i}`}
-              {...(hasWhy ? partHandlers(widgetId, "slot", key, bus) : {})}
+              {...(hasWhy ? partHandlers(widgetId, "slot", key, bus, { why: mergedWhy, tabbable: i === 0 }) : {})}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -206,7 +206,7 @@ export function MapView({
                 </span>
               )}
               <div
-                {...(hasWhy ? partHandlers(widgetId, "slot", String(i), bus) : {})}
+                {...(hasWhy ? partHandlers(widgetId, "slot", String(i), bus, { why: mergedWhy, tabbable: i === 0 }) : {})}
                 style={{
                   width: slotWidth,
                   minHeight: 30,

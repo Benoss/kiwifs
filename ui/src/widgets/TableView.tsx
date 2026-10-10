@@ -137,6 +137,18 @@ export function TableView({
   const linked = bus.linkedKeys(widgetId);
   const mergedWhy = { ...bus.why, ...(why ?? {}) };
 
+  const selectableCell = (cellId: string) =>
+    whyFor(mergedWhy, { widget: widgetId, kind: "cell", key: cellId }) !== undefined;
+  const firstSelectable = (() => {
+    for (let i = 0; i < rows.length; i++) {
+      for (const col of columns) {
+        const id = `${idOf(rows[i]!, i)}.${col.key}`;
+        if (selectableCell(id)) return id;
+      }
+    }
+    return undefined;
+  })();
+
   const shown = maxRows != null ? rows.slice(0, maxRows) : rows;
   const hidden = rows.length - shown.length;
 
@@ -257,7 +269,10 @@ export function TableView({
                   const arrow = arrowFrom.get(cellId);
                   const hasWhy = whyFor(mergedWhy, { widget: widgetId, kind: "cell", key: cellId }) !== undefined;
                   const handlers = hasWhy
-                    ? partHandlers(widgetId, "cell", cellId, bus)
+                    ? partHandlers(widgetId, "cell", cellId, bus, {
+                          why: mergedWhy,
+                          tabbable: cellId === firstSelectable,
+                        })
                     : {};
                   return (
                     <td

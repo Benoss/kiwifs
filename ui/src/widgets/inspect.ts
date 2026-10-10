@@ -176,6 +176,22 @@ export interface InspectableProps {
   hoverPredecessors?: boolean;
 }
 
+export interface PartOptions {
+  /** Called in addition to the bus, for an author-supplied callback. */
+  onSelect?: (ref: InspectRef) => void;
+  /**
+   * The canvas's resolved explanations (its own `why` merged over the bus's).
+   * A part with an entry here is selectable even with no `onSelect`.
+   */
+  why?: Record<string, string>;
+  /**
+   * Roving tabindex (APG grid pattern): exactly one part of a canvas is in the
+   * tab order, and the arrows move focus within it. Making every cell tabbable
+   * instead would put forty stops between the reader and the next paragraph.
+   */
+  tabbable?: boolean;
+}
+
 /**
  * DOM props that make one part of a canvas selectable and hoverable.
  * Callers spread this onto the cell / node element.
@@ -185,13 +201,15 @@ export function partHandlers(
   kind: InspectKind,
   key: string,
   bus: InspectState,
-  onSelect?: (ref: InspectRef) => void,
+  opts: PartOptions = {},
 ): Record<string, unknown> {
   const ref: InspectRef = { widget, kind, key };
-  const hasWhy = whyFor(bus.why, ref) !== undefined;
+  const { onSelect, tabbable = true } = opts;
+  const why = opts.why ?? bus.why;
+  const describable = whyFor(why, ref) !== undefined || onSelect !== undefined;
   return {
     role: "graphics-symbol",
-    tabIndex: hasWhy || onSelect ? 0 : -1,
+    tabIndex: describable && tabbable ? 0 : -1,
     "aria-selected": refEquals(bus.selected, ref) || undefined,
     onClick: (e: { stopPropagation: () => void }) => {
       e.stopPropagation();
@@ -202,17 +220,71 @@ export function partHandlers(
     onMouseLeave: () => bus.hover(null),
     onFocus: () => bus.hover(ref),
     onBlur: () => bus.hover(null),
-    onKeyDown: (e: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
+    onKeyDown: (e: {
+      key: string;
+      currentTarget: unknown;
+      preventDefault: () => void;
+      stopPropagation: () => void;
+    }) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         e.stopPropagation();
         bus.select(ref);
         onSelect?.(ref);
-      } else if (e.key === "Escape") {
+        return;
+      }
+      if (e.key === "Escape") {
         bus.select(null);
+        return;
+      }
+      // Roving focus across the canvas's parts. The playback hook stands down
+      // while a part is focused, so these arrows move the cursor, not the clock.
+      const moved = moveFocus(e.currentTarget as Element | null, e.key);
+      if (moved) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     },
   };
+}
+
+const PART_SELECTOR = '[role="graphics-symbol"]';
+
+/**
+ * Move focus to the next, previous, first or last part of the same canvas.
+ * Returns false for a key it does not handle, so the event keeps bubbling.
+ */
+export function moveFocus(from: Element | null, key: string): boolean {
+  if (!from || typeof from.closest !== "function") return false;
+  const root = from.closest(".kiwi-widget") ?? from.ownerDocument?.body;
+  if (!root) return false;
+  const parts = [...root.querySelectorAll<HTMLElement>(PART_SELECTOR)].filter(
+    (el) => el.tabIndex >= 0,
+  );
+  const here = parts.indexOf(from as HTMLElement);
+  if (here < 0 || parts.length === 0) return false;
+  let next: number;
+  switch (key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      next = Math.min(here + 1, parts.length - 1);
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+      next = Math.max(here - 1, 0);
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = parts.length - 1;
+      break;
+    default:
+      return false;
+  }
+  if (next === here) return true;
+  parts[next]!.focus();
+  return true;
 }
 
 /** Normalise a controlled `selected` prop. */

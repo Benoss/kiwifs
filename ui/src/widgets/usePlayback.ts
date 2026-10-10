@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { ensureRootTracking, keyBelongsTo, useWidgetRoot } from "./widgetRoot";
+import { ensureRootTracking, keyBelongsTo, partHasFocus, useWidgetRoot } from "./widgetRoot";
 import {
   clockSnapshot,
   consumeDeepLink,
@@ -240,15 +240,17 @@ export function usePlayback<T>(
           setClockPlaying(clockId, !clockSnapshot(clockId).playing);
           break;
         case "ArrowRight":
+        case "ArrowLeft": {
+          // A focused cell owns the arrows; it is moving the reader's cursor,
+          // not the clock.
+          const root = widgetRoot?.current;
+          if (root && partHasFocus(root, ke.target)) return;
           ke.preventDefault();
           setClockPlaying(clockId, false);
-          stepForward();
+          if (ke.key === "ArrowRight") stepForward();
+          else stepBack();
           break;
-        case "ArrowLeft":
-          ke.preventDefault();
-          setClockPlaying(clockId, false);
-          stepBack();
-          break;
+        }
         case "r":
           ke.preventDefault();
           reset();
