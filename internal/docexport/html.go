@@ -156,7 +156,7 @@ func prepareInputGeneric(ctx context.Context, provider FileProvider, root, tmpDi
 	}
 
 	mdPath := filepath.Join(tmpDir, "input.md")
-	if err := os.WriteFile(mdPath, content, 0644); err != nil {
+	if err := os.WriteFile(mdPath, RewriteWidgetFences(content), 0644); err != nil {
 		return "", nil, fmt.Errorf("write input: %w", err)
 	}
 

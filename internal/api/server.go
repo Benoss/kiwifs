@@ -559,6 +559,7 @@ func (s *Server) setupRoutes() {
 	api.GET("/theme", h.GetTheme)
 	api.PUT("/theme", h.PutTheme)
 	api.GET("/editor/slash-commands", h.GetEditorSlashCommands)
+	api.GET("/widgets/reference", h.WidgetReference)
 	api.GET("/custom.css", h.GetCustomCSS)
 	api.GET("/keybindings", h.GetKeybindings)
 	api.GET("/preferences", h.GetPreferences)

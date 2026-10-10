@@ -30,10 +30,7 @@ import { KiwiQuery } from "./KiwiQuery";
 import { KiwiWidget } from "./KiwiWidget";
 import { CodeRunner } from "@kw/widgets/CodeRunner";
 import { PageTracker } from "@kw/widgets/PageTracker";
-import { getFence } from "@kw/fences/registry";
-import { TypedFence } from "@kw/fences/TypedFence";
-import { sniffFence } from "@kw/fences/parseFence";
-import "@kw/fences/index";
+import { getFence, sniffFence, TypedFence } from "@kw/fences";
 
 export interface FenceBlockProps {
   /** `language-xxx` class react-markdown puts on the <code> element. */
@@ -44,8 +41,10 @@ export interface FenceBlockProps {
   onNavigate?: (path: string) => void;
   /** `kiwi-view: true` in frontmatter — `kiwi-query` renders differently. */
   isComputedView?: boolean;
-  /** Typed fences (```array, ```tree, …) are off when false. */
+  /** Bare typed fences (```array, ```tree, …) are off when false. */
   typedFences?: boolean;
+  /** When set, only these bare tags render as widgets. */
+  typedFenceTags?: string[] | null;
 }
 
 /** Parse "{1,3-5,8}" into a Set of line numbers (1-indexed). */
@@ -82,6 +81,7 @@ export function FenceBlock({
   onNavigate,
   isComputedView,
   typedFences = true,
+  typedFenceTags,
   ...rest
 }: FenceBlockProps) {
   const lang = fenceLang(className);
@@ -129,9 +129,14 @@ export function FenceBlock({
 
   // Typed fences own their own "is this really mine?" test, so a ```tree
   // directory listing or a ```table of pipes still reaches Shiki below.
-  if (lang && typedFences) {
+  // The workspace switches apply to bare tags only: an author who wrote
+  // `kiwi-array` asked for a widget and gets one either way.
+  if (lang) {
     const spec = getFence(lang);
-    if (spec && sniffFence(spec, lang, raw)) {
+    const bare = Boolean(spec) && lang === spec!.lang;
+    const allowed =
+      !bare || (typedFences && (!typedFenceTags || typedFenceTags.includes(lang)));
+    if (spec && allowed && sniffFence(spec, lang, raw)) {
       return <TypedFence spec={spec} source={raw} meta={fenceMeta(node)} onNavigate={onNavigate} />;
     }
   }

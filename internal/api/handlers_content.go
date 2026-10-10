@@ -377,6 +377,9 @@ type uiConfigResponse struct {
 	Features     map[string]bool        `json:"features"`
 	ToolbarViews *[]string              `json:"toolbarViews"`
 	Tags         tagsConfigResponse     `json:"tags"`
+	TypedFences  bool                   `json:"typedFences"`
+	// Nil means "every registered fence"; a list restricts bare tags to it.
+	TypedFenceTags *[]string `json:"typedFenceTags"`
 }
 
 // UIConfig godoc
@@ -417,6 +420,11 @@ func (h *Handlers) UIConfig(c echo.Context) error {
 	if tagHide == nil {
 		tagHide = []string{}
 	}
+	var fenceTags *[]string
+	if h.ui.FenceAllow != nil {
+		allow := h.ui.FenceAllow
+		fenceTags = &allow
+	}
 	return c.JSON(http.StatusOK, uiConfigResponse{
 		ThemeLocked: h.ui.ThemeLocked,
 		StartPage:   h.ui.ResolvedStartPage(),
@@ -439,6 +447,8 @@ func (h *Handlers) UIConfig(c echo.Context) error {
 			Hide:   tagHide,
 			Colors: tagColors,
 		},
+		TypedFences:    h.ui.TypedFencesEnabled(),
+		TypedFenceTags: fenceTags,
 	})
 }
 

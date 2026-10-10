@@ -13,6 +13,10 @@ type UIConfigState = {
   features: Record<UIFeatureKey, boolean>;
   toolbarViews: string[] | null | undefined;
   tags: UITagsConfig;
+  /** Bare widget tags (```array, ```tree, …) render as widgets. */
+  typedFences: boolean;
+  /** Null means every registered fence; a list restricts bare tags to it. */
+  typedFenceTags: string[] | null;
   loaded: boolean;
   load: () => Promise<void>;
 };
@@ -23,6 +27,8 @@ export const useUIConfigStore = create<UIConfigState>((set) => ({
   features: DEFAULT_UI_FEATURES,
   toolbarViews: undefined,
   tags: DEFAULT_UI_TAGS,
+  typedFences: true,
+  typedFenceTags: null,
   loaded: false,
   load: async () => {
     try {
@@ -35,6 +41,8 @@ export const useUIConfigStore = create<UIConfigState>((set) => ({
         features: resolveUIFeatures(config.features),
         toolbarViews: config.toolbarViews ?? null,
         tags,
+        typedFences: config.typedFences !== false,
+        typedFenceTags: config.typedFenceTags ?? null,
         loaded: true,
       });
     } catch {
@@ -44,6 +52,8 @@ export const useUIConfigStore = create<UIConfigState>((set) => ({
         features: DEFAULT_UI_FEATURES,
         toolbarViews: null,
         tags: DEFAULT_UI_TAGS,
+        typedFences: true,
+        typedFenceTags: null,
         loaded: true,
       });
     }

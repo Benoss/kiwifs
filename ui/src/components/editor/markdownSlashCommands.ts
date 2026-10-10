@@ -3,8 +3,10 @@ import { type Extension } from "@codemirror/state";
 import { type EditorView } from "@codemirror/view";
 import type { EditorSlashCommandConfig } from "@kw/lib/editorSlashCommands";
 import { filterSlashCommands, templateLoadErrorMessage } from "@kw/lib/editorSlashCommands";
+import { allFences } from "@kw/fences";
 
-export type MarkdownSlashCommandName = "table" | "todo" | "code" | "quote" | "frontmatter" | "quiz";
+/** Built-in names; widget fences add one entry each, generated below. */
+export type MarkdownSlashCommandName = string;
 
 export type MarkdownSlashCommand = {
   name: MarkdownSlashCommandName;
@@ -24,7 +26,31 @@ export type CustomSlashCommandLoader = (templatePath: string) => Promise<string>
 
 const frontmatterFieldInsert = "key: \n";
 
-export const markdownSlashCommands: MarkdownSlashCommand[] = [
+/**
+ * One entry per widget fence, generated from the registry rather than listed
+ * by hand: a spec added without a menu entry would be undiscoverable, and a
+ * menu entry that drifts from the schema teaches an invalid fence.
+ */
+export function widgetSlashCommands(): MarkdownSlashCommand[] {
+  return allFences()
+    .filter((spec) => !spec.legacy)
+    .map((spec) => {
+      // The example opens with ```<lang> …; put the cursor on the first body
+      // line so the author is editing data, not retyping the tag.
+      const insert = `${spec.example.replace(/\n?$/, "\n")}`;
+      const firstBodyLine = insert.indexOf("\n") + 1;
+      return {
+        name: spec.lang,
+        icon: "🧩",
+        label: spec.lang,
+        detail: spec.description,
+        insert,
+        cursorOffset: firstBodyLine,
+      };
+    });
+}
+
+const builtinSlashCommands: MarkdownSlashCommand[] = [
   {
     name: "table",
     icon: "📊",
@@ -73,6 +99,12 @@ export const markdownSlashCommands: MarkdownSlashCommand[] = [
     insert: "---\ntitle: \ntags: []\n---\n\n",
     cursorOffset: "---\ntitle: ".length,
   },
+];
+
+/** Built-ins first, then the widget fences in registry order. */
+export const markdownSlashCommands: MarkdownSlashCommand[] = [
+  ...builtinSlashCommands,
+  ...widgetSlashCommands(),
 ];
 
 export function hasYamlFrontmatter(doc: string): boolean {

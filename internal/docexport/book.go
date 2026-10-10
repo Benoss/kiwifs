@@ -80,7 +80,7 @@ func StitchFiles(ctx context.Context, provider FileProvider, paths []string, man
 			return nil, nil, fmt.Errorf("read %s: %w", p, err)
 		}
 
-		body := stripFrontmatter(content)
+		body := RewriteWidgetFences(stripFrontmatter(content))
 
 		if i > 0 {
 			// Pandoc page break (works for PDF via LaTeX/Typst and HTML).

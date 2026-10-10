@@ -680,6 +680,8 @@ export const api = {
       hide?: string[];
       colors?: Record<string, string>;
     };
+    typedFences?: boolean;
+    typedFenceTags?: string[] | null;
   }> {
     return request(`${kiwiBase()}/ui-config`);
   },

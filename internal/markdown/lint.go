@@ -89,6 +89,9 @@ func LintMarkdown(content []byte) []LintIssue {
 	// Rule 6: fence-mermaid-invalid
 	issues = append(issues, lintMermaid(body, fmLineOffset)...)
 
+	// Rule 11: fence-widget-invalid
+	issues = append(issues, lintWidgetFences(body, fmLineOffset)...)
+
 	// Rule 7: heading-duplicate-slug
 	// Rule 8: heading-skip-level
 	issues = append(issues, lintHeadings(body, doc, fmLineOffset)...)

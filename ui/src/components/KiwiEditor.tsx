@@ -10,7 +10,8 @@ import {
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
-import { Check, ChevronDown, ChevronRight, Circle, Code, Info, Link as LinkIcon, ListTree, Loader2, PenLine, Save, TriangleAlert, User, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Circle, Code, Info, Link as LinkIcon, ListTree, Loader2, PenLine, Puzzle, Save, TriangleAlert, User, X, XCircle } from "lucide-react";
+import { allFences } from "@kw/fences";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import matter from "gray-matter";
@@ -1141,6 +1142,20 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
     );
   };
 
+  /**
+   * A fence is several lines, and BlockNote has no markdown-fence block, so
+   * each line goes in as its own paragraph. The round-trip through markdown
+   * on save reassembles it into the fence the author picked.
+   */
+  const insertFenceBlock = (example: string) => {
+    const cur = editor.getTextCursorPosition().block;
+    const blocks = example
+      .replace(/\n$/, "")
+      .split("\n")
+      .map((line) => ({ type: "paragraph" as const, content: line }));
+    editor.insertBlocks(blocks, cur, "after");
+  };
+
   return [
     {
       title: "Wiki link",
@@ -1182,6 +1197,18 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
       icon: <ListTree size={18} />,
       onItemClick: () => insertParagraph("<!-- toc -->"),
     },
+    // One entry per widget fence, generated from the registry so the visual
+    // editor offers exactly what the linter accepts.
+    ...allFences()
+      .filter((spec) => !spec.legacy)
+      .map((spec) => ({
+        title: `${spec.lang} widget`,
+        subtext: spec.description,
+        aliases: ["widget", "fence", spec.lang, ...(spec.aliases ?? [])],
+        group: "Widgets",
+        icon: <Puzzle size={18} />,
+        onItemClick: () => insertFenceBlock(spec.example),
+      })),
   ];
 }
 

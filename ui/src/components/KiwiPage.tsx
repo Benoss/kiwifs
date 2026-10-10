@@ -498,6 +498,8 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
   const nav = onNavigate ?? (() => {});
   const features = useUIConfigStore((s) => s.features);
   const tagConfig = useUIConfigStore((s) => s.tags);
+  const typedFences = useUIConfigStore((s) => s.typedFences);
+  const typedFenceTags = useUIConfigStore((s) => s.typedFenceTags);
 
   const treeEntry = useMemo(() => findEntry(tree ?? null, path), [tree, path]);
   const isDir = !isHeadless && (treeEntry?.isDir ?? false);
@@ -1051,6 +1053,8 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                         {...props}
                         onNavigate={nav}
                         isComputedView={parsed.meta?.["kiwi-view"] === true}
+                        typedFences={typedFences}
+                        typedFenceTags={typedFenceTags}
                       />
                     ),
                     pre: ({ children }) => <>{children}</>,
@@ -1280,7 +1284,14 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             rehypeSlug,
                           ]}
                           components={{
-                            code: (props: any) => <FenceBlock {...props} onNavigate={nav} />,
+                            code: (props: any) => (
+                              <FenceBlock
+                                {...props}
+                                onNavigate={nav}
+                                typedFences={typedFences}
+                                typedFenceTags={typedFenceTags}
+                              />
+                            ),
                             pre: ({ children }) => <>{children}</>,
                             table: ScrollableTable,
                             div: ({ children, node: _node, ...rest }: any) => {

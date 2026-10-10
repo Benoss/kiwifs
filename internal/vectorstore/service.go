@@ -246,7 +246,9 @@ func (s *Service) Index(ctx context.Context, path string, content []byte) error 
 		// metadata line into a heading and emits the whole YAML block as its
 		// own embedded chunk. Page metadata reaches the embedding through the
 		// context template instead, where it belongs.
-		body := markdown.RedactQuiz(markdown.BodyAfterFrontmatter(content))
+		// Widget fences become their captions and step notes: embedding a
+		// body of `activeIndices` keys buys nothing and dilutes the chunk.
+		body := markdown.RedactQuiz(markdown.IndexableContent(markdown.BodyAfterFrontmatter(content)))
 		fm, err := markdown.Frontmatter(content)
 		if err != nil {
 			fm = nil
