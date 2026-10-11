@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { getHighlighter, hasLang } from "@kw/lib/shiki";
-import { hasNotation, notationClass, parseNotation, type NotatedCode } from "@kw/lib/codeNotation";
+import {
+  hasNotation,
+  notationClass,
+  parseNotation,
+  withSourceHighlights,
+  type NotatedCode,
+} from "@kw/lib/codeNotation";
 
 type Props = {
   code: string;
@@ -127,7 +133,10 @@ export function ShikiCode({ code, lang, title, highlightLines }: Props) {
           rendered = applyDiffStyles(rendered);
         }
         if (notated) {
-          rendered = applyNotation(rendered, notated);
+          rendered = applyNotation(
+            rendered,
+            highlightLines ? withSourceHighlights(notated, highlightLines) : notated,
+          );
         } else if (highlightLines && highlightLines.size > 0) {
           rendered = applyLineHighlights(rendered, highlightLines);
         }

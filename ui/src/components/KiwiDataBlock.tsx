@@ -12,7 +12,7 @@
  * (Named ...Block because KiwiData is the import-connections manager.)
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatRecordValue, kindFromMeta, parseDataBlock } from "@kw/lib/dataBlock";
 import { registerPageData, unregisterPageData } from "@kw/lib/pageData";
 
@@ -22,11 +22,12 @@ export function KiwiDataBlock({ source, meta }: { source: string; meta?: string 
   // Publish the records so a `table` fence on the same page can animate them
   // with `fromData:` instead of restating them.
   const block = parsed.ok ? parsed.block : null;
+  const [owner] = useState<object>(() => ({}));
   useEffect(() => {
     if (!block) return;
-    registerPageData(block.kind, block.records, block.columns);
-    return () => unregisterPageData(block.kind);
-  }, [block]);
+    registerPageData(block.kind, block.records, block.columns, owner);
+    return () => unregisterPageData(block.kind, owner);
+  }, [block, owner]);
 
   if (!parsed.ok) {
     return (

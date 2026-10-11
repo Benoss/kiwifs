@@ -87,7 +87,24 @@ const OPERATORS = [
   "+", "-", "*", "/", "%", "^", "<", ">", "=", "!",
 ];
 
+/** Longer input is almost certainly pasted data rather than a formula. */
+export const MAX_EXPR_LENGTH = 10_000;
+/** Deep enough for any formula; shallow enough to fail before the JS stack does. */
+export const MAX_EXPR_DEPTH = 200;
+
+const NUMBER_RE = /[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/y;
+const NAME_RE = /[A-Za-z_][A-Za-z0-9_]*/y;
+
+function stickyMatch(re: RegExp, src: string, at: number): string | null {
+  re.lastIndex = at;
+  const match = re.exec(src);
+  return match ? match[0] : null;
+}
+
 export function tokenize(src: string): Token[] {
+  if (src.length > MAX_EXPR_LENGTH) {
+    throw new ExprError(`expression is too long (${src.length} characters, max ${MAX_EXPR_LENGTH})`);
+  }
   const out: Token[] = [];
   let i = 0;
   while (i < src.length) {
@@ -102,16 +119,16 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     if (/[0-9]/.test(ch) || (ch === "." && /[0-9]/.test(src[i + 1] ?? ""))) {
-      const match = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/.exec(src.slice(i));
-      if (!match) throw new ExprError(`bad number at position ${i}`);
-      out.push({ type: "number", text: match[0], value: Number(match[0]), pos: i });
-      i += match[0].length;
+      const text = stickyMatch(NUMBER_RE, src, i);
+      if (!text) throw new ExprError(`bad number at position ${i}`);
+      out.push({ type: "number", text, value: Number(text), pos: i });
+      i += text.length;
       continue;
     }
     if (/[A-Za-z_]/.test(ch)) {
-      const match = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i))!;
-      out.push({ type: "name", text: match[0], pos: i });
-      i += match[0].length;
+      const text = stickyMatch(NAME_RE, src, i)!;
+      out.push({ type: "name", text, pos: i });
+      i += text.length;
       continue;
     }
     const op = OPERATORS.find((o) => src.startsWith(o, i));
@@ -157,8 +174,11 @@ const RIGHT_ASSOC = new Set(["^"]);
 
 const KEYWORD_OPS: Record<string, string> = { and: "and", or: "or" };
 
+const NOT_OPERAND = BINDING["=="]!;
+
 class Parser {
   private at = 0;
+  private depth = 0;
 
   constructor(private readonly tokens: Token[], private readonly src: string) {}
 
@@ -197,7 +217,17 @@ class Parser {
   }
 
   expression(minBinding: number): Node {
-    let left = this.prefix();
+    if (++this.depth > MAX_EXPR_DEPTH) {
+      throw new ExprError(`expression is nested too deeply (max ${MAX_EXPR_DEPTH})`);
+    }
+    try {
+      return this.infix(this.prefix(), minBinding);
+    } finally {
+      this.depth--;
+    }
+  }
+
+  private infix(left: Node, minBinding: number): Node {
     for (;;) {
       const op = this.operator();
       if (op === null) break;
@@ -227,7 +257,9 @@ class Parser {
         throw new ExprError(`unexpected ${token.text} at position ${token.pos}`);
       case "name": {
         const lower = token.text.toLowerCase();
-        if (lower === "not") return { kind: "unary", op: "not", operand: this.expression(6) };
+        // Python precedence: `not a == b` is `not (a == b)`, and
+        // `not a and b` is `(not a) and b`.
+        if (lower === "not") return { kind: "unary", op: "not", operand: this.expression(NOT_OPERAND) };
         if (this.peek().type === "(") {
           this.next();
           const args: Node[] = [];
@@ -344,13 +376,22 @@ export function evalNode(node: Node, scope: Scope = {}): number {
 
 /** Parse and evaluate in one go. Throws `ExprError` with the reason. */
 export function evaluate(src: string, scope: Scope = {}): number {
-  return evalNode(parseExpr(src), scope);
+  return evalGuarded(parseExpr(src), scope);
 }
 
 /** A reusable evaluator, for sampling a curve over hundreds of points. */
 export function compile(src: string): (scope?: Scope) => number {
   const ast = parseExpr(src);
-  return (scope: Scope = {}) => evalNode(ast, scope);
+  return (scope: Scope = {}) => evalGuarded(ast, scope);
+}
+
+function evalGuarded(ast: Node, scope: Scope): number {
+  try {
+    return evalNode(ast, scope);
+  } catch (err) {
+    if (err instanceof RangeError) throw new ExprError("expression is too large to evaluate");
+    throw err;
+  }
 }
 
 /** Names the expression reads and does not define — what to bind to inputs. */

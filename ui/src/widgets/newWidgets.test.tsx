@@ -4,6 +4,8 @@ import { TableView } from "./TableView";
 import { NumberLineView } from "./NumberLineView";
 import { PlaneView } from "./PlaneView";
 import { MapView } from "./MapView";
+import { QueueView } from "./QueueView";
+import { MemoryView } from "./MemoryView";
 import { TimelineView, assignLanes as assignTimelineLanes } from "./TimelineView";
 import { TreeView } from "./TreeView";
 import { heapTreeFromArray, layoutForest, nodeWidth } from "./treeLayout";
@@ -76,18 +78,20 @@ describe("NumberLineView", () => {
   });
 
   it("stacks overlapping intervals onto separate rows", () => {
-    const html = renderToStaticMarkup(
-      <NumberLineView
-        min={0}
-        max={10}
-        intervals={[
-          { from: 0, to: 8, label: "a" },
-          { from: 2, to: 10, label: "b" },
-        ]}
-      />,
-    );
-    const heights = /height="(\d+)"/.exec(html);
-    expect(Number(heights?.[1])).toBeGreaterThan(50);
+    const heightOf = (intervals: { from: number; to: number }[]) => {
+      const html = renderToStaticMarkup(<NumberLineView min={0} max={10} intervals={intervals} />);
+      return Number(/<svg[^>]*\sheight="(\d+)"/.exec(html)?.[1]);
+    };
+    const disjoint = heightOf([
+      { from: 0, to: 3 },
+      { from: 5, to: 8 },
+    ]);
+    const overlapping = heightOf([
+      { from: 0, to: 8 },
+      { from: 2, to: 10 },
+    ]);
+    // One extra row, exactly: disjoint spans share a row, overlapping ones do not.
+    expect(overlapping - disjoint).toBe(20);
   });
 
   it("points a ray at the edge of the axis", () => {
@@ -126,8 +130,10 @@ describe("PlaneView", () => {
     const html = renderToStaticMarkup(
       <PlaneView xMin={0} xMax={20} yMin={0} yMax={5} width={400} height={400} circles={[{ at: [10, 2], r: 2 }]} />,
     );
+    // The box is 350×356 px after padding; x needs 17.5 px/unit, y could take
+    // 71.2. Equal aspect uses 17.5 on both, so r = 2 units = 35 px.
     const r = /<circle[^>]*\sr="([\d.]+)"/.exec(html);
-    expect(Number(r?.[1])).toBeGreaterThan(0);
+    expect(Number(r?.[1])).toBe(35);
   });
 
   it("leaves a hull open when asked, so a work-in-progress reads as one", () => {
@@ -188,6 +194,58 @@ describe("MapView", () => {
   });
 });
 
+describe("QueueView", () => {
+  it("draws a horizontal queue with front and back markers", () => {
+    const html = renderToStaticMarkup(<QueueView values={["a", "b", "c"]} front={0} back={3} capacity={4} />);
+    expect(html).toContain(">a<");
+    expect(html).toContain(">c<");
+    expect(html).toContain("front");
+    expect(html).toContain("back");
+    expect(html).toContain("queue of 4 slots");
+  });
+
+  it("draws a ring buffer as an svg with one slot per capacity", () => {
+    const html = renderToStaticMarkup(<QueueView layout="ring" values={["a", null, "c"]} capacity={5} />);
+    expect(html).toContain("<svg");
+    expect(html.match(/<rect/g)).toHaveLength(5);
+    expect(html).toContain("circular queue of 5 slots");
+  });
+
+  it("says so when empty", () => {
+    expect(renderToStaticMarkup(<QueueView values={[null, null]} />)).toContain("(empty)");
+  });
+});
+
+describe("MemoryView", () => {
+  it("draws frames and heap objects side by side", () => {
+    const html = renderToStaticMarkup(
+      <MemoryView
+        frames={[{ name: "main", vars: { a: ["REF", 1], n: 3 } }]}
+        heap={{ 1: ["LIST", 10, 20] }}
+      />,
+    );
+    expect(html).toContain("main");
+    expect(html).toContain('data-cell="var:main#0.a"');
+    expect(html).toContain('data-cell="obj:1"');
+    expect(html).toContain(">10<");
+    expect(html).toContain(">3<");
+    expect(html).toContain("call stack main; 1 heap object.");
+  });
+
+  it("marks the innermost frame active by default", () => {
+    const html = renderToStaticMarkup(
+      <MemoryView frames={[{ name: "outer", vars: {} }, { name: "inner", vars: {} }]} />,
+    );
+    const borders = [...html.matchAll(/border:2px solid ([^;"]+)/g)].map((m) => m[1]);
+    expect(borders[0]).toContain("widget-border");
+    expect(borders[1]).toContain("widget-active");
+  });
+
+  it("says so when nothing is allocated", () => {
+    expect(renderToStaticMarkup(<MemoryView />)).toContain("(nothing allocated)");
+  });
+});
+
 describe("TimelineView lanes, states and links", () => {
   const intervals = [
     { id: "x", lane: "T1", start: 0, end: 4, state: "holding" },
@@ -242,8 +300,18 @@ describe("heapTreeFromArray", () => {
   it("uses array indices as node ids, so an array fence lines up", () => {
     const tree = heapTreeFromArray([1, 3, 2, 7, 5]);
     expect(tree?.id).toBe(0);
-    expect(tree?.children?.map((c) => c.id)).toEqual([1, 2]);
-    expect(tree?.children?.[0]?.children?.map((c) => c.id)).toEqual([3, 4]);
+    expect([tree?.left?.id, tree?.right?.id]).toEqual([1, 2]);
+    expect([tree?.left?.left?.id, tree?.left?.right?.id]).toEqual([3, 4]);
+  });
+
+  it("hangs a lone left child on the left in a binary heap", () => {
+    const tree = heapTreeFromArray([1, 3, 2, 7]);
+    expect(tree?.left?.left?.id).toBe(3);
+    expect(tree?.left?.right).toBeUndefined();
+    const [layout] = layoutForest([tree], { hGap: 20, vGap: 60, nodeSize: 36 });
+    const parent = layout!.children[0]!;
+    const lone = parent.children.find((c) => !c.ghost)!;
+    expect(lone.x).toBeLessThan(parent.x);
   });
 
   it("supports a k-ary heap", () => {
@@ -253,7 +321,8 @@ describe("heapTreeFromArray", () => {
 
   it("stops at a hole in the array", () => {
     const tree = heapTreeFromArray([1, null, 2]);
-    expect(tree?.children?.map((c) => c.id)).toEqual([2]);
+    expect(tree?.left).toBeUndefined();
+    expect(tree?.right?.id).toBe(2);
   });
 
   it("returns nothing for an empty heap", () => {
@@ -326,6 +395,11 @@ describe("accessible summaries", () => {
     expect(summarizeTree({})).toBe("Empty tree.");
     expect(summarizeTable({ columns: [], rows: [] })).toContain("0 rows");
     expect(summarizeMap({ slots: [] })).toContain("0 slots");
+  });
+
+  it("pluralises entries properly", () => {
+    expect(summarizeMap({ entries: [{ key: "a" }, { key: "b" }] })).toContain("map of 2 entries");
+    expect(summarizeMap({ entries: [{ key: "a" }] })).toContain("map of 1 entry");
   });
 
   it("switches to a count once a list gets long", () => {

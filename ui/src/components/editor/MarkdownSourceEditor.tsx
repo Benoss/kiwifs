@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { autocompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -14,7 +14,13 @@ import {
   wikiLinkCompletionSource,
   type WikiPage,
 } from "./wikiLinkCompletion";
-import { fenceCompletion, fencePreviewAt, type FencePreviewTarget } from "./fenceAssist";
+import {
+  fenceCompletion,
+  fenceLinter,
+  fencePreviewAt,
+  samePreviewTarget,
+  type FencePreviewTarget,
+} from "./fenceAssist";
 
 export type MarkdownSourceEditorProps = {
   value: string;
@@ -49,6 +55,14 @@ export function MarkdownSourceEditor({
   onSlashTemplateError,
   onFenceUnderCursor,
 }: MarkdownSourceEditorProps) {
+  // Through a ref, so a parent passing a fresh arrow each render doesn't
+  // rebuild every extension.
+  const fenceCallback = useRef(onFenceUnderCursor);
+  useEffect(() => {
+    fenceCallback.current = onFenceUnderCursor;
+  }, [onFenceUnderCursor]);
+  const wantsFence = onFenceUnderCursor !== undefined;
+
   const extensions = useMemo(() => {
     const saveKeymap = keymap.of([
       {
@@ -88,14 +102,21 @@ export function MarkdownSourceEditor({
       }),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       saveKeymap,
+      fenceLinter(),
     ];
 
-    if (onFenceUnderCursor) {
+    if (wantsFence) {
+      // Only report when the fence actually changed: moving the caret through
+      // prose, or within the same unchanged fence, would otherwise hand the
+      // preview a fresh object (and a re-render) on every keystroke.
+      let last: FencePreviewTarget | null = null;
       exts.push(
         EditorView.updateListener.of((update) => {
           if (!update.docChanged && !update.selectionSet) return;
-          const pos = update.state.selection.main.head;
-          onFenceUnderCursor(fencePreviewAt(update.state, pos));
+          const next = fencePreviewAt(update.state, update.state.selection.main.head);
+          if (samePreviewTarget(last, next)) return;
+          last = next;
+          fenceCallback.current?.(next);
         }),
       );
     }
@@ -106,7 +127,7 @@ export function MarkdownSourceEditor({
     customSlashCommands,
     loadSlashTemplate,
     onSlashTemplateError,
-    onFenceUnderCursor,
+    wantsFence,
   ]);
 
   const theme = useMemo(() => markdownEditorTheme({ dark }), [dark]);

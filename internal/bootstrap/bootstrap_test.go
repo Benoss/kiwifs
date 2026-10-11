@@ -216,3 +216,43 @@ func TestStackCloseIsSafeToCallTwice(t *testing.T) {
 	// which is fine — the point is that it doesn't panic.
 	_ = stack.Close()
 }
+
+// Write rejection follows the space's [ui] typed_fences: a bare tag the UI
+// renders as a code block must not fail a write, an explicit kiwi- spelling
+// still does, and info-level suggestions never do.
+func TestBuildRejectsWidgetErrorsPerTypedFenceSetting(t *testing.T) {
+	bad := "```%s\nvalues: [1]\noffset: bad\n```\n"
+	page := func(lang string) []byte {
+		return []byte("---\ntitle: t\n---\n\n" + fmt.Sprintf(bad, lang))
+	}
+	ctx := context.Background()
+
+	cfg := newCfg("none", "grep")
+	on, err := Build("default", t.TempDir(), cfg)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer on.Close()
+	if _, err := on.Pipeline.Write(ctx, "bare.md", page("array"), "tester"); err == nil {
+		t.Fatal("a bare array with a type error should be rejected while typed fences are on")
+	}
+	live := []byte("---\ntitle: t\n---\n\n```widget:live\nrender(<ArrayView values={[1, 2]} />)\n```\n")
+	if _, err := on.Pipeline.Write(ctx, "live.md", live, "tester"); err != nil {
+		t.Fatalf("an info-level suggestion must not block a write: %v", err)
+	}
+
+	off := false
+	cfg = newCfg("none", "grep")
+	cfg.UI.TypedFences = &off
+	stack, err := Build("default", t.TempDir(), cfg)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer stack.Close()
+	if _, err := stack.Pipeline.Write(ctx, "bare.md", page("array"), "tester"); err != nil {
+		t.Fatalf("typed_fences=false: a bare array is a code block, got %v", err)
+	}
+	if _, err := stack.Pipeline.Write(ctx, "strict.md", page("kiwi-array"), "tester"); err == nil {
+		t.Fatal("an explicit kiwi-array is checked regardless of typed_fences")
+	}
+}

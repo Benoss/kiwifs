@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -62,6 +62,9 @@ import remarkDirective from "remark-directive";
 import { CLAIM_DATA_ATTRIBUTES, remarkKiwiDirectives } from "@kw/lib/remarkDirectives";
 import { remarkKiwiQuiz } from "@kw/lib/remarkQuiz";
 import { withDataAttributeAliasesForSchema, withUnrestrictedClassName } from "@kw/lib/sanitizeAttributes";
+import { resetClocks } from "@kw/widgets/playbackClock";
+import { resetPageVars } from "@kw/lib/pageVars";
+import { resetPageData } from "@kw/lib/pageData";
 type Props = {
   /** Page path in the KiwiFS tree. Used for API fetching in connected mode. */
   path?: string;
@@ -495,6 +498,21 @@ function KiwiMedia({ src, alt, width, height, rest }: {
   }
 }
 
+/**
+ * Playback clocks, `{% range %}` variables and `kiwi-data` records belong to
+ * the page they were declared on. Module-level so remounting the same page
+ * (closing the editor) keeps them, while arriving at another page clears them.
+ */
+let scopedPagePath: string | null = null;
+
+function enterPageScope(path: string) {
+  if (path === scopedPagePath) return;
+  scopedPagePath = path;
+  resetClocks();
+  resetPageVars();
+  resetPageData();
+}
+
 export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, onEdit, onHistory, onRevealInTree, onToggleStar, isStarred, onTogglePin, isPinned, onDeleted, onDuplicated, onMoved, onTagClick, refreshKey, onPublishedChanged, onWikiLinkClick, onHeadingVisible: _onHeadingVisible, className }: Props) {
   const isHeadless = contentProp != null;
   const nav = onNavigate ?? (() => {});
@@ -518,6 +536,14 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
   const [localNote, setLocalNote] = useState<string | null>(null);
   const [bookOrder, setBookOrder] = useState<BookOrder | null>(null);
   const proseRef = useRef<HTMLDivElement>(null);
+
+  // A layout effect on the path, not on the content: the outgoing page's
+  // content is still rendered in this commit and the next page's widgets
+  // mount only once its file has loaded, so nothing of the new page can have
+  // joined a clock yet. Headless hosts own their content's lifecycle.
+  useLayoutEffect(() => {
+    if (!isHeadless) enterPageScope(path);
+  }, [path, isHeadless]);
 
   // In headless mode, sync content from prop
   useEffect(() => {

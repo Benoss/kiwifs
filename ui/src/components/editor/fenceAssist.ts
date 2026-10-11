@@ -8,7 +8,8 @@
  */
 
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from "@codemirror/autocomplete";
-import type { EditorState } from "@codemirror/state";
+import { linter } from "@codemirror/lint";
+import type { EditorState, Extension } from "@codemirror/state";
 import { getFence, parseFence, type FenceSpec } from "@kw/fences";
 import { RESERVED_STEP, RESERVED_TOP_LEVEL, type SchemaAttribute } from "@kw/fences/schema";
 
@@ -25,6 +26,13 @@ export interface FenceContext {
 const OPEN = /^(`{3,}|~{3,})\s*([A-Za-z0-9_:.-]*)/;
 
 /**
+ * How far from the caret to look for a fence's delimiters. This runs on every
+ * keystroke and caret move, so a long page of prose with no fence above the
+ * caret must not cost a scan to line 1; a widget body is never this long.
+ */
+export const MAX_FENCE_LINES = 1000;
+
+/**
  * The widget fence the cursor is in, by scanning back for an unclosed opening
  * fence. Cheap, and immune to the markdown parser's view of a half-typed
  * document — which is exactly the state an author is in while typing.
@@ -33,7 +41,8 @@ export function fenceAtCursor(state: EditorState, pos: number): FenceContext | n
   const cursorLine = state.doc.lineAt(pos);
   let opening: { marker: string; lang: string; line: number } | null = null;
 
-  for (let n = cursorLine.number - 1; n >= 1; n--) {
+  const scanFloor = Math.max(1, cursorLine.number - MAX_FENCE_LINES);
+  for (let n = cursorLine.number - 1; n >= scanFloor; n--) {
     const text = state.doc.line(n).text;
     const match = OPEN.exec(text.trim());
     if (!match) continue;
@@ -53,8 +62,9 @@ export function fenceAtCursor(state: EditorState, pos: number): FenceContext | n
   if (!spec) return null;
 
   const bodyStart = state.doc.line(opening.line + 1 > state.doc.lines ? state.doc.lines : opening.line + 1).from;
-  let bodyEnd = state.doc.length;
-  for (let n = opening.line + 1; n <= state.doc.lines; n++) {
+  const scanCeiling = Math.min(state.doc.lines, opening.line + MAX_FENCE_LINES);
+  let bodyEnd = scanCeiling === state.doc.lines ? state.doc.length : state.doc.line(scanCeiling).to;
+  for (let n = opening.line + 1; n <= scanCeiling; n++) {
     const line = state.doc.line(n);
     if (line.text.trim().startsWith(opening.marker)) {
       bodyEnd = line.from > bodyStart ? line.from - 1 : line.from;
@@ -160,12 +170,31 @@ export interface FenceDiagnostic {
   source: string;
 }
 
+type ParsedFence = ReturnType<typeof parseFence>;
+
+/**
+ * Parse results by fence text. The linter re-runs over the whole document
+ * after each pause in typing, but only the fence being edited has changed.
+ */
+const parseCache = new Map<string, ParsedFence>();
+const PARSE_CACHE_LIMIT = 256;
+
+function parseCached(spec: FenceSpec, lang: string, body: string): ParsedFence {
+  const key = `${lang}\n${body}`;
+  const hit = parseCache.get(key);
+  if (hit) return hit;
+  const parsed = parseFence(spec, body);
+  if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
+  parseCache.set(key, parsed);
+  return parsed;
+}
+
 /**
  * Validate every widget fence in the document, mapped to editor offsets.
  *
- * Shaped as `@codemirror/lint`'s `Diagnostic` without importing it: the
- * package is not a dependency, and a caller that has it can pass this
- * straight to `linter()`.
+ * Finds fences by their delimiter lines rather than by parsing the markdown,
+ * and only YAML-parses the widget fences. Shaped as `@codemirror/lint`'s
+ * `Diagnostic`; `fenceLinter` wires it in.
  */
 export function fenceDiagnostics(state: EditorState): FenceDiagnostic[] {
   const out: FenceDiagnostic[] = [];
@@ -195,7 +224,7 @@ export function fenceDiagnostics(state: EditorState): FenceDiagnostic[] {
         bodyLines.push(state.doc.line(n).text);
       }
       const body = bodyLines.join("\n");
-      const parsed = parseFence(spec, body);
+      const parsed = parseCached(spec, lang, body);
       const at = (bodyLine?: number) => {
         const target = bodyLine && bodyLine >= 1 ? line + bodyLine : line;
         const l = state.doc.line(Math.min(target, state.doc.lines));
@@ -219,6 +248,10 @@ export function fenceDiagnostics(state: EditorState): FenceDiagnostic[] {
   return out;
 }
 
+/** Inline fence errors for the source editor, once typing pauses. */
+export const fenceLinter = (): Extension =>
+  linter((view) => fenceDiagnostics(view.state), { delay: 500 });
+
 export const fenceCompletion: CompletionSource = fenceKeyCompletionSource;
 
 // ── Live preview ────────────────────────────────────────────────────────────
@@ -238,6 +271,11 @@ export interface FencePreviewTarget {
  * the same `TypedFence` the page uses — a preview that renders through a
  * second code path is a preview that lies.
  */
+export function samePreviewTarget(a: FencePreviewTarget | null, b: FencePreviewTarget | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.lang === b.lang && a.meta === b.meta && a.body === b.body;
+}
+
 export function fencePreviewAt(state: EditorState, pos: number): FencePreviewTarget | null {
   const fence = fenceAtCursor(state, pos);
   if (!fence) return null;

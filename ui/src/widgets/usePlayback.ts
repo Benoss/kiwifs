@@ -1,16 +1,30 @@
-import { useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import {
+  useRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { ensureRootTracking, keyBelongsTo, partHasFocus, useWidgetRoot } from "./widgetRoot";
 import {
+  anonymousClockId,
   clockSnapshot,
   consumeDeepLink,
-  isClockDriver,
   joinClock,
   leaveClock,
-  nextAnonymousClockId,
+  playClock,
+  privateClockId,
   seekClock,
   setClockPlaying,
   setClockSpeed,
+  stepClock,
   subscribeClock,
+  type ClockKind,
+  type ClockSnapshot,
+  type StepTiming,
 } from "./playbackClock";
 import { useClockId } from "./clockContext";
 
@@ -37,6 +51,8 @@ export interface PlaybackControlsBinding {
   onCycleSpeed: () => void;
   /** Identifies the clock for "copy link to this step". */
   clockId?: string;
+  /** A member of the clock is waiting on the reader. */
+  blocked?: boolean;
 }
 
 export interface PlaybackReturn<T> {
@@ -54,7 +70,7 @@ export interface PlaybackReturn<T> {
   setCurrentStep: (step: number) => void;
   /** Cycle through speed presets: 1 → 2 → 4 → 1 */
   cycleSpeed: () => void;
-  /** The clock this playback is driven by. */
+  /** The clock this playback is driven by. Empty until the first commit. */
   clockId: string;
   /** Spread into PlaybackControls, or pass the whole object as `pb`. */
   controls: PlaybackControlsBinding;
@@ -71,14 +87,21 @@ export interface PlaybackOptions {
   loop?: boolean;
   /**
    * Share a step counter with every other playback naming the same clock, and
-   * persist it as `#?step.<id>=N`. Without one, this playback gets a private
-   * clock, as it always had.
+   * persist it as `#?step.<id>=N`. Without one, this playback gets its own
+   * clock, as it always had. `null` opts out of the page entirely: no sharing,
+   * no URL key, no deep-link scroll — for a figure with nothing to play.
    */
-  clock?: string;
+  clock?: string | null;
+  /**
+   * The current step is waiting on the reader. Autoplay pauses and stepping
+   * forward is refused; stepping back, seeking and resetting still work.
+   */
+  blocked?: boolean;
 }
 
 const SPEED_PRESETS = [1, 2, 4];
 const EMPTY_STEP: Step<never> = { state: {} as never, label: "" };
+const noopUnsubscribe = () => {};
 
 /**
  * A step written flat as `{ ...fields, label }` keeps its fields on
@@ -103,78 +126,110 @@ export function usePlayback<T>(
   arg?: React.RefObject<HTMLElement | null> | PlaybackOptions,
 ): PlaybackReturn<T> {
   const opts: PlaybackOptions = isRef(arg) ? { containerRef: arg } : (arg ?? {});
-  const { containerRef, interval = 600, autoPlay = false, loop = false } = opts;
+  const { containerRef, interval = 600, autoPlay = false, loop = false, blocked = false } = opts;
   const list = Array.isArray(steps) ? steps : [];
   const total = Math.max(1, list.length);
   const widgetRoot = useWidgetRoot();
   const inheritedClock = useClockId();
 
-  // One token per hook instance: the clock's member identity, and the key it
-  // uses to decide which member runs the autoplay timer.
-  const member = useRef<object>({});
-  const idRef = useRef<{ id: string; named: boolean } | null>(null);
-  if (!idRef.current) {
-    const named = opts.clock ?? inheritedClock;
-    idRef.current = named
-      ? { id: named, named: true }
-      : { id: nextAnonymousClockId(), named: false };
-  }
-  const { id: clockId, named } = idRef.current;
+  const optedOut = opts.clock === null;
+  const namedId = optedOut ? null : (opts.clock ?? inheritedClock ?? null);
+  const kind: ClockKind = optedOut ? "private" : namedId ? "named" : "anonymous";
 
-  // Register before the first subscribe so the clock knows its length (and
-  // therefore clamps a deep-linked step) on the very first render.
-  joinClock(clockId, named, member.current, total);
+  // One token per hook instance: the clock's member identity, and the key an
+  // unnamed clock's id is allocated against.
+  const [member] = useState<object>(() => ({}));
+  // Unnamed ids are handed out in commit order, which is document order, so
+  // the first stepped widget on a page owns the legacy `#?step=` key. Doing
+  // that during render would let a discarded render burn an id.
+  const [ownId, setOwnId] = useState<string | null>(null);
+  const clockId = namedId ?? ownId;
+
+  useLayoutEffect(() => {
+    if (namedId) return;
+    const id = optedOut ? privateClockId(member) : anonymousClockId(member);
+    if (id !== ownId) setOwnId(id);
+  }, [namedId, optedOut, ownId, member]);
+
+  const listRef = useRef(list);
+  listRef.current = list;
+  const stepAt = useCallback((i: number): StepTiming | undefined => {
+    const raw = listRef.current[i];
+    return raw === undefined ? undefined : normalizeStep(raw);
+  }, []);
 
   const subscribe = useCallback(
-    (fn: () => void) => subscribeClock(clockId, named, fn),
-    [clockId, named],
+    (fn: () => void) => (clockId ? subscribeClock(clockId, kind, fn) : noopUnsubscribe),
+    [clockId, kind],
   );
-  const snapshot = useSyncExternalStore(
-    subscribe,
-    () => clockSnapshot(clockId),
-    () => clockSnapshot(clockId),
+  // Before the first commit nothing is registered; render a still frame
+  // rather than touching the store from render.
+  const local = useMemo<ClockSnapshot>(
+    () => ({ id: "", step: 0, playing: false, speed: 1, total, blocked }),
+    [total, blocked],
   );
+  const read = useCallback(() => (clockId ? clockSnapshot(clockId) : local), [clockId, local]);
+  const snapshot = useSyncExternalStore(subscribe, read, read);
 
-  useEffect(() => {
-    const token = member.current;
-    joinClock(clockId, named, token, total);
-    return () => leaveClock(clockId, token);
-  }, [clockId, named, total]);
+  // Joining can move the step (a deep link, a longer member). The store only
+  // notifies subscribers, and the subscription is a passive effect, so pull
+  // the new frame in before paint instead of flashing the old one.
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useLayoutEffect(() => {
+    if (!clockId) return;
+    const after = joinClock(clockId, kind, member, { total, stepAt, interval, loop, blocked });
+    if (after !== snapshot) rerender();
+    // `snapshot` is read for this commit only; it must not re-run the join.
+  }, [clockId, kind, member, total, stepAt, interval, loop, blocked]);
+
+  useLayoutEffect(() => {
+    if (!clockId) return;
+    return () => leaveClock(clockId, member);
+  }, [clockId, member]);
 
   const currentStep = Math.max(0, Math.min(snapshot.step, total - 1));
   const clockTotal = Math.max(total, snapshot.total);
   const playing = snapshot.playing;
   const speed = snapshot.speed;
 
-  const stop = useCallback(() => setClockPlaying(clockId, false), [clockId]);
+  const stop = useCallback(() => {
+    if (clockId) setClockPlaying(clockId, false);
+  }, [clockId]);
+
   const play = useCallback(() => {
-    if (!loop && clockSnapshot(clockId).step >= clockSnapshot(clockId).total - 1) {
-      seekClock(clockId, 0, { persist: true });
-    }
-    setClockPlaying(clockId, true);
-  }, [clockId, loop]);
+    if (clockId) playClock(clockId);
+  }, [clockId]);
 
   const stepForward = useCallback(() => {
-    seekClock(clockId, clockSnapshot(clockId).step + 1, { persist: true });
+    if (clockId) stepClock(clockId, 1, { persist: true });
   }, [clockId]);
 
   const stepBack = useCallback(() => {
-    seekClock(clockId, clockSnapshot(clockId).step - 1, { persist: true });
+    if (clockId) stepClock(clockId, -1, { persist: true });
   }, [clockId]);
 
   const reset = useCallback(() => {
+    if (!clockId) return;
     setClockPlaying(clockId, false);
     seekClock(clockId, 0, { persist: true });
   }, [clockId]);
 
   const seek = useCallback(
-    (s: number) => seekClock(clockId, s, { persist: true }),
+    (s: number) => {
+      if (clockId) seekClock(clockId, s, { persist: true });
+    },
     [clockId],
   );
 
-  const setSpeed = useCallback((s: number) => setClockSpeed(clockId, s), [clockId]);
+  const setSpeed = useCallback(
+    (s: number) => {
+      if (clockId) setClockSpeed(clockId, s);
+    },
+    [clockId],
+  );
 
   const cycleSpeed = useCallback(() => {
+    if (!clockId) return;
     const idx = SPEED_PRESETS.indexOf(clockSnapshot(clockId).speed);
     setClockSpeed(clockId, SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length]!);
   }, [clockId]);
@@ -185,12 +240,12 @@ export function usePlayback<T>(
   );
 
   useEffect(() => {
-    if (autoPlay) setClockPlaying(clockId, true);
+    if (autoPlay && clockId) playClock(clockId);
   }, [autoPlay, clockId]);
 
   /** Scroll a deep-linked widget into view once, so the link lands on it. */
   useEffect(() => {
-    if (!consumeDeepLink(clockId)) return;
+    if (!clockId || optedOut || !consumeDeepLink(clockId)) return;
     const el = containerRef?.current ?? widgetRoot?.current;
     if (!el) return;
     const timer = setTimeout(() => {
@@ -199,29 +254,10 @@ export function usePlayback<T>(
       setTimeout(() => el.classList.remove("kiwi-widget-flash"), 1200);
     }, 120);
     return () => clearTimeout(timer);
-  }, [clockId, containerRef, widgetRoot]);
-
-  const listRef = useRef(list);
-  listRef.current = list;
+  }, [clockId, optedOut, containerRef, widgetRoot]);
 
   useEffect(() => {
-    if (!playing) return;
-    if (!isClockDriver(clockId, member.current)) return;
-    if (currentStep >= clockTotal - 1 && !loop) {
-      setClockPlaying(clockId, false);
-      return;
-    }
-    const here = normalizeStep<T>(listRef.current[currentStep]);
-    const ms = (here.duration ?? interval) / speed;
-    const timer = setTimeout(() => {
-      const next = currentStep >= clockTotal - 1 ? 0 : currentStep + 1;
-      seekClock(clockId, next);
-      if (normalizeStep(listRef.current[next]).breakpoint) setClockPlaying(clockId, false);
-    }, ms);
-    return () => clearTimeout(timer);
-  }, [playing, currentStep, clockTotal, loop, interval, speed, clockId]);
-
-  useEffect(() => {
+    if (!clockId) return;
     ensureRootTracking();
     const scoped = containerRef?.current;
     const target: EventTarget = scoped ?? document;
@@ -232,19 +268,22 @@ export function usePlayback<T>(
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
       if (!scoped && widgetRoot?.current && !keyBelongsTo(widgetRoot.current, ke.target)) return;
+      // A focused cell owns Space and the arrows; it is moving the reader's
+      // cursor or selecting, not driving the clock. The native listener runs
+      // before React's, so the part's own preventDefault arrives too late.
+      const root = scoped ?? widgetRoot?.current;
+      const partFocused = root ? partHasFocus(root, ke.target) : false;
 
       switch (ke.key) {
         case " ":
-          if (tag === "BUTTON") return;
+          if (tag === "BUTTON" || partFocused) return;
           ke.preventDefault();
-          setClockPlaying(clockId, !clockSnapshot(clockId).playing);
+          if (clockSnapshot(clockId).playing) setClockPlaying(clockId, false);
+          else playClock(clockId);
           break;
         case "ArrowRight":
         case "ArrowLeft": {
-          // A focused cell owns the arrows; it is moving the reader's cursor,
-          // not the clock.
-          const root = widgetRoot?.current;
-          if (root && partHasFocus(root, ke.target)) return;
+          if (partFocused) return;
           ke.preventDefault();
           setClockPlaying(clockId, false);
           if (ke.key === "ArrowRight") stepForward();
@@ -261,6 +300,7 @@ export function usePlayback<T>(
     return () => target.removeEventListener("keydown", handler);
   }, [containerRef, widgetRoot, clockId, stepForward, stepBack, reset]);
 
+  const linkId = optedOut ? undefined : (clockId ?? undefined);
   const controls = useMemo<PlaybackControlsBinding>(() => ({
     currentStep,
     totalSteps: clockTotal,
@@ -273,8 +313,9 @@ export function usePlayback<T>(
     onReset: reset,
     onSeek: seek,
     onCycleSpeed: cycleSpeed,
-    clockId,
-  }), [currentStep, clockTotal, playing, speed, play, stop, stepForward, stepBack, reset, seek, cycleSpeed, clockId]);
+    clockId: linkId,
+    blocked: snapshot.blocked,
+  }), [currentStep, clockTotal, playing, speed, play, stop, stepForward, stepBack, reset, seek, cycleSpeed, linkId, snapshot.blocked]);
 
   return {
     current,
@@ -290,7 +331,7 @@ export function usePlayback<T>(
     setSpeed,
     setCurrentStep: seek,
     cycleSpeed,
-    clockId,
+    clockId: clockId ?? "",
     controls,
   };
 }

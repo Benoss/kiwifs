@@ -5,7 +5,7 @@
  * pulling in `TypedFence` and, through it, every view component.
  */
 
-import { registerFence } from "./registry";
+import { registerFence, registryGeneration } from "./registry";
 import { arraySpec } from "./specs/array";
 import { matrixSpec } from "./specs/matrix";
 import { graphSpec } from "./specs/graph";
@@ -47,7 +47,7 @@ export const BUILTIN_FENCES = [
   stepsSpec,
 ];
 
-let registered = false;
+let registeredAt: number | null = null;
 
 /**
  * Idempotent, and called explicitly rather than relied on as a module side
@@ -56,7 +56,7 @@ let registered = false;
  * an empty fence catalogue.
  */
 export function registerBuiltinFences(): void {
-  if (registered) return;
-  registered = true;
+  if (registeredAt === registryGeneration()) return;
+  registeredAt = registryGeneration();
   for (const spec of BUILTIN_FENCES) registerFence(spec);
 }

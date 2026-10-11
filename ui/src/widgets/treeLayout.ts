@@ -56,8 +56,13 @@ export interface TreeLayoutOptions {
 
 export const DEFAULT_KEY_CELL = 30;
 
+/**
+ * A keyed page without an id is named by its keys (`"10,20"`), so pages are
+ * addressable and don't all share `""`. TreeView suffixes any remaining
+ * duplicates (`#1`) for drawing.
+ */
 function nodeKey(node: LayoutInput): string | number {
-  return node.id ?? node.value ?? "";
+  return node.id ?? node.value ?? (node.keys?.length ? node.keys.join(",") : "");
 }
 
 /** A keyed page is as wide as its keys; everything else is `nodeSize`. */
@@ -323,6 +328,13 @@ export function heapTreeFromArray(
   const build = (i: number, childOrder: number): LayoutInput => {
     const node: LayoutInput = { value: values[i] as string | number, id: i };
     if (edgeLabels && i > 0) node.edgeLabel = `${k}i+${childOrder}`;
+    // Binary heaps use left/right, so a lone left child (the last internal
+    // node of an even-length heap) hangs left instead of straight down.
+    if (k === 2) {
+      if (present(2 * i + 1)) node.left = build(2 * i + 1, 1);
+      if (present(2 * i + 2)) node.right = build(2 * i + 2, 2);
+      return node;
+    }
     const kids: LayoutInput[] = [];
     for (let c = 1; c <= k; c++) {
       const child = k * i + c;

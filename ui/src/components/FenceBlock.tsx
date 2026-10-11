@@ -22,7 +22,7 @@ import { KiwiDataBlock } from "./KiwiDataBlock";
 import { KiwiColor } from "./KiwiColor";
 import { KiwiProgress } from "./KiwiProgress";
 import { KiwiQuery } from "./KiwiQuery";
-import { getFence, sniffFence, TypedFence } from "@kw/fences";
+import { getFence, isStrictTag, sniffFence, TypedFence, type FenceSpec } from "@kw/fences";
 
 /**
  * The blocks that drag a large library in — react-live, pyodide, mermaid,
@@ -93,6 +93,85 @@ export function fenceMeta(node?: any): string {
   return node?.data?.meta || node?.properties?.metastring || "";
 }
 
+type BlockKind =
+  | "code-runner"
+  | "tracker"
+  | "widget"
+  | "query"
+  | "mermaid"
+  | "calc"
+  | "chart"
+  | "color"
+  | "progress"
+  | "playground"
+  | "kanban"
+  | "data"
+  | "steps"
+  | "inline"
+  | "app"
+  | "diff"
+  | "code";
+
+export type FenceRoute = { kind: "typed"; spec: FenceSpec } | { kind: BlockKind };
+
+export interface ResolveFenceOptions {
+  typedFences?: boolean;
+  typedFenceTags?: string[] | null;
+}
+
+const EXACT: Record<string, BlockKind> = {
+  "widget:code": "code-runner",
+  "widget:tracker": "tracker",
+  "kiwi-query": "query",
+  mermaid: "mermaid",
+  "kiwi-calc": "calc",
+  "kiwi-chart": "chart",
+  "kiwi-color": "color",
+  "kiwi-progress": "progress",
+  "kiwi-playground": "playground",
+  "kiwi-kanban": "kanban",
+  // Before the single-line guard: a one-record block is still data.
+  "kiwi-data": "data",
+};
+
+/** Read past the single-line guard, so never offered to the fence registry. */
+const AFTER_GUARD: Record<string, BlockKind> = { "kiwi-app": "app", "kiwi-diff": "diff" };
+
+/** Which renderer a fenced (or inline) code element gets. Pure, for tests. */
+export function resolveFence(
+  lang: string | undefined,
+  raw: string,
+  { typedFences = true, typedFenceTags }: ResolveFenceOptions = {},
+): FenceRoute {
+  if (lang && Object.hasOwn(EXACT, lang)) return { kind: EXACT[lang]! };
+  if (lang?.startsWith("widget:")) return { kind: "widget" };
+
+  // Typed fences own their own "is this really mine?" test, so a ```tree
+  // directory listing or a ```table of pipes still reaches Shiki below.
+  // The workspace switches apply to every tag but the strict `kiwi-` /
+  // `widget:` spellings: an author who wrote `kiwi-array` asked for a widget
+  // and gets one either way.
+  if (lang && !Object.hasOwn(AFTER_GUARD, lang)) {
+    const spec = getFence(lang);
+    if (spec) {
+      const tag = lang.toLowerCase();
+      const allowed =
+        isStrictTag(lang) ||
+        (typedFences &&
+          (!typedFenceTags ||
+            typedFenceTags.some((t) => {
+              const want = t.toLowerCase();
+              return want === tag || want === spec.lang;
+            })));
+      if (allowed && sniffFence(spec, lang, raw)) return { kind: "typed", spec };
+    }
+  }
+
+  if (lang === "kiwi-steps") return { kind: "steps" };
+  if (!lang || !raw.includes("\n")) return { kind: "inline" };
+  return { kind: AFTER_GUARD[lang] ?? "code" };
+}
+
 export function FenceBlock({
   className,
   children,
@@ -105,87 +184,62 @@ export function FenceBlock({
 }: FenceBlockProps) {
   const lang = fenceLang(className);
   const raw = String(children).replace(/\n$/, "");
+  const route = resolveFence(lang, raw, { typedFences, typedFenceTags });
+  const meta = fenceMeta(node);
 
-  if (lang === "widget:code") {
-    const codeLangMatch = fenceMeta(node).match(/lang=(\w+)/);
-    return <Deferred><CodeRunner source={raw} lang={codeLangMatch ? codeLangMatch[1]! : "python"} /></Deferred>;
-  }
-  if (lang === "widget:tracker") {
-    return <Deferred><PageTracker onNavigate={onNavigate} source={raw} /></Deferred>;
-  }
-  if (lang?.startsWith("widget:")) {
-    return (
-      <Deferred>
-        <KiwiWidget name={lang.slice("widget:".length)} source={raw} meta={fenceMeta(node)} onNavigate={onNavigate} />
-      </Deferred>
-    );
-  }
-  if (lang === "kiwi-query") {
-    return <KiwiQuery source={raw} onNavigate={onNavigate} isComputedView={isComputedView} />;
-  }
-  if (lang === "mermaid") {
-    const { focus, dim } = parseMermaidMeta(fenceMeta(node));
-    return <Deferred><MermaidDiagram chart={raw} onNavigate={onNavigate} focus={focus} dim={dim} /></Deferred>;
-  }
-  if (lang === "kiwi-calc") {
-    return <KiwiCalc source={raw} />;
-  }
-  if (lang === "kiwi-chart") {
-    return <Deferred><KiwiChart source={raw} /></Deferred>;
-  }
-  if (lang === "kiwi-color") {
-    return <KiwiColor source={raw} />;
-  }
-  if (lang === "kiwi-progress") {
-    return <KiwiProgress source={raw} />;
-  }
-  if (lang === "kiwi-playground") {
-    return <Deferred><KiwiPlayground source={raw} /></Deferred>;
-  }
-  if (lang === "kiwi-kanban") {
-    return <KiwiKanbanBlock source={raw} />;
-  }
-  if (lang === "kiwi-data") {
-    // Before the single-line guard: a one-record block is still data.
-    return <KiwiDataBlock source={raw} meta={fenceMeta(node)} />;
-  }
-
-  // Typed fences own their own "is this really mine?" test, so a ```tree
-  // directory listing or a ```table of pipes still reaches Shiki below.
-  // The workspace switches apply to bare tags only: an author who wrote
-  // `kiwi-array` asked for a widget and gets one either way.
-  if (lang) {
-    const spec = getFence(lang);
-    const bare = Boolean(spec) && lang === spec!.lang;
-    const allowed =
-      !bare || (typedFences && (!typedFenceTags || typedFenceTags.includes(lang)));
-    if (spec && allowed && sniffFence(spec, lang, raw)) {
-      return <TypedFence spec={spec} source={raw} meta={fenceMeta(node)} onNavigate={onNavigate} />;
+  switch (route.kind) {
+    case "typed":
+      return <TypedFence spec={route.spec} source={raw} meta={meta} onNavigate={onNavigate} />;
+    case "code-runner": {
+      const codeLangMatch = meta.match(/lang=(\w+)/);
+      return <Deferred><CodeRunner source={raw} lang={codeLangMatch ? codeLangMatch[1]! : "python"} /></Deferred>;
+    }
+    case "tracker":
+      return <Deferred><PageTracker onNavigate={onNavigate} source={raw} /></Deferred>;
+    case "widget":
+      return (
+        <Deferred>
+          <KiwiWidget name={lang!.slice("widget:".length)} source={raw} meta={meta} onNavigate={onNavigate} />
+        </Deferred>
+      );
+    case "query":
+      return <KiwiQuery source={raw} onNavigate={onNavigate} isComputedView={isComputedView} />;
+    case "mermaid": {
+      const { focus, dim } = parseMermaidMeta(meta);
+      return <Deferred><MermaidDiagram chart={raw} onNavigate={onNavigate} focus={focus} dim={dim} /></Deferred>;
+    }
+    case "calc":
+      return <KiwiCalc source={raw} />;
+    case "chart":
+      return <Deferred><KiwiChart source={raw} /></Deferred>;
+    case "color":
+      return <KiwiColor source={raw} />;
+    case "progress":
+      return <KiwiProgress source={raw} />;
+    case "playground":
+      return <Deferred><KiwiPlayground source={raw} /></Deferred>;
+    case "kanban":
+      return <KiwiKanbanBlock source={raw} />;
+    case "data":
+      return <KiwiDataBlock source={raw} meta={meta} />;
+    case "steps":
+      return <Deferred><KiwiSteps source={raw} onNavigate={onNavigate} /></Deferred>;
+    case "inline":
+      return (
+        <code className={className} {...(rest as any)}>
+          {children}
+        </code>
+      );
+    case "app":
+      return <Deferred><KiwiApp source={raw} meta={meta} /></Deferred>;
+    case "diff":
+      return <KiwiDiff source={raw} meta={meta} />;
+    case "code": {
+      const titleMatch = meta.match(/title="([^"]+)"/);
+      const title = titleMatch ? titleMatch[1] : undefined;
+      const hlMatch = meta.match(/\{([\d,\s-]+)\}/);
+      const highlightLines = hlMatch ? parseLineRanges(hlMatch[1]!) : undefined;
+      return <ShikiCode code={raw} lang={lang!} title={title} highlightLines={highlightLines} />;
     }
   }
-
-  if (lang === "kiwi-steps") {
-    return <Deferred><KiwiSteps source={raw} onNavigate={onNavigate} /></Deferred>;
-  }
-
-  if (!lang || !raw.includes("\n")) {
-    return (
-      <code className={className} {...(rest as any)}>
-        {children}
-      </code>
-    );
-  }
-
-  const meta = fenceMeta(node);
-  if (lang === "kiwi-app") {
-    return <Deferred><KiwiApp source={raw} meta={meta} /></Deferred>;
-  }
-  if (lang === "kiwi-diff") {
-    return <KiwiDiff source={raw} meta={meta} />;
-  }
-  const titleMatch = meta.match(/title="([^"]+)"/);
-  const title = titleMatch ? titleMatch[1] : undefined;
-  const hlMatch = meta.match(/\{([\d,\s-]+)\}/);
-  const highlightLines = hlMatch ? parseLineRanges(hlMatch[1]!) : undefined;
-  return <ShikiCode code={raw} lang={lang} title={title} highlightLines={highlightLines} />;
 }

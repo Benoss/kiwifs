@@ -9,6 +9,13 @@
 
 export type BitsDecoding = "uint" | "int" | "twos" | "ieee32" | "ieee64" | "hex" | "oct" | "raw";
 
+/**
+ * A bit pattern. A number is exact up to 2^53, which is short of a double's 64
+ * bits, so a bigint or a `"0x3FB999999999999A"` / `"0b1010"` string is how a
+ * page spells a real float64 pattern.
+ */
+export type BitsValue = number | bigint | string;
+
 export interface DecodedBits {
   /** Short label for the summary row, e.g. "two's complement". */
   label: string;
@@ -18,62 +25,71 @@ export interface DecodedBits {
   detail?: string[];
 }
 
-function bitsOf(value: number, width: number): string {
-  // >>> 0 keeps a high bit from printing as a negative; BigInt handles 64-bit.
-  if (width > 32) return BigInt.asUintN(width, BigInt(Math.trunc(value))).toString(2).padStart(width, "0");
-  return (value >>> 0).toString(2).slice(-width).padStart(width, "0");
+const PREFIXED = /^([+-]?)(0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)$/i;
+
+/** The pattern as a bigint; anything unreadable (NaN, "abc") is 0. */
+export function toBigBits(value: BitsValue): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "string") {
+    const m = PREFIXED.exec(value.trim().replace(/_/g, ""));
+    if (m) {
+      const magnitude = BigInt(m[2]!);
+      return m[1] === "-" ? -magnitude : magnitude;
+    }
+    return toBigBits(Number(value));
+  }
+  return Number.isFinite(value) ? BigInt(Math.trunc(value)) : 0n;
+}
+
+function uintBig(value: BitsValue, width: number): bigint {
+  return BigInt.asUintN(width, toBigBits(value));
+}
+
+function bitsOf(value: BitsValue, width: number): string {
+  return uintBig(value, width).toString(2).padStart(width, "0");
 }
 
 /** Unsigned value of the low `width` bits. */
-export function asUint(value: number, width: number): number {
-  if (width >= 53) return Number(BigInt.asUintN(width, BigInt(Math.trunc(value))));
-  return Math.trunc(value) & ((2 ** width) - 1);
+export function asUint(value: BitsValue, width: number): number {
+  if (typeof value === "number" && width < 32) {
+    return Number.isFinite(value) ? (Math.trunc(value) & (2 ** width - 1)) >>> 0 : 0;
+  }
+  return Number(uintBig(value, width));
 }
 
 /** Two's complement reading of the low `width` bits. */
-export function asTwos(value: number, width: number): number {
-  const u = asUint(value, width);
-  const half = 2 ** (width - 1);
-  return u >= half ? u - 2 ** width : u;
+export function asTwos(value: BitsValue, width: number): number {
+  return Number(BigInt.asIntN(width, toBigBits(value)));
 }
 
 /** IEEE-754 single or double, from the raw bit pattern. */
-export function asFloat(value: number, width: 32 | 64): { value: number; parts: string[] } {
-  const buffer = new ArrayBuffer(8);
-  const view = new DataView(buffer);
-  if (width === 32) {
-    view.setUint32(0, asUint(value, 32) >>> 0);
-    const bits = bitsOf(value, 32);
-    return {
-      value: view.getFloat32(0),
-      parts: [
-        `sign ${bits[0]}`,
-        `exponent ${bits.slice(1, 9)} (${parseInt(bits.slice(1, 9), 2) - 127})`,
-        `mantissa ${bits.slice(9)}`,
-      ],
-    };
-  }
-  view.setBigUint64(0, BigInt.asUintN(64, BigInt(Math.trunc(value))));
-  const bits = bitsOf(value, 64);
+export function asFloat(value: BitsValue, width: 32 | 64): { value: number; parts: string[] } {
+  const view = new DataView(new ArrayBuffer(8));
+  const bits = bitsOf(value, width);
+  const expBits = width === 32 ? 8 : 11;
+  const bias = width === 32 ? 127 : 1023;
+  if (width === 32) view.setUint32(0, Number(uintBig(value, 32)));
+  else view.setBigUint64(0, uintBig(value, 64));
+  const expField = bits.slice(1, 1 + expBits);
+  const raw = parseInt(expField, 2);
+  // A zero exponent field is subnormal: the implicit leading bit is 0 and the
+  // exponent is pinned at 1 - bias, not 0 - bias.
+  const exponent = raw === 0 ? 1 - bias : raw - bias;
   return {
-    value: view.getFloat64(0),
-    parts: [
-      `sign ${bits[0]}`,
-      `exponent ${bits.slice(1, 12)} (${parseInt(bits.slice(1, 12), 2) - 1023})`,
-      `mantissa ${bits.slice(12)}`,
-    ],
+    value: width === 32 ? view.getFloat32(0) : view.getFloat64(0),
+    parts: [`sign ${bits[0]}`, `exponent ${expField} (${exponent})`, `mantissa ${bits.slice(1 + expBits)}`],
   };
 }
 
-export function decodeBits(value: number, width: number, as: BitsDecoding): DecodedBits {
+export function decodeBits(value: BitsValue, width: number, as: BitsDecoding): DecodedBits {
   switch (as) {
     case "int":
     case "twos": {
-      const signed = asTwos(value, width);
+      const signed = BigInt.asIntN(width, toBigBits(value));
       return {
         label: "two's complement",
         text: String(signed),
-        detail: signed < 0 ? [`−${asUint(-signed, width)} as ${width} bits`] : undefined,
+        detail: signed < 0n ? [`−${-signed} as ${width} bits`] : undefined,
       };
     }
     case "ieee32": {
@@ -87,21 +103,22 @@ export function decodeBits(value: number, width: number, as: BitsDecoding): Deco
     case "hex":
       return {
         label: "hex",
-        text: `0x${asUint(value, width).toString(16).toUpperCase().padStart(Math.ceil(width / 4), "0")}`,
+        text: `0x${uintBig(value, width).toString(16).toUpperCase().padStart(Math.ceil(width / 4), "0")}`,
       };
     case "oct":
-      return { label: "octal", text: `0o${asUint(value, width).toString(8)}` };
+      return { label: "octal", text: `0o${uintBig(value, width).toString(8)}` };
     case "raw":
       return { label: "bits", text: bitsOf(value, width) };
     case "uint":
     default:
-      return { label: "unsigned", text: String(asUint(value, width)) };
+      return { label: "unsigned", text: String(uintBig(value, width)) };
   }
 }
 
 function formatFloat(f: number): string {
   if (Number.isNaN(f)) return "NaN";
   if (!Number.isFinite(f)) return f > 0 ? "+∞" : "−∞";
+  if (Object.is(f, -0)) return "-0";
   if (Number.isInteger(f) && Math.abs(f) < 1e15) return String(f);
   // Enough digits to round-trip without printing 17 of them for 0.1.
   return String(Number(f.toPrecision(9)));
@@ -117,17 +134,19 @@ export interface BitField {
 }
 
 /** The value of a named field, read out of the pattern. */
-export function fieldValue(value: number, field: BitField): number {
+export function fieldValue(value: BitsValue, field: BitField): number {
   const lo = Math.min(field.from, field.to);
   const hi = Math.max(field.from, field.to);
-  const width = hi - lo + 1;
-  return asUint(Math.trunc(value) >>> lo, width);
+  return Number(BigInt.asUintN(hi - lo + 1, toBigBits(value) >> BigInt(lo)));
 }
 
-/** `value` with bit `bit` flipped. */
-export function toggleBit(value: number, bit: number): number {
-  if (bit >= 31) {
-    return Number(BigInt.asUintN(53, BigInt(Math.trunc(value)) ^ (1n << BigInt(bit))));
-  }
-  return Math.trunc(value) ^ (1 << bit);
+/**
+ * `value` with bit `bit` flipped. A number comes back as a number; a bigint or
+ * string pattern comes back as a bigint so 64-bit patterns stay exact.
+ */
+export function toggleBit(value: number, bit: number): number;
+export function toggleBit(value: BitsValue, bit: number): number | bigint;
+export function toggleBit(value: BitsValue, bit: number): number | bigint {
+  const flipped = toBigBits(value) ^ (1n << BigInt(bit));
+  return typeof value === "number" ? Number(flipped) : flipped;
 }

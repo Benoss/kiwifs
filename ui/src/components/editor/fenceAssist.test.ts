@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { fenceAtCursor, fenceDiagnostics, fenceKeyCompletionSource, fencePreviewAt } from "./fenceAssist";
+import {
+  MAX_FENCE_LINES,
+  fenceAtCursor,
+  fenceDiagnostics,
+  fenceKeyCompletionSource,
+  fenceLinter,
+  fencePreviewAt,
+  samePreviewTarget,
+} from "./fenceAssist";
 import type { CompletionContext } from "@codemirror/autocomplete";
 
 function state(doc: string): EditorState {
@@ -163,5 +171,40 @@ describe("fencePreviewAt", () => {
   it("returns nothing outside a widget fence", () => {
     const { state: st, pos } = at("# Heading\n\n|\n");
     expect(fencePreviewAt(st, pos)).toBeNull();
+  });
+});
+
+describe("bounded scanning", () => {
+  it("does not look further back than MAX_FENCE_LINES for an opening fence", () => {
+    const prose = "text\n".repeat(MAX_FENCE_LINES + 5);
+    const { state: st, pos } = at("```array\n" + prose + "|\n");
+    expect(fenceAtCursor(st, pos)).toBeNull();
+  });
+
+  it("still finds a fence within the window", () => {
+    const { state: st, pos } = at("```array\n" + "values: [1]\n".repeat(50) + "|\n```\n");
+    expect(fenceAtCursor(st, pos)?.lang).toBe("array");
+  });
+});
+
+describe("samePreviewTarget", () => {
+  it("compares by content, not identity", () => {
+    const a = { lang: "array", body: "values: [1]", meta: "" };
+    expect(samePreviewTarget(a, { ...a })).toBe(true);
+    expect(samePreviewTarget(a, { ...a, body: "values: [2]" })).toBe(false);
+    expect(samePreviewTarget(null, null)).toBe(true);
+    expect(samePreviewTarget(a, null)).toBe(false);
+  });
+});
+
+describe("fenceLinter", () => {
+  it("builds a CodeMirror extension", () => {
+    expect(() => EditorState.create({ doc: "```array\nvalues: [1]\n```\n", extensions: fenceLinter() })).not.toThrow();
+  });
+
+  it("returns the same diagnostics for an unchanged fence on a re-run", () => {
+    const st = state("```array\nvaluez: [1]\n```\n");
+    expect(fenceDiagnostics(st)).toEqual(fenceDiagnostics(st));
+    expect(fenceDiagnostics(st).length).toBeGreaterThan(0);
   });
 });

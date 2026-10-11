@@ -77,3 +77,48 @@ func TestRewriteWidgetFencesHandlesAFenceWithNoProse(t *testing.T) {
 		t.Errorf("expected the data:\n%s", got)
 	}
 }
+
+func TestRewriteWidgetFencesOutlastsBackticksInTheBody(t *testing.T) {
+	page := "````array\nvalues: [1]\ncode: |\n  ```python\n  x = 1\n  ```\n````\n"
+	got := string(RewriteWidgetFences([]byte(page)))
+	if !strings.Contains(got, "````yaml\n") {
+		t.Fatalf("expected a four-backtick fence around a body holding three:\n%s", got)
+	}
+	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "````") {
+		t.Errorf("expected the YAML block to close with the same marker:\n%s", got)
+	}
+}
+
+func TestRewriteWidgetFencesKeepsCodeOutOfTheProse(t *testing.T) {
+	page := "```array\nvalues: [1]\ncaption: A sweep\ncode: \"lo, hi = 0, 1\"\n```\n"
+	got := string(RewriteWidgetFences([]byte(page)))
+	if strings.Contains(got, "> lo, hi") {
+		t.Errorf("the code is in the YAML block; it must not be blockquoted too:\n%s", got)
+	}
+	if !strings.Contains(got, "> A sweep") || !strings.Contains(got, `code: "lo, hi = 0, 1"`) {
+		t.Errorf("expected the caption quoted and the code kept as data:\n%s", got)
+	}
+}
+
+func TestRewriteWidgetFencesStaysInsideAListItem(t *testing.T) {
+	page := "- Step one\n\n  ```array\n  values: [1]\n  caption: Listed\n  ```\n\n- Step two\n"
+	got := string(RewriteWidgetFences([]byte(page)))
+	for _, want := range []string{"  > Listed", "  ```yaml", "  values: [1]", "- Step two"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in:\n%s", want, got)
+		}
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if line != "" && !strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "- ") {
+			t.Errorf("line escaped the list item: %q\n%s", line, got)
+		}
+	}
+}
+
+func TestRewriteWidgetFencesUsesTheOpeningLineCaption(t *testing.T) {
+	page := "```array caption=\"From the fence line\"\nvalues: [1]\n```\n"
+	got := string(RewriteWidgetFences([]byte(page)))
+	if !strings.HasPrefix(got, "> From the fence line\n") {
+		t.Errorf("expected the opening-line caption first:\n%s", got)
+	}
+}

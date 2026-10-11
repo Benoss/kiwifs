@@ -20,12 +20,35 @@ function num(n: number, singular: string, plural = `${singular}s`): string {
   return `${n} ${n === 1 ? singular : plural}`;
 }
 
+/**
+ * Display text for a value an author or a model may have handed over in any
+ * shape. Objects and arrays read as truncated JSON rather than
+ * `[object Object]`.
+ */
+export function shortText(v: unknown, max = 60): string {
+  if (v == null) return String(v);
+  if (typeof v !== "object" && typeof v !== "function") return String(v);
+  let text: string;
+  try {
+    text = JSON.stringify(v) ?? String(v);
+  } catch {
+    text = Array.isArray(v) ? "[…]" : "{…}";
+  }
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** Only the plain objects in what should have been a list of them. */
+export function objectsOf<T extends object>(value: unknown): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is T => typeof v === "object" && v !== null && !Array.isArray(v));
+}
+
 function cellText(v: unknown): string {
   if (v == null) return "empty";
   if (v === Infinity) return "infinity";
   if (v === -Infinity) return "negative infinity";
   if (typeof v === "boolean") return v ? "true" : "false";
-  return String(v);
+  return shortText(v);
 }
 
 function list(values: readonly unknown[]): string {
@@ -294,25 +317,30 @@ export function summarizeNumberLine(opts: {
   points?: readonly { x: number; label?: string }[];
   intervals?: readonly { from: number; to: number; label?: string }[];
 }): string {
+  const points = objectsOf<{ x: number }>(opts.points);
+  const intervals = objectsOf<{ from: number; to: number }>(opts.intervals);
   return sentence(
-    `number line from ${opts.min ?? 0} to ${opts.max ?? 0}`,
-    opts.points?.length ? `${num(opts.points.length, "point")} at ${list(opts.points.map((p) => p.x))}` : "",
-    opts.intervals?.length
-      ? `intervals ${opts.intervals.slice(0, MAX_ITEMS).map((i) => `${i.from} to ${i.to}`).join(", ")}`
+    `number line from ${cellText(opts.min ?? 0)} to ${cellText(opts.max ?? 0)}`,
+    points.length ? `${num(points.length, "point")} at ${list(points.map((p) => p.x))}` : "",
+    intervals.length
+      ? `intervals ${intervals.slice(0, MAX_ITEMS).map((i) => `${cellText(i.from)} to ${cellText(i.to)}`).join(", ")}`
       : "",
   );
 }
 
 export function summarizeTable(opts: {
-  columns?: readonly { key: string; label?: string }[];
+  columns?: readonly ({ key: string; label?: string } | string)[];
   rows?: readonly unknown[];
   caption?: string;
 }): string {
-  const columns = opts.columns ?? [];
+  const columns = (Array.isArray(opts.columns) ? opts.columns : []).filter(
+    (c): c is { key: string; label?: string } | string => typeof c === "string" || (typeof c === "object" && c !== null),
+  );
+  const rows = Array.isArray(opts.rows) ? opts.rows : [];
   return sentence(
-    opts.caption,
-    `table of ${num((opts.rows ?? []).length, "row")} and ${num(columns.length, "column")}`,
-    columns.length ? `columns ${list(columns.map((c) => c.label ?? c.key))}` : "",
+    typeof opts.caption === "string" ? opts.caption : "",
+    `table of ${num(rows.length, "row")} and ${num(columns.length, "column")}`,
+    columns.length ? `columns ${list(columns.map((c) => (typeof c === "string" ? c : c.label ?? c.key)))}` : "",
   );
 }
 
@@ -320,18 +348,22 @@ export function summarizeMap(opts: {
   mode?: string;
   capacity?: number;
   slots?: readonly unknown[];
-  entries?: readonly { key: string | number }[];
+  entries?: readonly { key: string | number }[] | Readonly<Record<string, unknown>>;
 }): string {
-  if (opts.entries) {
-    return sentence(
-      `map of ${num(opts.entries.length, "entry")}`,
-      `keys ${list(opts.entries.map((e) => e.key))}`,
-    );
+  if (opts.entries != null && typeof opts.entries === "object") {
+    const keys = Array.isArray(opts.entries)
+      ? objectsOf<{ key: unknown }>(opts.entries).map((e) => e.key)
+      : Object.keys(opts.entries);
+    return sentence(`map of ${num(keys.length, "entry", "entries")}`, keys.length ? `keys ${list(keys)}` : "");
   }
-  const slots = opts.slots ?? [];
+  const slots = Array.isArray(opts.slots) ? opts.slots : [];
   const used = slots.filter((s) => s != null && s !== "DEL").length;
+  const capacity =
+    typeof opts.capacity === "number" && Number.isFinite(opts.capacity)
+      ? Math.max(0, Math.trunc(opts.capacity))
+      : slots.length;
   return sentence(
-    `hash table of ${num(opts.capacity ?? slots.length, "slot")}`,
+    `hash table of ${num(capacity, "slot")}`,
     `${used} occupied`,
     opts.mode && opts.mode !== "map" ? `${opts.mode} collision resolution` : "",
   );
@@ -348,12 +380,13 @@ export function summarizePlane(opts: {
   yMax?: number;
 }): string {
   const shapes: string[] = [];
-  if (opts.points?.length) shapes.push(num(opts.points.length, "point"));
-  if (opts.segments?.length) shapes.push(num(opts.segments.length, "segment"));
-  if (opts.polygons?.length) shapes.push(num(opts.polygons.length, "polygon"));
-  if (opts.circles?.length) shapes.push(num(opts.circles.length, "circle"));
+  const count = (v: readonly unknown[] | undefined) => (Array.isArray(v) ? v.length : 0);
+  if (count(opts.points)) shapes.push(num(count(opts.points), "point"));
+  if (count(opts.segments)) shapes.push(num(count(opts.segments), "segment"));
+  if (count(opts.polygons)) shapes.push(num(count(opts.polygons), "polygon"));
+  if (count(opts.circles)) shapes.push(num(count(opts.circles), "circle"));
   return sentence(
-    `coordinate plane from (${opts.xMin ?? 0}, ${opts.yMin ?? 0}) to (${opts.xMax ?? 0}, ${opts.yMax ?? 0})`,
+    `coordinate plane from (${cellText(opts.xMin ?? 0)}, ${cellText(opts.yMin ?? 0)}) to (${cellText(opts.xMax ?? 0)}, ${cellText(opts.yMax ?? 0)})`,
     shapes.join(", "),
   );
 }

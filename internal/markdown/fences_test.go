@@ -300,8 +300,8 @@ func TestIndexableContentKeepsAnUnclaimedTreeFence(t *testing.T) {
 
 func TestStripWidgetFencesCanRewriteForExport(t *testing.T) {
 	page := "```array\nvalues: [1]\ncaption: A sweep\n```\n"
-	got := StripWidgetFences(page, func(lang, summary, _ string) string {
-		return "> " + lang + ": " + summary
+	got := StripWidgetFences(page, func(b WidgetFenceBlock) string {
+		return "> " + b.Lang + ": " + b.Prose(true)
 	})
 	if !strings.Contains(got, "> array: A sweep") {
 		t.Errorf("unexpected rewrite: %q", got)
@@ -310,8 +310,312 @@ func TestStripWidgetFencesCanRewriteForExport(t *testing.T) {
 
 func TestStripWidgetFencesKeepsAnUnclosedFenceVerbatim(t *testing.T) {
 	page := "```array\nvalues: [1]\n"
-	got := StripWidgetFences(page, func(_, summary, _ string) string { return summary })
+	got := StripWidgetFences(page, func(b WidgetFenceBlock) string { return b.Prose(true) })
 	if !strings.Contains(got, "values: [1]") {
 		t.Errorf("an unclosed fence must not lose its body: %q", got)
+	}
+}
+
+func page(body string) string {
+	return "---\ntitle: t\n---\n\n" + body + "\n"
+}
+
+func TestBareAliasesAreSniffed(t *testing.T) {
+	// Every spelling other than kiwi-…/widget:… has to coexist with vaults
+	// that already use the word for a code block.
+	for _, lang := range []string{"steps", "grid", "dp", "heap", "seq", "gantt", "schedule", "histogram", "geometry", "relation", "hashmap", "bitmask", "array", "tree"} {
+		src := page("```" + lang + "\nFirst do this, then that.\nNothing here is YAML: or a widget.\n```")
+		if issues := lintFenceSource(t, src); len(issues) != 0 {
+			t.Errorf("```%s of prose must not be linted: %+v", lang, issues)
+		}
+	}
+}
+
+func TestStrictSpellingsAlwaysClaim(t *testing.T) {
+	for _, lang := range []string{"kiwi-steps", "kiwi-grid", "widget:array", "Kiwi-Array", "WIDGET:tree"} {
+		src := page("```" + lang + "\nFirst do this, then that.\n```")
+		issues := lintFenceSource(t, src)
+		if len(issues) != 1 || issues[0].Severity != "error" {
+			t.Errorf("```%s asked to be checked, got %+v", lang, issues)
+		}
+	}
+}
+
+func TestBareAliasClaimsAMappingWithARequiredKey(t *testing.T) {
+	src := page("```dp\nvalues: [[1, 2]]\nactiveIndicies: [0]\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "activeIndicies") {
+		t.Fatalf("a dp body carrying values: is a matrix, got %+v", issues)
+	}
+	// A mapping without any required key is somebody else's YAML.
+	if issues := lintFenceSource(t, page("```gantt\ntitle: Q3\ndateFormat: YYYY\n```")); len(issues) != 0 {
+		t.Fatalf("expected nothing for an unclaimed mapping, got %+v", issues)
+	}
+}
+
+func TestSniffLooksInTheFirstStep(t *testing.T) {
+	src := page("```bits\nbitz: 4\nsteps:\n  - value: 1\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, `unknown key "bitz"`) {
+		t.Fatalf("value: in step one claims the body, got %+v", issues)
+	}
+}
+
+func TestWidgetFenceLookupIgnoresCase(t *testing.T) {
+	bare, _ := WidgetFence("array")
+	for _, tag := range []string{"ARRAY", "Kiwi-Array", "Widget:Array"} {
+		if got, ok := WidgetFence(tag); !ok || got != bare {
+			t.Errorf("%s did not resolve to the array spec", tag)
+		}
+	}
+}
+
+func TestStrictAliasesFromTheCatalogue(t *testing.T) {
+	spec := &FenceSpec{Lang: "thing", StrictAliases: []string{"Thing!"}}
+	indexSpec(spec)
+	if !isStrictTag(spec, "thing!") {
+		t.Error("a listed strict alias must be strict, ignoring case")
+	}
+	if isStrictTag(spec, "thing") {
+		t.Error("the bare tag must be sniffed")
+	}
+	if !isStrictTag(spec, "kiwi-thing") {
+		t.Error("the kiwi- prefix is strict even when the list omits it")
+	}
+}
+
+func TestRequiredHoldsOnBaseAndFirstStepOnly(t *testing.T) {
+	src := page("```kiwi-bits\nbits: 4\nsteps:\n  - label: start\n  - value: 1\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, `missing required key "value"`) {
+		t.Fatalf("value: arriving in step two does not satisfy step one, got %+v", issues)
+	}
+}
+
+func TestStepsAndFramesTogetherWarn(t *testing.T) {
+	src := page("```array\nvalues: [1]\nsteps:\n  - note: a\nframes:\n  - values: [2]\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 || issues[0].Severity != "warning" || !strings.Contains(issues[0].Message, "not both") {
+		t.Fatalf("expected one steps-and-frames warning, got %+v", issues)
+	}
+	if issues[0].Line != 9 {
+		t.Errorf("expected the frames: line 9, got %d", issues[0].Line)
+	}
+}
+
+func TestKiwiStepsRequiresSteps(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing": "diagram: |\n  graph LR\n    A --> B",
+		"empty":   "diagram: |\n  graph LR\n    A --> B\nsteps: []",
+	} {
+		issues := lintFenceSource(t, page("```kiwi-steps\n"+body+"\n```"))
+		found := false
+		for _, issue := range issues {
+			if issue.Severity == "error" && strings.Contains(issue.Message, "non-empty") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected a non-empty steps error, got %+v", name, issues)
+		}
+	}
+	old := "diagram: |\n  graph LR\n    A --> B\nsteps:\n  - focus: A, B\n    dim: [B]\n  - focus: [B]\n"
+	if issues := lintFenceSource(t, page("```kiwi-steps\n"+old+"```")); len(issues) != 0 {
+		t.Errorf("old-format kiwi-steps should lint clean, got %+v", issues)
+	}
+}
+
+func TestReclaimsFromTheCatalogue(t *testing.T) {
+	spec := &FenceSpec{
+		Lang:       "boxes",
+		Reclaims:   []string{"title"},
+		Attributes: map[string]FenceAttribute{"title": {Type: "number"}, "values": {Type: "array"}},
+	}
+	indexSpec(spec)
+	if !spec.reclaims("title") {
+		t.Fatal("expected title to be reclaimed")
+	}
+	if spec.reclaims("frames") {
+		t.Error("an explicit reclaims list replaces the frames fallback")
+	}
+	issues := validateWidgetBody(widgetFenceBlock{lang: "boxes", spec: spec, line: 1}, parseWidgetFence(spec, "boxes", "values: [1]\ntitle: hello\n"))
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, `"title" must be number`) {
+		t.Fatalf("a reclaimed key is a prop and gets checked, got %+v", issues)
+	}
+}
+
+func TestCheckTypePattern(t *testing.T) {
+	attr := FenceAttribute{Type: "string", Pattern: "^[a-z]+$"}
+	if msg := checkType("id", attr, "abc"); msg != "" {
+		t.Errorf("unexpected %q", msg)
+	}
+	if msg := checkType("id", attr, "ABC"); !strings.Contains(msg, "must match") {
+		t.Errorf("expected a pattern failure, got %q", msg)
+	}
+	if msg := checkType("id", FenceAttribute{Type: "string", Pattern: "(?<=a)b"}, "x"); msg != "" {
+		t.Errorf("a JS-only pattern is left to the UI, got %q", msg)
+	}
+}
+
+func TestStepPatchWithNonStringKeys(t *testing.T) {
+	src := page("```array\nvalues: [1]\nsteps:\n  - {0: x}\n```")
+	for _, issue := range lintFenceSource(t, src) {
+		if strings.Contains(issue.Message, "must be a mapping") {
+			t.Fatalf("a mapping keyed by numbers is still a mapping: %+v", issue)
+		}
+	}
+}
+
+func TestStepIssuePointsIntoItsOwnStep(t *testing.T) {
+	src := page("```array\nvalues: [1]\nsteps:\n  - offset: 1\n  - note: x\n  - offset: bad\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %+v", issues)
+	}
+	// Line 10 is the third step's `offset:`, not the first one on line 8.
+	if issues[0].Line != 10 {
+		t.Errorf("expected line 10, got %d (%s)", issues[0].Line, issues[0].Message)
+	}
+}
+
+func TestYAMLErrorLineIsInsideTheFence(t *testing.T) {
+	src := page("```kiwi-array\nvalues: [1]\ncaption: ok\nbad: : :\n```")
+	issues := lintFenceSource(t, src)
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %+v", issues)
+	}
+	// The fence opens on line 5; the broken line is 8.
+	if issues[0].Line != 8 {
+		t.Errorf("expected the parse error on line 8, got %d (%s)", issues[0].Line, issues[0].Message)
+	}
+}
+
+func TestFenceOptionsDisableBareTags(t *testing.T) {
+	src := page("```array\nvalues: [1]\nactiveIndicies: [0]\n```\n\n```kiwi-array\nvalues: [1]\nactiveIndicies: [0]\n```")
+	var got []LintIssue
+	for _, issue := range LintMarkdownWithOptions([]byte(src), FenceOptions{DisableBare: true}) {
+		if issue.Rule == "fence-widget-invalid" {
+			got = append(got, issue)
+		}
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0].Message, "kiwi-array") {
+		t.Fatalf("only the explicit spelling should be checked, got %+v", got)
+	}
+
+	only := FenceOptions{BareTags: []string{"tree"}}
+	if issues := LintMarkdownWithOptions([]byte(page("```array\nvalues: [1]\nbogus: 1\n```")), only); len(issues) != 0 {
+		t.Fatalf("array is not in typed_fence_tags, got %+v", issues)
+	}
+	stripped := IndexableContentWithOptions("```array\nvalues: [1]\n```\n", FenceOptions{DisableBare: true})
+	if !strings.Contains(stripped, "values: [1]") {
+		t.Errorf("a disabled bare tag is a code block and must be indexed as one: %q", stripped)
+	}
+}
+
+func TestStripWidgetFencesSkipsExamplesInsideOtherFences(t *testing.T) {
+	for _, page := range []string{
+		"````markdown\n```array\nvalues: [1]\n```\n````\n",
+		"~~~\n```array\nvalues: [1]\n```\n~~~\n",
+		"```text\n~~~array\nvalues: [1]\n~~~\n```\n",
+	} {
+		if got := IndexableContent(page); got != page {
+			t.Errorf("a fence shown inside another block is text:\n got %q\nwant %q", got, page)
+		}
+	}
+}
+
+func TestLintSkipsExamplesInsideOtherFences(t *testing.T) {
+	src := page("````markdown\n```kiwi-array\nnot: [valid\n```\n````")
+	if issues := lintFenceSource(t, src); len(issues) != 0 {
+		t.Fatalf("a fence shown inside another block is text: %+v", issues)
+	}
+}
+
+func TestStripWidgetFencesHandlesTildesAndLongMarkers(t *testing.T) {
+	for _, page := range []string{
+		"~~~array\nvalues: [1]\ncaption: Tilde\n~~~\n",
+		"````array\nvalues: [1]\ncaption: Tilde\n````\n",
+	} {
+		got := IndexableContent(page)
+		if strings.Contains(got, "values:") || !strings.Contains(got, "Tilde") {
+			t.Errorf("expected the fence reduced to its caption, got %q", got)
+		}
+	}
+}
+
+func TestStripWidgetFencesKeepsListIndentation(t *testing.T) {
+	page := "1. Step one\n\n   ```array\n   values: [1]\n   caption: In a list\n   ```\n\n2. Step two\n"
+	got := StripWidgetFences(page, func(b WidgetFenceBlock) string {
+		return "> " + b.Caption + "\n\n" + b.Source
+	})
+	for _, want := range []string{"   > In a list", "   values: [1]", "2. Step two"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "```") {
+		t.Errorf("the fence should be replaced:\n%s", got)
+	}
+}
+
+func TestOpeningLineCaptionLeadsTheSummary(t *testing.T) {
+	source := "participants: [{id: A}, {id: B}]\nitems: [{from: A, to: B}]\ncaption: body caption\nsteps:\n  - note: A asks B\n"
+	got := SummarizeWidgetFenceWithMeta("sequence", `id=cache caption="Cache miss path" title='The cache'`, source)
+	want := "The cache\nCache miss path\nA asks B"
+	if got != want {
+		t.Errorf("summary:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestIndexableContentUsesTheOpeningLineCaption(t *testing.T) {
+	page := "```array id=a caption=\"Two-pointer sweep\" loop\nvalues: [1, 2]\n```\n"
+	got := IndexableContent(page)
+	if !strings.HasPrefix(got, "Two-pointer sweep") {
+		t.Errorf("expected the caption first, got %q", got)
+	}
+}
+
+func TestIndexableContentNeverIndexesRawYAML(t *testing.T) {
+	for _, page := range []string{
+		"```array\nvalues: [1, 2]\n```\n",
+		"```kiwi-array\nvalues: [1,\n```\n",
+		"```kiwi-array\n- just\n- a list\n```\n",
+	} {
+		got := IndexableContent(page)
+		if strings.Contains(got, "values") || strings.Contains(got, "just") {
+			t.Errorf("raw YAML reached the index: %q", got)
+		}
+		if !strings.Contains(got, "array widget") {
+			t.Errorf("expected a placeholder, got %q", got)
+		}
+	}
+}
+
+func TestIndexableContentKeepsLabels(t *testing.T) {
+	page := "```graph\nnodes:\n  - {id: A, label: Start node}\n  - {id: B, label: Finish line}\nedges: [{from: A, to: B}]\nnodeColors: {A: \"#ff0000\"}\n```\n"
+	got := IndexableContent(page)
+	for _, want := range []string{"Start node", "Finish line"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "#ff0000") || strings.Contains(got, "nodes") {
+		t.Errorf("styling and keys must not be indexed: %q", got)
+	}
+}
+
+func TestIndexableContentBoundsHarvestedText(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("```array\nvalues:\n")
+	for i := 0; i < 400; i++ {
+		b.WriteString("  - word" + strings.Repeat("x", i%7) + itoa(i) + "\n")
+	}
+	b.WriteString("```\n")
+	got := IndexableContent(b.String())
+	if n := len([]rune(strings.TrimSpace(got))); n > maxFenceIndexText {
+		t.Errorf("harvested text should be capped at %d chars, got %d", maxFenceIndexText, n)
+	}
+	if !strings.Contains(got, "word0") {
+		t.Errorf("expected the first cells to be kept: %q", got)
 	}
 }

@@ -27,6 +27,8 @@ export interface NotatedCode {
   hasFocus: boolean;
   /** Words to underline, from `[!code word:foo]`. */
   words: string[];
+  /** For each output row (index row - 1), its 1-based line in the original source. */
+  sourceLines: number[];
 }
 
 const KIND_ALIASES: Record<string, NotationKind> = {
@@ -71,11 +73,16 @@ export function parseNotation(code: string): NotatedCode {
   const out: string[] = [];
   /** Markers on their own line apply to the following `count` lines. */
   const pending: { kind: NotationKind; remaining: number }[] = [];
+  const sourceLines: number[] = [];
 
-  for (const raw of input) {
+  for (const [index, raw] of input.entries()) {
+    const emit = (text: string) => {
+      out.push(text);
+      sourceLines.push(index + 1);
+    };
     const match = MARKER.exec(raw);
     if (!match) {
-      out.push(raw);
+      emit(raw);
       const row = out.length;
       for (const p of pending) {
         if (p.remaining > 0) {
@@ -90,13 +97,13 @@ export function parseNotation(code: string): NotatedCode {
     if (/^word:/i.test(token)) {
       words.push(token.slice(5).trim());
       const stripped = raw.slice(0, match.index).replace(/\s+$/, "");
-      if (stripped !== "") out.push(stripped);
+      if (stripped !== "") emit(stripped);
       continue;
     }
 
     const kind = KIND_ALIASES[token.toLowerCase()];
     if (!kind) {
-      out.push(raw);
+      emit(raw);
       continue;
     }
 
@@ -110,7 +117,7 @@ export function parseNotation(code: string): NotatedCode {
       continue;
     }
 
-    out.push(stripped);
+    emit(stripped);
     const row = out.length;
     lines[kind].add(row);
     if (span > 1) pending.push({ kind, remaining: span - 1 });
@@ -122,7 +129,21 @@ export function parseNotation(code: string): NotatedCode {
     }
   }
 
-  return { code: out.join("\n"), lines, hasFocus: lines.focus.size > 0, words };
+  return { code: out.join("\n"), lines, hasFocus: lines.focus.size > 0, words, sourceLines };
+}
+
+/**
+ * Fold a fence's `{1,3}` meta highlights into the notation's own, so a block
+ * using both keeps both. Meta numbers count lines of the source as written,
+ * marker lines included, which is what the author sees in the file.
+ */
+export function withSourceHighlights(notated: NotatedCode, highlightLines: ReadonlySet<number>): NotatedCode {
+  if (highlightLines.size === 0) return notated;
+  const highlight = new Set(notated.lines.highlight);
+  notated.sourceLines.forEach((line, i) => {
+    if (highlightLines.has(line)) highlight.add(i + 1);
+  });
+  return { ...notated, lines: { ...notated.lines, highlight } };
 }
 
 /** CSS class for a line, given everything the notation said about it. */

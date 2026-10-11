@@ -25,14 +25,17 @@ export const memorySpec: FenceSpec = {
       heap: {
         type: "object",
         description:
-          'Objects by id, tagged: `["LIST", 1, 2]`, `["DICT", ["k", 1]]`, `["INSTANCE", "Node", ["val", 1]]`, `["TUPLE", …]`, `["SET", …]`.',
+          'Objects by id, tagged: `["LIST", 1, 2]`, `["DICT", ["k", 1]]`, `["INSTANCE", "Node", ["val", 1]]`, `["TUPLE", …]`, `["SET", …]`. An untagged `{field: value}` draws as an object\'s fields.',
       },
-      activeFrame: { type: ["string", "number"], description: "Which frame is executing. Defaults to the innermost." },
+      activeFrame: {
+        type: ["string", "number"],
+        description: "Which frame is executing: a frame `id`, or a number for its index in `frames`. Defaults to the innermost.",
+      },
       activeIds: many("Heap ids to emphasise this step."),
       highlightIds: many("Secondary-highlighted heap ids."),
       dimIds: many("Dimmed heap ids — garbage, or a frame about to return."),
       inlinePrimitives: bool(
-        "Draw a primitive inside its slot rather than as its own box. Default true.",
+        "Draw a frame variable's primitive inside its slot. Default true; `false` boxes each one on the heap with an arrow, Python Tutor's \"render all objects on the heap\".",
         false,
       ),
       framesLabel: string('Caption above the frames column. Default "Frames".', false),

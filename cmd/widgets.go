@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -42,9 +43,9 @@ nothing else, and print the typed fence each would become.
 Heuristic, and deliberately read-only: a block that computes anything is left
 alone, and nothing is rewritten. The drafts are a starting point — run
 ` + "`kiwifs check`" + ` on the result.`,
-	Example: `  kiwifs widgets suggest ~/knowledge
+	Example: `  kiwifs widgets suggest --root ~/knowledge
   kiwifs widgets suggest page.md
-  kiwifs widgets suggest ~/knowledge --json`,
+  kiwifs widgets suggest --json`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runWidgetsSuggest,
 }
@@ -52,6 +53,7 @@ alone, and nothing is rewritten. The drafts are a starting point — run
 func init() {
 	widgetsListCmd.Flags().Bool("json", false, "emit JSON instead of the human summary")
 	widgetsSuggestCmd.Flags().Bool("json", false, "emit JSON instead of the human summary")
+	widgetsSuggestCmd.Flags().StringP("root", "r", "./knowledge", "knowledge root directory, scanned when no path is given")
 	widgetsCmd.AddCommand(widgetsListCmd)
 	widgetsCmd.AddCommand(widgetsSuggestCmd)
 	rootCmd.AddCommand(widgetsCmd)
@@ -138,13 +140,13 @@ type fileSuggestions struct {
 
 func runWidgetsSuggest(cmd *cobra.Command, args []string) error {
 	asJSON, _ := cmd.Flags().GetBool("json")
-	target := "./knowledge"
+	target, _ := cmd.Flags().GetString("root")
 	if len(args) == 1 {
 		target = args[0]
 	}
 
 	var out []fileSuggestions
-	err := walkMarkdown(target, func(path string, content []byte) {
+	err := walkMarkdown(target, cmd.ErrOrStderr(), func(path string, content []byte) {
 		if found := markdown.SuggestWidgetFences(content); len(found) > 0 {
 			out = append(out, fileSuggestions{Path: path, Suggestions: found})
 		}
@@ -190,8 +192,9 @@ func plural(n int) string {
 }
 
 // walkMarkdown visits every .md file under target, or target itself when it
-// names a file.
-func walkMarkdown(target string, visit func(path string, content []byte)) error {
+// names a file. A file or directory that cannot be read is reported to warn
+// and skipped, so one bad permission does not hide the rest of the results.
+func walkMarkdown(target string, warn io.Writer, visit func(path string, content []byte)) error {
 	info, err := os.Stat(target)
 	if err != nil {
 		return fmt.Errorf("%s: %w", target, err)
@@ -206,7 +209,14 @@ func walkMarkdown(target string, visit func(path string, content []byte)) error 
 	}
 	return filepath.WalkDir(target, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if path == target {
+				return err
+			}
+			fmt.Fprintf(warn, "skipping %s: %v\n", path, err)
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		name := d.Name()
 		if d.IsDir() {
@@ -221,6 +231,7 @@ func walkMarkdown(target string, visit func(path string, content []byte)) error 
 		}
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
+			fmt.Fprintf(warn, "skipping %s: %v\n", path, readErr)
 			return nil
 		}
 		visit(path, content)

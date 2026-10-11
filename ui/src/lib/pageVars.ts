@@ -65,9 +65,20 @@ export function resetPageVars() {
   refresh();
 }
 
+/**
+ * A `<select>` hands back strings; an option that reads as a number is stored
+ * as one, so expressions (`numericPageVars`) can use it. Only a canonical
+ * spelling converts (`"4"`, not `"04"`), so the select still finds its option.
+ */
+export function coercePageVarValue(raw: string): number | string {
+  const n = Number(raw);
+  return raw !== "" && Number.isFinite(n) && String(n) === raw ? n : raw;
+}
+
 // ── Substitution into fence bodies ──────────────────────────────────────────
 
-const PLACEHOLDER = /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g;
+/** `${name}` or bare `$name`; a lone `}` after a bare name is not part of it. */
+const PLACEHOLDER = /\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g;
 
 /**
  * Replace `$name` in a fence body with the current value.
@@ -82,7 +93,8 @@ export function substitutePageVars(
   vars: Readonly<Record<string, number | string | boolean>> = snapshot,
 ): string {
   if (!source.includes("$")) return source;
-  return source.replace(PLACEHOLDER, (match, name: string) => {
+  return source.replace(PLACEHOLDER, (match, braced: string | undefined, bare: string | undefined) => {
+    const name = (braced ?? bare)!;
     const value = Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : undefined;
     if (value === undefined) return match;
     return typeof value === "string" ? JSON.stringify(value) : String(value);
@@ -92,6 +104,6 @@ export function substitutePageVars(
 /** Names a fence body refers to, so a caller can tell whether to re-parse. */
 export function referencedVars(source: string): string[] {
   const out = new Set<string>();
-  for (const match of source.matchAll(PLACEHOLDER)) out.add(match[1]!);
+  for (const match of source.matchAll(PLACEHOLDER)) out.add((match[1] ?? match[2])!);
   return [...out];
 }

@@ -27,6 +27,8 @@ A step may also carry keys that are not widget properties:
 
 `code:` plus `lang:` render a listing that steps in lockstep. `props:` is the
 escape hatch for a widget property whose name collides with a reserved key.
+`link: {to: <widget>, map: index}` maps this fence's keys onto another widget's,
+so selecting one part lights the corresponding part of the other.
 
 ## Meta string
 
@@ -46,15 +48,17 @@ owns the bare `#?step=N`.
 
 ## Naming and collisions
 
-Each fence answers to three language tags: the bare name (`array`), the explicit
-`kiwi-array`, and the legacy `widget:array`. A bare name only claims a block whose
-YAML parses to a mapping carrying one of the fence's marker keys, so a vault that
-already uses `tree` for directory listings keeps its code blocks. The `kiwi-` and
-`widget:` spellings always render, or report an error, for authors who prefer
-strictness.
+Each fence answers to its bare name (`array`), the explicit `kiwi-array`, the
+legacy `widget:array`, and any aliases listed below. Strictness is decided by
+spelling: only a tag starting with `kiwi-` or `widget:` always renders, or reports
+an error. Every other tag — the bare name, an alias such as `grid` or `heap`, a
+capitalised `Tree` — only claims a block whose YAML parses to a mapping carrying
+one of the fence's marker keys (at the top level, under `props:`, or in the first
+step or frame), so a vault that already uses `tree` for directory listings keeps
+its code blocks.
 
-`[ui] typed_fences = false` in `.kiwi/config.toml` turns bare tags off for a
-workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
+`[ui] typed_fences = false` in `.kiwi/config.toml` turns every non-strict tag off
+for a workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
 
 ## Fences
 
@@ -64,7 +68,6 @@ workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
 | [`bars`](#bars) | Columns in value space: histograms, trapping rain water, largest rectangle, sorting passes, latency distributions. |
 | [`bits`](#bits) | A value as labelled bits: bitmask DP, flag registers, permission sets, two's complement, IEEE-754 layouts. |
 | [`graph`](#graph) | Nodes and edges: algorithm graphs, service architecture, state machines, dependency DAGs. Edge keys are `"from->to"` or an explicit `id`. |
-| [`kiwi-steps`](#kiwi-steps) | A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep. |
 | [`list`](#list) | A linked list: reversal, cycle detection, LRU chains, random pointers. A numeric `next` is how you draw a cycle back into the middle. |
 | [`map`](#map) | Hash slots, chains and probe paths: hash tables, caches, symbol tables, routing tables, or a plain unordered dictionary. |
 | [`matrix`](#matrix) | An index-addressed table: DP tables, grids, adjacency matrices, confusion matrices. Cells take `[r, c]` or `"r,c"`. |
@@ -75,6 +78,7 @@ workspace; `typed_fence_tags = ["array", "matrix"]` allows only those.
 | [`queue`](#queue) | FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point. |
 | [`sequence`](#sequence) | A message sequence between participants: API flows, consensus rounds, handshakes, retries. Steps reveal one message at a time. |
 | [`stack`](#stack) | A LIFO stack: monotonic stacks, bracket matching, call stacks, undo histories. |
+| [`steps`](#steps) | A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep. Each step stands alone rather than patching the one before. |
 | [`table`](#table) | A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `"rowKey.colKey"`. |
 | [`timeline`](#timeline) | Spans on a shared axis with named lanes and causal arrows: scheduling, lock handoffs, happens-before, isolation anomalies, log spans. |
 | [`tree`](#tree) | Binary, n-ary and keyed trees: BSTs, tries, recursion trees, heaps (`fromArray`), union-find forests (`parents`), B-tree pages (`keys`). |
@@ -204,11 +208,11 @@ A value as labelled bits: bitmask DP, flag registers, permission sets, two's com
 
 A bare `bits` fence renders as a widget when its body carries `value`.
 
-Also spelled: `kiwi-bits`, `widget:bits`, `bitmask`, `kiwi-bits`.
+Also spelled: `kiwi-bits`, `widget:bits`, `bitmask`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `value` | `number` | The value to show. — **required** |
+| `value` | `number` or `string` | The value to show. A number, or a `"0x…"` / `"0b…"` string for 64-bit patterns a JS number cannot hold exactly. — **required** |
 | `activeBits` | `array` or `number` or `string` | Bit positions being set or tested this step. |
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
@@ -320,46 +324,6 @@ steps:
 ```
 ````
 
-### kiwi-steps
-
-A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep.
-
-A bare `kiwi-steps` fence renders as a widget when its body carries `diagram`.
-
-Also spelled: `kiwi-kiwi-steps`, `widget:kiwi-steps`, `steps`, `mermaid-steps`.
-
-| Key | Type | Notes |
-|---|---|---|
-| `diagram` | `string` | Mermaid source. Unchanged across steps. — **required** — fixed across steps |
-| `caption` | `string` | Caption under the diagram. — fixed across steps |
-| `dim` | `array` of `string` | Node ids to fade this step. |
-| `focus` | `array` of `string` | Node ids to emphasise this step. |
-| `kind` | `flowchart` or `sequence` | Detected from the diagram's first line; set it only to override. — fixed across steps |
-| `messages` | `number` | Sequence diagrams: show the first N messages. Defaults to one more per step. |
-
-````markdown
-```kiwi-steps id=write-path caption="A write through the pipeline"
-diagram: |
-  flowchart LR
-    A[Client] --> B[Storage]
-    B --> C[Git commit]
-    C --> D[Index update]
-    D --> E[SSE broadcast]
-steps:
-  - note: "The client PUTs a page"
-    focus: [A]
-    dim: [C, D, E]
-  - note: "Bytes land on disk — files are the source of truth"
-    focus: [B]
-    dim: [D, E]
-  - note: "The commit makes the version addressable"
-    focus: [C]
-    dim: [E]
-  - note: "Indexes are derivative, so they come last"
-    focus: [D, E]
-```
-````
-
 ### list
 
 A linked list: reversal, cycle detection, LRU chains, random pointers. A numeric `next` is how you draw a cycle back into the middle.
@@ -420,21 +384,22 @@ Also spelled: `kiwi-map`, `widget:map`, `hashmap`, `hashtable`, `kiwi-hashmap`.
 | `activeKey` | `string` or `number` | The key being inserted or looked up this step. |
 | `activeSlots` | `array` or `number` or `string` | Slots being written this step. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
-| `capacity` | `number` | Slot count. Defaults to `slots.length`. |
+| `capacity` | `number` | Slot count, 0–1024. Defaults to `slots.length`. |
 | `dimSlots` | `array` or `number` or `string` | Dimmed slots. |
-| `entries` | `array` of `object` | `{key, value?}` for `mode: "map"` — a frequency map, a seen-set. |
-| `hashOf` | `object` | Key → slot, shown as an `h(k)=i` badge. |
+| `entries` | `array` or `object` | `[{key, value?}]` for `mode: "map"` — a frequency map, a seen-set. A plain `{key: value}` object works too. |
+| `hashOf` | `object` | Key → slot, shown as an `h(k)=i` badge beside the key in every mode. |
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightSlots` | `array` or `number` or `string` | Secondary-highlighted slots. |
 | `mode` | `chain` or `open` or `map` | How to draw it: "chain" for buckets, "open" for open addressing with tombstones, "map" for an unordered dictionary. Inferred from `slots` / `entries`. — fixed across steps |
-| `probePath` | `array` of `number` | Slots visited in order, numbered above the row. |
+| `probePath` | `array` of `number` | Slots visited in order, numbered above the row and joined by arrows. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
+| `selected` | `array` or `number` or `string` | Slot indices drawn as selected; keys in `mode: "map"`. |
 | `showIndices` | `boolean` | Index captions under the slots. Default true. — fixed across steps |
-| `showLoadFactor` | `boolean` | Show α = n/m. Default true. — fixed across steps |
-| `slots` | `array` | One entry per slot: `null` empty, `"DEL"` a tombstone, `{key, value?}`, or a list of those for a chain. |
+| `showLoadFactor` | `boolean` | Show α = n/m: entries per slot for chaining, occupied slots for open addressing. Default true. — fixed across steps |
 | `slotWidth` | `number` | Slot width, px. Default 54. — fixed across steps |
+| `slots` | `array` | One entry per slot: `null` empty, `"DEL"` a tombstone, `{key, value?}` or a bare key, or a list of those for a chain. |
 | `tombstones` | `array` or `number` or `string` | Slots holding a tombstone, if not already `"DEL"`. |
-| `why` | `any` | Slot index → explanation, revealed on select. |
+| `why` | `any` | Slot index (key in `mode: "map"`) → explanation, revealed on select. |
 | `widgetId` | `string` | Name for the inspect bus, for cross-widget linking. — fixed across steps |
 
 ````markdown
@@ -559,17 +524,17 @@ Also spelled: `kiwi-memory`, `widget:memory`, `heap`, `stack-heap`.
 | Key | Type | Notes |
 |---|---|---|
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
-| `activeFrame` | `string` or `number` | Which frame is executing. Defaults to the innermost. |
+| `activeFrame` | `string` or `number` | Which frame is executing: a frame `id`, or a number for its index in `frames`. Defaults to the innermost. |
 | `activeIds` | `array` or `number` or `string` | Heap ids to emphasise this step. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
 | `dimIds` | `array` or `number` or `string` | Dimmed heap ids — garbage, or a frame about to return. |
 | `frames` | `array` of `object` | Call stack, outermost first: `{name, id?, vars: {k: value}, order?, returned?, active?}`. A value of `[REF, id]` points into the heap. |
 | `framesLabel` | `string` | Caption above the frames column. Default "Frames". — fixed across steps |
-| `heap` | `object` | Objects by id, tagged: `["LIST", 1, 2]`, `["DICT", ["k", 1]]`, `["INSTANCE", "Node", ["val", 1]]`, `["TUPLE", …]`, `["SET", …]`. |
+| `heap` | `object` | Objects by id, tagged: `["LIST", 1, 2]`, `["DICT", ["k", 1]]`, `["INSTANCE", "Node", ["val", 1]]`, `["TUPLE", …]`, `["SET", …]`. An untagged `{field: value}` draws as an object's fields. |
 | `heapLabel` | `string` | Caption above the heap column. Default "Objects". — fixed across steps |
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightIds` | `array` or `number` or `string` | Secondary-highlighted heap ids. |
-| `inlinePrimitives` | `boolean` | Draw a primitive inside its slot rather than as its own box. Default true. — fixed across steps |
+| `inlinePrimitives` | `boolean` | Draw a frame variable's primitive inside its slot. Default true; `false` boxes each one on the heap with an arrow, Python Tutor's "render all objects on the heap". — fixed across steps |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
 | `why` | `any` | Heap id → explanation, revealed on select. |
 | `widgetId` | `string` | Name for the inspect bus. — fixed across steps |
@@ -602,14 +567,12 @@ steps:
 
 A single value axis: inequalities, interval arithmetic, binary-search-on-answer buckets, SLO thresholds. Closed endpoints are filled, open ones hollow.
 
-A bare `numberline` fence renders as a widget when its body carries `min` or `max`.
+A bare `numberline` fence renders as a widget when its body carries `min` or `max` or `xRange`.
 
 Also spelled: `kiwi-numberline`, `widget:numberline`, `number-line`, `kiwi-number-line`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `max` | `number` | Right end of the axis. — **required** — fixed across steps |
-| `min` | `number` | Left end of the axis. — **required** — fixed across steps |
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
 | `activeIds` | `array` or `number` or `string` | Ids drawn in the active color. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
@@ -617,19 +580,28 @@ Also spelled: `kiwi-numberline`, `widget:numberline`, `number-line`, `kiwi-numbe
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightIds` | `array` or `number` or `string` | Secondary-highlighted ids. |
 | `includeNumbers` | `boolean` | Print the number under each tick. Default true. — fixed across steps |
-| `intervals` | `array` of `object` | `{from, to, fromOpen?, toOpen?, label?, color?, row?}`. Overlapping intervals stack. |
+| `intervals` | `array` of `object` | `{from, to, fromOpen?, toOpen?, label?, color?, row?, id?}`. Overlapping intervals stack. |
 | `label` | `string` | Axis caption. — fixed across steps |
 | `marks` | `array` of `object` | Dashed reference lines: `{at, label?, color?}`. |
+| `max` | `number` | Right end of the axis. A reversed or empty range is repaired rather than rejected. — fixed across steps |
+| `min` | `number` | Left end of the axis. Default 0. — fixed across steps |
 | `pointers` | `array` of `object` | Named pointers above the axis: `{at, label, color?}` — `lo`, `hi`, `mid`. |
 | `points` | `array` of `object` | `{x, label?, style?: "closed"\|"open"\|"cross", color?, id?}`. |
+| `predicate` | `string` | Shade the axis wherever this formula in `x` is true, e.g. `"x^2 < 9"`. Sampled at 400 points. |
+| `predicateColor` | `string` | Color of the shading. — fixed across steps |
+| `predicateLabel` | `string` | Caption over the shaded run. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
 | `rays` | `array` of `object` | `{at, dir: "left"\|"right", open?, label?}` — an inequality with no far end. |
-| `scale` | `linear` or `log` | Axis scale. `"log"` needs a positive `min`. — fixed across steps |
-| `step` | `number` | Tick spacing. Omit for automatic nice ticks. — fixed across steps |
+| `scale` | `linear` or `log` | Axis scale. `"log"` needs a positive `min`, ticks at powers of ten, and drops values ≤ 0. — fixed across steps |
+| `selected` | `array` or `number` or `string` | Point or interval ids drawn as selected. |
+| `step` | `number` | Tick spacing. Omit for automatic nice ticks; a step giving more than 200 ticks falls back to them. — fixed across steps |
 | `sweep` | `number` | Position of a sweep cursor. |
 | `sweepLabel` | `string` | Caption beside the sweep cursor. |
 | `ticks` | `array` of `number` | Explicit tick values, overriding `step`. |
+| `why` | `any` | Point or interval id → explanation, revealed when the reader selects it. |
+| `widgetId` | `string` | Name for the inspect bus. — fixed across steps |
 | `width` | `number` | Canvas width, px. — fixed across steps |
+| `xRange` | `array` of `number` | `[min, max]` or `[min, max, step]`, an alias for the three keys. |
 
 ````markdown
 ```numberline id=bsearch caption="Binary search on the answer: narrowing [1, 32]"
@@ -654,7 +626,7 @@ steps:
 
 A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps.
 
-A bare `plane` fence renders as a widget when its body carries `points` or `segments` or `polygons` or `circles` or `vectors`.
+A bare `plane` fence renders as a widget when its body carries `points` or `segments` or `polygons` or `circles` or `vectors` or `regions`.
 
 Also spelled: `kiwi-plane`, `widget:plane`, `geometry`.
 
@@ -672,12 +644,16 @@ Also spelled: `kiwi-plane`, `widget:plane`, `geometry`.
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightIds` | `array` or `number` or `string` | Secondary-highlighted ids. |
 | `labels` | `array` of `object` | Free text at a position: `{at, text, dx?, dy?}`. |
-| `points` | `array` of `object` | `{x, y, id?, label?, style?: "dot"\|"open"\|"cross"\|"square", color?}`. |
+| `points` | `array` of `object` | `{x, y, id?, label?, style?: "dot"\|"open"\|"cross"\|"square", color?}`. `id` defaults to `pt0`, `pt1`, … |
 | `polygons` | `array` of `object` | `{points: [...], label?, open?, fill?}` — a triangle, a hull being built. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
-| `segments` | `array` of `object` | `{from, to, label?, arrow?, dashed?}`. Each end is a point id or a literal `[x, y]`. |
+| `regions` | `array` of `object` | Shaded where a formula holds: `{when: "x + y <= 6", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope; sampled on a grid of at most 60×60. |
+| `segments` | `array` of `object` | `{from, to, label?, arrow?, dashed?, color?}`. Each end is a point id, a point index, or a literal `[x, y]`. |
+| `selected` | `array` or `number` or `string` | Point ids drawn as selected. |
 | `sweep` | `object` | `{axis: "x"\|"y"\|"angle", at, origin?, label?}`. |
 | `vectors` | `array` of `object` | `{to, from?, label?}`. `from` defaults to the origin. |
+| `why` | `any` | Point id → explanation, revealed when the reader selects it. |
+| `widgetId` | `string` | Name for the inspect bus. — fixed across steps |
 | `width` | `number` | Canvas width, px. — fixed across steps |
 | `xLabel` | `string` | Caption under the x axis. — fixed across steps |
 | `xMax` | `number` | Right edge. Default 10. — fixed across steps |
@@ -786,19 +762,20 @@ Also spelled: `kiwi-queue`, `widget:queue`, `ringbuffer`, `ring-buffer`.
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
 | `back` | `number` | Index one past the tail — where the next enqueue lands. |
 | `backLabel` | `string` | Label on the tail end. Default "back". — fixed across steps |
-| `capacity` | `number` | Buffer size. Defaults to `values.length`. — fixed across steps |
+| `capacity` | `number` | Buffer size, at most 1024. Defaults to `values.length`. — fixed across steps |
 | `dimIndices` | `array` or `number` or `string` | Dimmed slots. |
 | `empty` | `string` | Text shown when every slot is empty. — fixed across steps |
-| `front` | `number` | Index of the head. Defaults to 0. |
+| `front` | `number` | Index of the head, wrapped into the buffer. Defaults to 0, where the front marker is drawn. |
 | `frontLabel` | `string` | Label on the head end. Default "front". — fixed across steps |
 | `highlightColor` | `string` | Secondary highlight color. — fixed across steps |
 | `highlightIndices` | `array` or `number` or `string` | Secondary-highlighted slots. |
 | `layout` | `horizontal` or `ring` | Default horizontal. — fixed across steps |
-| `pointers` | `array` of `object` | Extra markers beside slots: `{index, label, color?}`. |
+| `pointers` | `array` of `object` | Extra markers beside slots: `{index, label, color?}`. In a ring the index wraps. |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
-| `radius` | `number` | Ring radius, px. Default 86. — fixed across steps |
+| `radius` | `number` | Ring radius, px. Defaults to whatever fits the slots, at least 86. — fixed across steps |
+| `selected` | `array` or `number` or `string` | Slot indices drawn as selected. |
 | `showIndices` | `boolean` | Show slot indices. Default true. — fixed across steps |
-| `size` | `number` | How many slots hold data — what tells a full ring from an empty one. |
+| `size` | `number` | How many slots hold data, counted from `front`. Tells a full ring from an empty one when front and back coincide; slots outside the window draw as stale. |
 | `slotSize` | `number` | Slot size, px. Default 44. — fixed across steps |
 | `title` | `string` | Caption above the queue. — fixed across steps |
 | `why` | `any` | Slot index → explanation, revealed on select. |
@@ -929,6 +906,46 @@ steps:
 ```
 ````
 
+### steps
+
+A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep. Each step stands alone rather than patching the one before.
+
+A bare `steps` fence renders as a widget when its body carries `diagram`.
+
+Also spelled: `kiwi-steps`, `widget:steps`, `mermaid-steps`.
+
+| Key | Type | Notes |
+|---|---|---|
+| `diagram` | `string` | Mermaid source. Unchanged across steps. — **required** — fixed across steps |
+| `caption` | `string` | Caption under the diagram. — fixed across steps |
+| `dim` | `array` or `string` of `string` | Node ids to fade this step: a list, or `A, B`. |
+| `focus` | `array` or `string` of `string` | Node ids to emphasise this step: a list, or `A, B`. |
+| `kind` | `flowchart` or `sequence` | Detected from the diagram's first line; set it only to override. — fixed across steps |
+| `messages` | `number` | Sequence diagrams: show the first N messages. Defaults to the step's position. |
+
+````markdown
+```kiwi-steps id=write-path caption="A write through the pipeline"
+diagram: |
+  flowchart LR
+    A[Client] --> B[Storage]
+    B --> C[Git commit]
+    C --> D[Index update]
+    D --> E[SSE broadcast]
+steps:
+  - note: "The client PUTs a page"
+    focus: [A]
+    dim: [C, D, E]
+  - note: "Bytes land on disk — files are the source of truth"
+    focus: [B]
+    dim: [D, E]
+  - note: "The commit makes the version addressable"
+    focus: [C]
+    dim: [E]
+  - note: "Indexes are derivative, so they come last"
+    focus: [D, E]
+```
+````
+
 ### table
 
 A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `"rowKey.colKey"`.
@@ -939,13 +956,13 @@ Also spelled: `kiwi-table`, `widget:table`, `relation`.
 
 | Key | Type | Notes |
 |---|---|---|
-| `activeCells` | `array` or `number` or `string` | Cells written this step, as `"rowKey.colKey"`. |
+| `activeCells` | `array` or `number` or `string` | Cells written this step, as `"rowKey.colKey"` or `[rowKey, colKey]`. |
 | `activeColor` | `string` | Primary highlight color. — fixed across steps |
 | `activeRows` | `array` or `number` or `string` | Row keys active this step. |
 | `ariaLabel` | `string` | Accessible name. Defaults to a summary derived from the data. — fixed across steps |
-| `arrows` | `array` of `object` | Cell-to-cell references: `{from: "r.c", to: "r.c", label?}`. |
+| `arrows` | `array` of `object` | Cell-to-cell references: `{from: "r.c", to: "r.c", label?, color?}`. Drawn as a ↳ glyph in the source cell, with the target in its tooltip — not a line. |
 | `caption` | `string` | Caption under the table. — fixed across steps |
-| `columns` | `array` of `object` | `{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order. — fixed across steps |
+| `columns` | `array` of `object` or `string` | `{key, label?, pk?, fk?: {table, column} \| "table.column", align?, width?, type?}`, or a bare key string. Omit to infer one column per key seen in the rows, in first-seen order. — fixed across steps |
 | `deletedRows` | `array` or `number` or `string` | Rows removed this step, struck through. |
 | `dimCells` | `array` or `number` or `string` | Dimmed cells. |
 | `dimRows` | `array` or `number` or `string` | Dimmed row keys. |
@@ -956,12 +973,13 @@ Also spelled: `kiwi-table`, `widget:table`, `relation`.
 | `highlightRows` | `array` or `number` or `string` | Secondary-highlighted row keys. |
 | `insertedRows` | `array` or `number` or `string` | Rows added this step, drawn green with a `+` gutter. |
 | `maxHeight` | `number` | Scroll past this height, px. Default 420. — fixed across steps |
-| `maxRows` | `number` | Render at most this many rows, then a "…n more" line. — fixed across steps |
+| `maxRows` | `number` | Render at most this many rows, then a "…n more" line. Ignored unless a non-negative number. — fixed across steps |
 | `props` | `any` | Escape hatch for a widget prop whose name collides with a reserved key. |
 | `rowKey` | `string` | Column whose value identifies a row. Defaults to the `pk` column. — fixed across steps |
 | `rows` | `array` of `object` | One object per row, keyed by column `key`. |
+| `selected` | `array` or `number` or `string` | Cells drawn as selected. |
 | `showIndices` | `boolean` | Unused; accepted so `table` and `matrix` bodies are interchangeable. — fixed across steps |
-| `sort` | `object` | Sort indicator only: `{key, dir}`. Rows render in the order given. |
+| `sort` | `object` or `string` | Sort indicator only: `{key, dir}` or a column key. Rows render in the order given. |
 | `why` | `any` | Cell key → explanation, revealed when the reader selects it. |
 | `widgetId` | `string` | Name for the inspect bus, for cross-widget linking. — fixed across steps |
 
@@ -1070,7 +1088,6 @@ Also spelled: `kiwi-tree`, `widget:tree`.
 | `highlightEdges` | `array` or `number` or `string` | Child keys, or `"parent->child"`, whose edge lights up. |
 | `highlightNodes` | `array` or `number` or `string` | Secondary-highlighted node keys. |
 | `keyCell` | `number` | Width of one key cell in a keyed page, px. Default 30. — fixed across steps |
-| `link` | `any` | Widget whose keys correspond to these node ids, for linked highlighting. |
 | `nextLinks` | `array` of `object` | Same-level arrows: `{from, to}` — next-right pointers, the B+-tree leaf chain. |
 | `nodeColors` | `object` | Base color per node key, e.g. one per connected component. |
 | `nodeSize` | `number` | Node diameter, px. — fixed across steps |

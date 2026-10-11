@@ -15,8 +15,13 @@ export interface WidgetLayoutProps {
   columns?: number;
   /** Gap between panels in px. Default 12. */
   gap?: number;
-  /** Tabs only: which panel is open initially. Default 0. */
+  /**
+   * Tabs only: which panel is open. Default 0. The reader can switch tabs; a
+   * new value from the author (a walkthrough step) switches it again.
+   */
   tab?: number;
+  /** Tabs only: the reader opened another panel. */
+  onTabChange?: (tab: number) => void;
   /** Children are rendered as panels. */
   children: ReactNode;
 }
@@ -26,10 +31,20 @@ export function WidgetLayout({
   columns = 2,
   gap = 12,
   tab = 0,
+  onTabChange,
   children,
 }: WidgetLayoutProps) {
   const panels = toPanelList(children);
-  const [open, setOpen] = useState(tab);
+  const [open, setOpenState] = useState(tab);
+  const [lastTab, setLastTab] = useState(tab);
+  if (tab !== lastTab) {
+    setLastTab(tab);
+    setOpenState(tab);
+  }
+  const setOpen = (i: number) => {
+    setOpenState(i);
+    onTabChange?.(i);
+  };
 
   if (direction === "tabs" && panels.length > 1) {
     const current = Math.max(0, Math.min(open, panels.length - 1));
@@ -63,8 +78,9 @@ export function WidgetLayout({
         </div>
         {/* Only the open panel is mounted, so a heavy canvas in a closed tab
             costs nothing — and a shared clock keeps the hidden one in step
-            when the reader switches back. */}
-        <div>{panels[current]?.node}</div>
+            when the reader switches back. The key stops two panels of the
+            same component type from sharing one instance's state. */}
+        <div key={current} role="tabpanel">{panels[current]?.node}</div>
       </div>
     );
   }

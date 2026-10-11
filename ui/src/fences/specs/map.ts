@@ -1,7 +1,7 @@
 import { lazy } from "react";
 import type { FenceSpec } from "../registry";
 import { summarizeMap } from "@kw/widgets/widgetA11y";
-import { CANVAS_ATTRS, anyValue, bool, enumOf, many, number, numberList, objectList, string } from "./common";
+import { CANVAS_ATTRS, anyValue, bool, enumOf, many, number, numberList, string } from "./common";
 
 const MapView = lazy(() =>
   import("@kw/widgets/MapView").then((m) => ({ default: m.MapView })),
@@ -21,24 +21,32 @@ export const mapSpec: FenceSpec = {
         'How to draw it: "chain" for buckets, "open" for open addressing with tombstones, "map" for an unordered dictionary. Inferred from `slots` / `entries`.',
         false,
       ),
-      capacity: number("Slot count. Defaults to `slots.length`."),
+      capacity: number("Slot count, 0–1024. Defaults to `slots.length`."),
       slots: {
         type: "array",
         description:
-          'One entry per slot: `null` empty, `"DEL"` a tombstone, `{key, value?}`, or a list of those for a chain.',
+          'One entry per slot: `null` empty, `"DEL"` a tombstone, `{key, value?}` or a bare key, or a list of those for a chain.',
       },
-      entries: objectList('`{key, value?}` for `mode: "map"` — a frequency map, a seen-set.'),
-      hashOf: { type: "object", description: "Key → slot, shown as an `h(k)=i` badge." },
+      entries: {
+        type: ["array", "object"],
+        description:
+          '`[{key, value?}]` for `mode: "map"` — a frequency map, a seen-set. A plain `{key: value}` object works too.',
+      },
+      hashOf: { type: "object", description: "Key → slot, shown as an `h(k)=i` badge beside the key in every mode." },
       activeSlots: many("Slots being written this step."),
       highlightSlots: many("Secondary-highlighted slots."),
       dimSlots: many("Dimmed slots."),
+      selected: many('Slot indices drawn as selected; keys in `mode: "map"`.'),
       activeKey: { type: ["string", "number"], description: "The key being inserted or looked up this step." },
-      probePath: numberList("Slots visited in order, numbered above the row."),
+      probePath: numberList("Slots visited in order, numbered above the row and joined by arrows."),
       tombstones: many("Slots holding a tombstone, if not already `\"DEL\"`."),
-      showLoadFactor: bool("Show α = n/m. Default true.", false),
+      showLoadFactor: bool(
+        "Show α = n/m: entries per slot for chaining, occupied slots for open addressing. Default true.",
+        false,
+      ),
       showIndices: bool("Index captions under the slots. Default true.", false),
       slotWidth: number("Slot width, px. Default 54.", false),
-      why: anyValue("Slot index → explanation, revealed on select."),
+      why: anyValue('Slot index (key in `mode: "map"`) → explanation, revealed on select.'),
       widgetId: string("Name for the inspect bus, for cross-widget linking.", false),
       ...CANVAS_ATTRS,
     },

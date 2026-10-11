@@ -15,8 +15,15 @@ export function getFence(lang: string | undefined): FenceSpec | undefined {
 }
 
 export { registerBuiltinFences, BUILTIN_FENCES } from "./builtins";
-export { allFences, fenceLangs, registerFence, type FenceSpec } from "./registry";
-export { parseFence, sniffFence, type ParsedFence } from "./parseFence";
+export {
+  allFences,
+  clearFences,
+  fenceLangs,
+  isStrictTag,
+  registerFence,
+  type FenceSpec,
+} from "./registry";
+export { loadFenceYaml, parseFence, sniffFence, type ParsedFence } from "./parseFence";
 export { parseFenceMeta, type FenceMeta } from "./meta";
 export { TypedFence } from "./TypedFence";
 export { serializeSchema, type Schema, type SchemaAttribute } from "./schema";

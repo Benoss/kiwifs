@@ -1,7 +1,7 @@
 import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { WidgetText } from "./WidgetText";
-import { canvasAria, sentence } from "./widgetA11y";
+import { canvasAria, objectsOf, sentence, shortText } from "./widgetA11y";
 import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 /**
@@ -33,7 +33,11 @@ export interface QueueViewProps {
   capacity?: number;
   /** `"horizontal"` (default) for a plain queue, `"ring"` for a circular buffer. */
   layout?: "horizontal" | "ring";
-  /** How many slots currently hold data. Needed to tell a full ring from an empty one. */
+  /**
+   * How many slots currently hold data, counted from `front`. Tells a full
+   * ring from an empty one when `front === back`, and marks the slots outside
+   * that window as stale rather than live.
+   */
   size?: number;
   activeIndices?: Many<number>;
   highlightIndices?: Many<number>;
@@ -49,10 +53,12 @@ export interface QueueViewProps {
   title?: string;
   empty?: string;
   slotSize?: number;
-  /** Ring radius in px. Default 86. */
+  /** Ring radius in px. Defaults to whatever fits the slots, at least 86. */
   radius?: number;
   onSelect?: (ref: InspectRef) => void;
   why?: Record<string, string>;
+  /** Controlled selection, as slot indices. */
+  selected?: Many<string | number>;
   widgetId?: string;
   activeColor?: string;
   highlightColor?: string;
@@ -70,42 +76,56 @@ const DEFAULTS = {
   radius: 86,
 };
 
+const MAX_SLOTS = 1024;
+
+type Slot = string | number | boolean | null | object;
+
+function finite(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function wrap(index: number, n: number): number {
+  return ((Math.trunc(index) % n) + n) % n;
+}
+
 function summarize(opts: {
-  values: (string | number | null)[];
-  front?: number;
+  values: Slot[];
+  live: (i: number) => boolean;
+  front: number;
   back?: number;
   layout: string;
-  size?: number;
+  state?: "full" | "empty";
 }): string {
-  const filled = opts.values.filter((v) => v != null);
+  const filled = opts.values.filter((_, i) => opts.live(i)).map((v) => shortText(v));
   return sentence(
     `${opts.layout === "ring" ? "circular " : ""}queue of ${opts.values.length} slots`,
-    filled.length ? `holding ${filled.join(", ")}` : "empty",
-    opts.front != null ? `front at ${opts.front}` : "",
+    opts.state === "full" ? "full" : filled.length ? `holding ${filled.join(", ")}` : "empty",
+    `front at ${opts.front}`,
     opts.back != null ? `back at ${opts.back}` : "",
   );
 }
 
 export function QueueView({
-  values,
-  front,
-  back,
+  values: valuesIn,
+  front: frontIn,
+  back: backIn,
   capacity,
   layout = "horizontal",
   size,
   activeIndices,
   highlightIndices,
   dimIndices,
-  pointers = [],
+  pointers: pointersIn,
   showIndices = true,
   frontLabel = "front",
   backLabel = "back",
   title,
   empty = "(empty)",
-  slotSize = DEFAULTS.slotSize,
-  radius = DEFAULTS.radius,
+  slotSize: slotSizeIn = DEFAULTS.slotSize,
+  radius: radiusIn,
   onSelect,
   why,
+  selected,
   widgetId = "queue",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
@@ -114,36 +134,53 @@ export function QueueView({
   const bus = useInspect();
   const mergedWhy = { ...bus.why, ...(why ?? {}) };
   const linked = bus.linkedKeys(widgetId);
-  const n = capacity ?? values.length;
-  const slots = Array.from({ length: Math.max(1, n) }, (_, i) => values[i] ?? null);
+  const values: Slot[] = Array.isArray(valuesIn) ? valuesIn : [];
+  const requested = finite(capacity) ? capacity : values.length;
+  const n = Math.max(1, Math.min(MAX_SLOTS, Math.trunc(requested)));
+  const slots = Array.from({ length: n }, (_, i) => values[i] ?? null);
+  const slotSize = finite(slotSizeIn) && slotSizeIn > 0 ? slotSizeIn : DEFAULTS.slotSize;
   const active = toSet(activeIndices);
   const highlight = toSet(highlightIndices);
   const dim = toSet(dimIndices);
+  const selectedKeys = new Set([...toSet(selected)].map(String));
+  const isSelected = (i: number) =>
+    selectedKeys.has(String(i)) ||
+    (bus.selected?.widget === widgetId && bus.selected.kind === "slot" && bus.selected.key === String(i));
   const selectable = (i: number) =>
     onSelect !== undefined ||
     whyFor(mergedWhy, { widget: widgetId, kind: "slot", key: String(i) }) !== undefined;
   const firstSelectable = slots.findIndex((_, i) => selectable(i));
 
+  const front = finite(frontIn) ? wrap(frontIn, n) : 0;
+  const back = finite(backIn) ? wrap(backIn, n) : undefined;
+  const count = finite(size) ? Math.max(0, Math.min(n, Math.trunc(size))) : undefined;
+  const live = (i: number) => (count == null ? slots[i] != null : wrap(i - front, n) < count);
+  const state: "full" | "empty" | undefined =
+    count == null ? undefined : count === 0 ? "empty" : count === n ? "full" : undefined;
+
   const markers = new Map<number, QueuePointer[]>();
-  const addMarker = (index: number | undefined, label: string) => {
-    if (index == null) return;
-    const slot = ((index % slots.length) + slots.length) % slots.length;
+  const addMarker = (slot: number, marker: QueuePointer) => {
     const list = markers.get(slot) ?? [];
-    list.push({ index: slot, label });
+    list.push(marker);
     markers.set(slot, list);
   };
-  addMarker(front, frontLabel);
-  addMarker(back, backLabel);
-  for (const p of pointers) {
-    const list = markers.get(p.index) ?? [];
-    list.push(p);
-    markers.set(p.index, list);
+  addMarker(front, { index: front, label: frontLabel });
+  if (back != null) addMarker(back, { index: back, label: backLabel });
+  for (const p of objectsOf<QueuePointer>(pointersIn)) {
+    if (!finite(p.index)) continue;
+    // In a ring every index lands on a slot; a horizontal queue has no slot
+    // past its end to point at.
+    const slot = layout === "ring" ? wrap(p.index, n) : Math.trunc(p.index);
+    addMarker(slot, { ...p, index: slot, label: shortText(p.label ?? "") });
   }
 
   const styleFor = (i: number) => {
-    const filled = slots[i] != null;
+    const filled = live(i);
     if (active.has(i)) {
       return { bg: activeColor, border: activeColor, color: "var(--kw-widget-active-foreground, #111827)", opacity: 1 };
+    }
+    if (isSelected(i)) {
+      return { bg: alpha(activeColor, 18), border: activeColor, color: DEFAULTS.text, opacity: 1 };
     }
     if (highlight.has(i) || linked.has(String(i))) {
       return { bg: alpha(highlightColor, 18), border: highlightColor, color: DEFAULTS.text, opacity: 1 };
@@ -159,24 +196,55 @@ export function QueueView({
     };
   };
 
-  const label = ariaLabel ?? summarize({ values: slots, front, back, layout, size });
-  const aria = canvasAria(label, selectable(0) || firstSelectable >= 0);
+  const label = ariaLabel ?? summarize({ values: slots, live, front, back, layout, state });
+  const aria = canvasAria(label, firstSelectable >= 0);
 
   const slotContent = (i: number) => {
     const v = slots[i];
-    return v == null ? "·" : String(v);
+    return v == null ? "·" : shortText(v, 12);
   };
+
+  const partProps = (i: number) =>
+    selectable(i)
+      ? {
+          ...partHandlers(widgetId, "slot", String(i), bus, {
+            onSelect,
+            why: mergedWhy,
+            tabbable: i === firstSelectable,
+          }),
+          "aria-selected": isSelected(i) || undefined,
+        }
+      : {};
 
   if (layout === "ring") {
     // A ring makes the wrap-around visible, which is the one thing a
-    // horizontal row of a circular buffer cannot show.
+    // horizontal row of a circular buffer cannot show. The default radius
+    // grows with the slot count so neighbours never overlap.
+    const radius =
+      finite(radiusIn) && radiusIn > 0
+        ? radiusIn
+        : Math.max(DEFAULTS.radius, (slots.length * (slotSize + 8)) / (2 * Math.PI));
     const box = (radius + slotSize) * 2 + 24;
     const centre = box / 2;
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
-        {title && <Title text={title} />}
+        {title && <Title text={shortText(title)} />}
         <svg width={box} height={box} {...aria} style={{ display: "block", maxWidth: "100%" }}>
           <circle cx={centre} cy={centre} r={radius} fill="none" stroke={DEFAULTS.border} strokeWidth={1} opacity={0.4} />
+          {count != null && (
+            <text
+              x={centre}
+              y={centre}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill={DEFAULTS.dimColor}
+              fontSize={11}
+              fontWeight={700}
+              fontFamily="ui-monospace, SFMono-Regular, monospace"
+            >
+              {state ?? `${count}/${n}`}
+            </text>
+          )}
           {slots.map((_, i) => {
             const angle = (i / slots.length) * Math.PI * 2 - Math.PI / 2;
             const cx = centre + Math.cos(angle) * radius;
@@ -187,13 +255,7 @@ export function QueueView({
             return (
               <g
                 key={i}
-                {...(selectable(i)
-                  ? partHandlers(widgetId, "slot", String(i), bus, {
-                      onSelect,
-                      why: mergedWhy,
-                      tabbable: i === firstSelectable,
-                    })
-                  : {})}
+                {...partProps(i)}
                 opacity={st.opacity}
                 style={{ cursor: selectable(i) ? "pointer" : undefined }}
               >
@@ -255,13 +317,13 @@ export function QueueView({
     );
   }
 
-  const isEmpty = slots.every((v) => v == null);
+  const isEmpty = count != null ? count === 0 : slots.every((v) => v == null);
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
-      {title && <Title text={title} />}
+      {title && <Title text={shortText(title)} />}
       <div {...aria} style={{ display: "flex", alignItems: "flex-start", gap: 2, overflowX: "auto", maxWidth: "100%" }}>
         {isEmpty && (
-          <span style={{ color: DEFAULTS.dimColor, fontSize: "0.7rem", padding: "12px 8px" }}>{empty}</span>
+          <span style={{ color: DEFAULTS.dimColor, fontSize: "0.7rem", padding: "12px 8px" }}>{shortText(empty)}</span>
         )}
         {slots.map((_, i) => {
           const st = styleFor(i);
@@ -276,13 +338,7 @@ export function QueueView({
                 ))}
               </div>
               <div
-                {...(selectable(i)
-                  ? partHandlers(widgetId, "slot", String(i), bus, {
-                      onSelect,
-                      why: mergedWhy,
-                      tabbable: i === firstSelectable,
-                    })
-                  : {})}
+                {...partProps(i)}
                 style={{
                   width: slotSize,
                   height: slotSize,
@@ -301,6 +357,7 @@ export function QueueView({
                   cursor: selectable(i) ? "pointer" : undefined,
                   transition: "all 0.2s ease",
                   outline: "none",
+                  overflow: "hidden",
                 }}
               >
                 <WidgetText text={slotContent(i)} />

@@ -140,7 +140,49 @@ interface SharedProps {
    * page: the handler owns the new value.
    */
   editable?: boolean;
+  /**
+   * Called with `(index, value, row)` when an edit commits with a changed
+   * value — on Enter or blur, not after Escape. Note the order differs from
+   * MatrixView's `(r, c, value)`.
+   */
   onCellEdit?: (index: number, value: string, row: number) => void;
+}
+
+interface EditableTarget {
+  textContent: string | null;
+  dataset: DOMStringMap;
+  blur: () => void;
+}
+
+/**
+ * Blur / key handlers for a contentEditable cell. Commits only a changed
+ * value; Escape restores the original and commits nothing.
+ */
+export function cellEditHandlers(original: string, commit: (value: string) => void) {
+  return {
+    onBlur: (e: { currentTarget: EditableTarget }) => {
+      const el = e.currentTarget;
+      if (el.dataset.kwCancel) {
+        delete el.dataset.kwCancel;
+        return;
+      }
+      const value = el.textContent ?? "";
+      if (value !== original) commit(value);
+    },
+    onKeyDown: (e: { key: string; currentTarget: EditableTarget; preventDefault: () => void; stopPropagation: () => void }) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.currentTarget.blur();
+      }
+      if (e.key === "Escape") {
+        e.currentTarget.textContent = original;
+        e.currentTarget.dataset.kwCancel = "1";
+        e.currentTarget.blur();
+      }
+      // Arrows inside a cell move the caret, not the clock.
+      e.stopPropagation();
+    },
+  };
 }
 
 export interface ArrayViewProps extends ArrayRowProps, SharedProps {}
@@ -351,8 +393,10 @@ function ArrayRow({
   predecessors,
   editable,
   onCellEdit,
+  multiRow,
 }: {
   rowIdx: number;
+  multiRow: boolean;
   row: ArrayRowProps;
   lanes: Lanes;
   cellSize: number;
@@ -378,12 +422,16 @@ function ArrayRow({
     highlight: toSet(row.highlightIndices),
     dim: toSet(row.dimIndices),
   };
+  // A lone row keeps plain index keys, which is what `link: { map: index }`
+  // and `why: { "3": … }` address; in a stack, two rows' cell 3 must differ or
+  // selecting one lights every row.
+  const partKey = (i: number) => (multiRow ? `${rowIdx}:${i}` : String(i));
   /** A cell is clickable when it has an explanation, or the author asked. */
   const selectable = (i: number) =>
     onSelect !== undefined ||
-    whyFor(why, { widget: widgetId, kind: "cell", key: String(i) }) !== undefined;
+    whyFor(why, { widget: widgetId, kind: "cell", key: partKey(i) }) !== undefined;
   /** Lit by a linked widget, or by the predecessor hover. */
-  const lit = (key: string, i: number) => predecessors.has(key) || linked.has(String(i));
+  const lit = (key: string, i: number) => predecessors.has(key) || linked.has(partKey(i));
   // Roving tabindex: only the first selectable cell of the first row is a tab
   // stop; the arrows walk the rest.
   const firstSelectable =
@@ -459,7 +507,7 @@ function ArrayRow({
                 title={row.tooltips?.[i] ?? undefined}
                 className={flash.has(key) ? "kw-cell-flash" : undefined}
                 {...(selectable(i)
-                  ? partHandlers(widgetId, "cell", String(i), bus, {
+                  ? partHandlers(widgetId, "cell", partKey(i), bus, {
                       onSelect,
                       why,
                       tabbable: firstSelectable === i,
@@ -495,19 +543,7 @@ function ArrayRow({
                     suppressContentEditableWarning
                     role="textbox"
                     aria-label={`Cell ${i}`}
-                    onBlur={(e) => onCellEdit(i, e.currentTarget.textContent ?? "", rowIdx)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        (e.currentTarget as HTMLElement).blur();
-                      }
-                      if (e.key === "Escape") {
-                        e.currentTarget.textContent = cell.text;
-                        (e.currentTarget as HTMLElement).blur();
-                      }
-                      // Arrows inside a cell move the caret, not the clock.
-                      e.stopPropagation();
-                    }}
+                    {...cellEditHandlers(cell.text, (value) => onCellEdit(i, value, rowIdx))}
                     style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
                   >
                     {cell.text}
@@ -657,6 +693,7 @@ export function ArrayStack({
           <ArrayRow
             key={ri}
             rowIdx={ri}
+            multiRow={rows.length > 1}
             row={r}
             lanes={lanes[ri]!}
             cellSize={size}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasNotation, notationClass, parseNotation } from "./codeNotation";
+import { hasNotation, notationClass, parseNotation, withSourceHighlights } from "./codeNotation";
 
 describe("hasNotation", () => {
   it("only fires on a real marker", () => {
@@ -87,5 +87,29 @@ describe("notationClass", () => {
 
   it("falls back to the plain line class", () => {
     expect(notationClass(1, parseNotation("a"))).toBe("kiwi-line");
+  });
+});
+
+describe("withSourceHighlights", () => {
+  it("keeps both the notation's highlights and the meta's", () => {
+    const notated = parseNotation("a\nb // [!code highlight]\nc\nd");
+    const merged = withSourceHighlights(notated, new Set([1, 4]));
+    expect([...merged.lines.highlight].sort()).toEqual([1, 2, 4]);
+    expect(notationClass(1, merged)).toContain("kiwi-line-highlight");
+  });
+
+  it("counts meta lines in the source as written, marker lines included", () => {
+    // Source line 2 is a standalone marker, dropped from the output, so source
+    // line 4 ("c") renders as row 3.
+    const notated = parseNotation("a\n// [!code ++]\nb\nc");
+    expect(notated.code).toBe("a\nb\nc");
+    const merged = withSourceHighlights(notated, new Set([4]));
+    expect([...merged.lines.highlight]).toEqual([3]);
+    expect(merged.lines.add.has(2)).toBe(true);
+  });
+
+  it("is a no-op without meta highlights", () => {
+    const notated = parseNotation("a // [!code focus]");
+    expect(withSourceHighlights(notated, new Set())).toBe(notated);
   });
 });

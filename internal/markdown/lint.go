@@ -21,12 +21,18 @@ type LintIssue struct {
 	Line     int    `json:"line"`   // 1-based, 0 = file-level
 	Column   int    `json:"column"` // 1-based, 0 = N/A
 	Message  string `json:"message"`
-	Severity string `json:"severity"` // "error" | "warning"
+	Severity string `json:"severity"` // "error" | "warning" | "info"
 }
 
 // LintMarkdown checks content for structural/semantic issues that
 // auto-format cannot fix. Returns nil if clean.
 func LintMarkdown(content []byte) []LintIssue {
+	return LintMarkdownWithOptions(content, currentFenceOptions())
+}
+
+// LintMarkdownWithOptions is LintMarkdown for a workspace whose typed-fence
+// settings differ from the process default.
+func LintMarkdownWithOptions(content []byte, opts FenceOptions) []LintIssue {
 	var issues []LintIssue
 
 	fm, body, fmErr := SplitFrontmatter(content)
@@ -90,7 +96,7 @@ func LintMarkdown(content []byte) []LintIssue {
 	issues = append(issues, lintMermaid(body, fmLineOffset)...)
 
 	// Rule 11: fence-widget-invalid
-	issues = append(issues, lintWidgetFences(body, fmLineOffset)...)
+	issues = append(issues, lintWidgetFences(body, fmLineOffset, opts)...)
 
 	// Rule 12: widget-live-convertible (info only)
 	issues = append(issues, lintWidgetLiveSuggestions(body, fmLineOffset)...)

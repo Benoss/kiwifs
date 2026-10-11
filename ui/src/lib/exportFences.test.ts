@@ -74,4 +74,18 @@ describe("rewriteWidgetFences", () => {
     expect(got).toContain("> one");
     expect(got).toContain("> two");
   });
+
+  it("does not repeat a code listing as quoted prose", () => {
+    const got = rewriteWidgetFences("```array\nvalues: [1]\ncaption: sum\ncode: \"total += x\"\n```\n");
+    expect(got).toContain("> sum");
+    expect(got).not.toContain("> total += x");
+    expect(got).toContain('code: "total += x"');
+  });
+
+  it("uses a fence longer than any backtick run in the body", () => {
+    const body = "values: [1]\ncode: |\n  ```js\n  x = 1\n  ```\n";
+    const got = rewriteWidgetFences(`\`\`\`\`array\n${body}\`\`\`\`\n`);
+    expect(got).toContain("````yaml\n");
+    expect(got.trimEnd().endsWith("````")).toBe(true);
+  });
 });

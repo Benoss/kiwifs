@@ -2,8 +2,9 @@ import { useId } from "react";
 import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { SvgLabel } from "./WidgetText";
-import { niceTicks } from "./plotLayout";
-import { summarizePlane } from "./widgetA11y";
+import { expandRange, niceTicks, sampleRegion } from "./plotLayout";
+import { objectsOf, shortText, summarizePlane } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 /**
  * A coordinate plane in data units.
@@ -24,6 +25,7 @@ export type XY = readonly [number, number];
 export type PointRef = string | number | XY;
 
 export interface PlanePoint {
+  /** Defaults to `pt<index>`, which is also how other shapes refer to it. */
   id?: string | number;
   x: number;
   y: number;
@@ -86,6 +88,17 @@ export interface PlaneSweep {
   label?: string;
 }
 
+/** A shaded area where a formula in `x` and `y` holds — a feasible region. */
+export interface PlaneRegion {
+  id?: string | number;
+  when: string;
+  label?: string;
+  color?: string;
+  opacity?: number;
+  /** Grid cells per axis. Default 40, at most 60. */
+  resolution?: number;
+}
+
 export interface PlaneViewProps {
   xMin?: number;
   xMax?: number;
@@ -106,6 +119,7 @@ export interface PlaneViewProps {
   circles?: PlaneCircle[];
   vectors?: PlaneVector[];
   labels?: PlaneLabel[];
+  regions?: PlaneRegion[];
   sweep?: PlaneSweep;
   activeIds?: Many<string | number>;
   highlightIds?: Many<string | number>;
@@ -114,6 +128,13 @@ export interface PlaneViewProps {
   yLabel?: string;
   width?: number;
   height?: number;
+  /** Reported when the reader selects a point. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Point id → explanation, revealed on select. */
+  why?: Record<string, string>;
+  /** Controlled selection, as point ids. */
+  selected?: Many<string | number>;
+  widgetId?: string;
   activeColor?: string;
   highlightColor?: string;
   ariaLabel?: string;
@@ -132,6 +153,28 @@ const DEFAULTS = {
 };
 
 const PAD = { left: 34, right: 16, top: 16, bottom: 28 };
+const MAX_REGION_RESOLUTION = 60;
+
+function finite(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function stringSet(value: Many<string | number>): Set<string> {
+  return new Set([...toSet(value)].map(String));
+}
+
+/** One axis's extent, ordered and non-empty whatever the author wrote. */
+export function planeRange(
+  range: readonly unknown[] | undefined,
+  min: unknown,
+  max: unknown,
+): { min: number; max: number } {
+  const r = Array.isArray(range) ? range : [];
+  let lo = finite(r[0]) ? r[0] : finite(min) ? min : 0;
+  let hi = finite(r[1]) ? r[1] : finite(max) ? max : lo + 10;
+  if (lo > hi) [lo, hi] = [hi, lo];
+  return expandRange(lo, hi);
+}
 
 export function PlaneView({
   xMin,
@@ -143,39 +186,58 @@ export function PlaneView({
   grid = true,
   axes = true,
   aspect = "equal",
-  points = [],
-  segments = [],
-  polygons = [],
-  circles = [],
-  vectors = [],
-  labels = [],
+  points: pointsIn,
+  segments: segmentsIn,
+  polygons: polygonsIn,
+  circles: circlesIn,
+  vectors: vectorsIn,
+  labels: labelsIn,
+  regions: regionsIn,
   sweep,
   activeIds: activeIdsIn,
   highlightIds: highlightIdsIn,
   dimIds: dimIdsIn,
   xLabel,
   yLabel,
-  width = DEFAULTS.width,
-  height = DEFAULTS.height,
+  width: widthIn = DEFAULTS.width,
+  height: heightIn = DEFAULTS.height,
+  onSelect,
+  why,
+  selected,
+  widgetId = "plane",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   ariaLabel,
 }: PlaneViewProps) {
-  const activeIds = toSet(activeIdsIn);
-  const highlightIds = toSet(highlightIdsIn);
-  const dimIds = toSet(dimIdsIn);
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const activeIds = stringSet(activeIdsIn);
+  const highlightIds = stringSet(highlightIdsIn);
+  const dimIds = stringSet(dimIdsIn);
+  const selectedKeys = stringSet(selected);
   const uid = useId().replace(/:/g, "");
-  const arrowId = `kw-pl-arrow-${uid}`;
 
-  const x0 = xRange?.[0] ?? xMin ?? 0;
-  const x1 = xRange?.[1] ?? xMax ?? 10;
-  const y0 = yRange?.[0] ?? yMin ?? 0;
-  const y1 = yRange?.[1] ?? yMax ?? 10;
+  const points = objectsOf<PlanePoint>(pointsIn).filter((p) => finite(p.x) && finite(p.y));
+  const segments = objectsOf<PlaneSegment>(segmentsIn);
+  const polygons = objectsOf<PlanePolygon>(polygonsIn).filter((p) => Array.isArray(p.points));
+  const circles = objectsOf<PlaneCircle>(circlesIn).filter((c) => finite(c.r));
+  const vectors = objectsOf<PlaneVector>(vectorsIn);
+  const labels = objectsOf<PlaneLabel>(labelsIn);
+  const regions = objectsOf<PlaneRegion>(regionsIn).filter((r) => typeof r.when === "string");
 
-  const boxW = width - PAD.left - PAD.right;
-  const boxH = height - PAD.top - PAD.bottom;
-  const spanX = x1 - x0 || 1;
-  const spanY = y1 - y0 || 1;
+  const xr = planeRange(xRange, xMin, xMax);
+  const yr = planeRange(yRange, yMin, yMax);
+  const x0 = xr.min;
+  const x1 = xr.max;
+  const y0 = yr.min;
+  const y1 = yr.max;
+
+  const width = finite(widthIn) ? Math.max(PAD.left + PAD.right + 1, widthIn) : DEFAULTS.width;
+  const height = finite(heightIn) ? Math.max(PAD.top + PAD.bottom + 1, heightIn) : DEFAULTS.height;
+  const boxW = Math.max(1, width - PAD.left - PAD.right);
+  const boxH = Math.max(1, height - PAD.top - PAD.bottom);
+  const spanX = x1 - x0;
+  const spanY = y1 - y0;
 
   // Equal aspect means one data unit is the same number of pixels on both
   // axes — without it a circle is an ellipse and a right angle is a lie.
@@ -190,29 +252,61 @@ export function PlaneView({
   const px = (x: number) => offX + (x - x0) * scaleX;
   const py = (y: number) => offY + drawH - (y - y0) * scaleY;
 
+  const pointId = (p: PlanePoint, i: number) => String(p.id ?? `pt${i}`);
   const byId = new Map<string, PlanePoint>();
-  points.forEach((p, i) => byId.set(String(p.id ?? i), p));
+  points.forEach((p, i) => byId.set(pointId(p, i), p));
 
-  /** A ref is either a named point or a literal `[x, y]`. */
-  const resolve = (ref: PointRef): XY | null => {
-    if (Array.isArray(ref)) return ref as XY;
-    const p = byId.get(String(ref));
+  /** A ref is a named point, a literal `[x, y]`, or a bare point index. */
+  const resolve = (ref: unknown): XY | null => {
+    if (Array.isArray(ref)) return finite(ref[0]) && finite(ref[1]) ? [ref[0], ref[1]] : null;
+    if (typeof ref !== "string" && typeof ref !== "number") return null;
+    const p = byId.get(String(ref)) ?? (/^\d+$/.test(String(ref)) ? points[Number(ref)] : undefined);
     return p ? [p.x, p.y] : null;
   };
 
-  const idOf = (item: { id?: string | number }, kind: string, i: number) => item.id ?? `${kind}${i}`;
-  const toneOf = (id: string | number, base?: string) => {
-    if (activeIds.has(id)) return { color: activeColor, opacity: 1, weight: 2.5 };
+  const idOf = (item: { id?: string | number }, kind: string, i: number) => String(item.id ?? `${kind}${i}`);
+  const toneOf = (id: string, base?: string) => {
+    if (activeIds.has(id) || selectedKeys.has(id)) return { color: activeColor, opacity: 1, weight: 2.5 };
     if (highlightIds.has(id)) return { color: highlightColor, opacity: 1, weight: 2.25 };
     if (dimIds.has(id)) return { color: DEFAULTS.dimColor, opacity: 0.35, weight: 1.25 };
     return { color: base ?? DEFAULTS.bar, opacity: 1, weight: 1.75 };
   };
+
+  // One arrowhead marker per colour: a marker cannot inherit its line's stroke
+  // everywhere `context-stroke` is unsupported.
+  const arrowColors: string[] = [];
+  const arrowFor = (color: string) => {
+    let i = arrowColors.indexOf(color);
+    if (i < 0) i = arrowColors.push(color) - 1;
+    return `url(#kw-pl-arrow-${uid}-${i})`;
+  };
+  segments.forEach((seg, i) => {
+    if (seg.arrow) arrowFor(toneOf(idOf(seg, "seg", i), seg.color).color);
+  });
+  vectors.forEach((v, i) => arrowFor(toneOf(idOf(v, "vec", i), v.color).color));
 
   const xTicks = niceTicks(x0, x1, 6).filter((t) => t >= x0 && t <= x1);
   const yTicks = niceTicks(y0, y1, 5).filter((t) => t >= y0 && t <= y1);
 
   const originX = x0 <= 0 && x1 >= 0 ? px(0) : null;
   const originY = y0 <= 0 && y1 >= 0 ? py(0) : null;
+
+  const regionCells = regions.map((region) =>
+    sampleRegion(
+      region.when,
+      { xMin: x0, xMax: x1, yMin: y0, yMax: y1 },
+      undefined,
+      Math.min(MAX_REGION_RESOLUTION, finite(region.resolution) ? region.resolution : 40),
+    ),
+  );
+  const regionErrors = regionCells.map((r) => r.error).filter((e): e is string => Boolean(e));
+
+  const isSelected = (key: string) =>
+    selectedKeys.has(key) ||
+    (bus.selected?.widget === widgetId && bus.selected.kind === "point" && bus.selected.key === key);
+  const selectable = (key: string) =>
+    onSelect !== undefined || whyFor(mergedWhy, { widget: widgetId, kind: "point", key }) !== undefined;
+  const firstSelectable = points.map(pointId).find(selectable);
 
   const pointMarker = (p: PlanePoint, x: number, y: number, color: string) => {
     switch (p.style) {
@@ -233,12 +327,12 @@ export function PlaneView({
   };
 
   return (
-    <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0", overflow: "auto" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0", overflow: "auto" }}>
       <svg
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
-        role="img"
+        role={firstSelectable !== undefined ? "graphics-document" : "img"}
         aria-label={
           ariaLabel ??
           summarizePlane({ points, segments, polygons, circles, xMin: x0, xMax: x1, yMin: y0, yMax: y1 })
@@ -246,10 +340,54 @@ export function PlaneView({
         style={{ display: "block", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}
       >
         <defs>
-          <marker id={arrowId} viewBox="0 0 10 10" refX={9} refY={5} markerWidth={7} markerHeight={7} orient="auto">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
-          </marker>
+          {arrowColors.map((color, i) => (
+            <marker
+              key={i}
+              id={`kw-pl-arrow-${uid}-${i}`}
+              viewBox="0 0 10 10"
+              refX={9}
+              refY={5}
+              markerWidth={7}
+              markerHeight={7}
+              orient="auto"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={color} />
+            </marker>
+          ))}
         </defs>
+
+        {/* Predicate regions — the furthest back, since they are a backdrop */}
+        {regionCells.map(({ cells }, i) => {
+          const region = regions[i]!;
+          const tone = region.color ?? highlightColor;
+          const dim = dimIds.has(idOf(region, "region", i));
+          return (
+            <g key={`rg${i}`} opacity={dim ? 0.3 : 1}>
+              {cells.map((cell, j) => (
+                <rect
+                  key={j}
+                  x={px(cell.x0)}
+                  y={py(cell.y1)}
+                  width={Math.max(0.5, px(cell.x1) - px(cell.x0))}
+                  height={Math.max(0.5, py(cell.y0) - py(cell.y1))}
+                  fill={tone}
+                  opacity={finite(region.opacity) ? region.opacity : 0.16}
+                />
+              ))}
+              {region.label && cells[0] && (
+                <SvgLabel
+                  x={px(cells[Math.floor(cells.length / 2)]!.x0)}
+                  y={py(cells[Math.floor(cells.length / 2)]!.y1) + 12}
+                  text={shortText(region.label)}
+                  fill={tone}
+                  fontSize={10}
+                  fontWeight={600}
+                  halo={DEFAULTS.surface}
+                />
+              )}
+            </g>
+          );
+        })}
 
         {grid && (
           <g stroke={DEFAULTS.border} strokeWidth={0.75} opacity={0.35}>
@@ -323,7 +461,7 @@ export function PlaneView({
                 <SvgLabel
                   x={px(centroid[0])}
                   y={py(centroid[1])}
-                  text={poly.label}
+                  text={shortText(poly.label)}
                   anchor="middle"
                   dominantBaseline="central"
                   fill={tone.color}
@@ -341,12 +479,13 @@ export function PlaneView({
           const tone = toneOf(id, c.color);
           const at = resolve(c.at);
           if (!at) return null;
+          const r = Math.max(1, Math.abs(c.r) * scaleX);
           return (
             <g key={`circ${i}`} opacity={tone.opacity}>
               <circle
                 cx={px(at[0])}
                 cy={py(at[1])}
-                r={c.r * scaleX}
+                r={r}
                 fill="none"
                 stroke={tone.color}
                 strokeWidth={tone.weight}
@@ -355,8 +494,8 @@ export function PlaneView({
               {c.label && (
                 <SvgLabel
                   x={px(at[0])}
-                  y={py(at[1]) - c.r * scaleX - 5}
-                  text={c.label}
+                  y={py(at[1]) - r - 5}
+                  text={shortText(c.label)}
                   anchor="middle"
                   fill={tone.color}
                   fontSize={10}
@@ -384,13 +523,13 @@ export function PlaneView({
                 stroke={tone.color}
                 strokeWidth={tone.weight}
                 strokeDasharray={seg.dashed ? "5 4" : undefined}
-                markerEnd={seg.arrow ? `url(#${arrowId})` : undefined}
+                markerEnd={seg.arrow ? arrowFor(tone.color) : undefined}
               />
               {seg.label && (
                 <SvgLabel
                   x={(px(a[0]) + px(b[0])) / 2}
                   y={(py(a[1]) + py(b[1])) / 2 - 6}
-                  text={seg.label}
+                  text={shortText(seg.label)}
                   anchor="middle"
                   fill={tone.color}
                   fontSize={10}
@@ -405,7 +544,7 @@ export function PlaneView({
         {vectors.map((v, i) => {
           const id = idOf(v, "vec", i);
           const tone = toneOf(id, v.color);
-          const a = v.from ? resolve(v.from) : ([0, 0] as XY);
+          const a = v.from != null ? resolve(v.from) : ([0, 0] as XY);
           const b = resolve(v.to);
           if (!a || !b) return null;
           return (
@@ -417,13 +556,13 @@ export function PlaneView({
                 y2={py(b[1])}
                 stroke={tone.color}
                 strokeWidth={tone.weight + 0.5}
-                markerEnd={`url(#${arrowId})`}
+                markerEnd={arrowFor(tone.color)}
               />
               {v.label && (
                 <SvgLabel
                   x={px(b[0]) + 7}
                   y={py(b[1]) - 7}
-                  text={v.label}
+                  text={shortText(v.label)}
                   fill={tone.color}
                   fontSize={10}
                   fontWeight={700}
@@ -435,21 +574,21 @@ export function PlaneView({
         })}
 
         {/* Sweep line or ray */}
-        {sweep && (
+        {sweep && typeof sweep === "object" && finite(sweep.at) && (
           <g stroke={activeColor} strokeWidth={2} strokeDasharray="4 3">
             {sweep.axis === "x" && <line x1={px(sweep.at)} y1={offY} x2={px(sweep.at)} y2={offY + drawH} />}
             {sweep.axis === "y" && <line x1={offX} y1={py(sweep.at)} x2={offX + drawW} y2={py(sweep.at)} />}
             {sweep.axis === "angle" &&
               (() => {
-                const [ox, oy] = sweep.origin ?? [0, 0];
+                const origin = resolve(sweep.origin) ?? ([0, 0] as XY);
                 const len = Math.hypot(drawW, drawH);
                 const rad = (sweep.at * Math.PI) / 180;
                 return (
                   <line
-                    x1={px(ox)}
-                    y1={py(oy)}
-                    x2={px(ox) + Math.cos(rad) * len}
-                    y2={py(oy) - Math.sin(rad) * len}
+                    x1={px(origin[0])}
+                    y1={py(origin[1])}
+                    x2={px(origin[0]) + Math.cos(rad) * len}
+                    y2={py(origin[1]) - Math.sin(rad) * len}
                   />
                 );
               })()}
@@ -457,7 +596,7 @@ export function PlaneView({
               <SvgLabel
                 x={sweep.axis === "y" ? offX + 6 : px(sweep.at) + 6}
                 y={sweep.axis === "y" ? py(sweep.at) - 6 : offY + 10}
-                text={sweep.label}
+                text={shortText(sweep.label)}
                 fill={activeColor}
                 fontSize={10}
                 fontWeight={700}
@@ -468,18 +607,39 @@ export function PlaneView({
         )}
 
         {points.map((p, i) => {
-          const id = idOf(p, "pt", i);
-          const tone = toneOf(id, p.color);
+          const id = pointId(p, i);
+          const picked = isSelected(id);
+          const tone = picked ? { color: activeColor, opacity: 1, weight: 2.5 } : toneOf(id, p.color);
           const x = px(p.x);
           const y = py(p.y);
+          const handlers = selectable(id)
+            ? {
+                ...partHandlers(widgetId, "point", id, bus, {
+                  onSelect,
+                  why: mergedWhy,
+                  tabbable: id === firstSelectable,
+                }),
+                "aria-selected": picked || undefined,
+              }
+            : {};
           return (
-            <g key={`pt${i}`} opacity={tone.opacity} style={{ transition: "opacity 0.25s ease" }}>
+            <g
+              key={`pt${i}`}
+              opacity={tone.opacity}
+              {...handlers}
+              style={{
+                transition: "opacity 0.25s ease",
+                cursor: selectable(id) ? "pointer" : undefined,
+                outline: "none",
+              }}
+            >
+              {picked && <circle cx={x} cy={y} r={8} fill="none" stroke={activeColor} strokeWidth={1.5} />}
               {pointMarker(p, x, y, tone.color)}
               {p.label && (
                 <SvgLabel
                   x={x + 7}
                   y={y - 7}
-                  text={p.label}
+                  text={shortText(p.label)}
                   fill={tone.color}
                   fontSize={10}
                   fontWeight={700}
@@ -497,9 +657,9 @@ export function PlaneView({
           return (
             <SvgLabel
               key={`lbl${i}`}
-              x={px(at[0]) + (l.dx ?? 0)}
-              y={py(at[1]) + (l.dy ?? 0)}
-              text={l.text}
+              x={px(at[0]) + (finite(l.dx) ? l.dx : 0)}
+              y={py(at[1]) + (finite(l.dy) ? l.dy : 0)}
+              text={shortText(l.text ?? "")}
               anchor="middle"
               fill={l.color ?? DEFAULTS.text}
               fontSize={10}
@@ -518,7 +678,7 @@ export function PlaneView({
             fontSize={10}
             fontWeight={600}
           >
-            {xLabel}
+            {shortText(xLabel)}
           </text>
         )}
         {yLabel && (
@@ -531,10 +691,17 @@ export function PlaneView({
             fontSize={10}
             fontWeight={600}
           >
-            {yLabel}
+            {shortText(yLabel)}
           </text>
         )}
       </svg>
+      {regionErrors.length > 0 && (
+        <div style={{ fontSize: "0.7rem", color: DEFAULTS.dimColor, marginTop: 4 }}>
+          {regionErrors.map((e, i) => (
+            <div key={i}>region: {e}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { lazy } from "react";
 import type { FenceSpec } from "../registry";
 import { summarizePlane } from "@kw/widgets/widgetA11y";
-import { CANVAS_ATTRS, bool, enumOf, many, number, numberList, objectList, string } from "./common";
+import { CANVAS_ATTRS, anyValue, bool, enumOf, many, number, numberList, objectList, string } from "./common";
 
 const PlaneView = lazy(() =>
   import("@kw/widgets/PlaneView").then((m) => ({ default: m.PlaneView })),
@@ -13,7 +13,7 @@ export const planeSpec: FenceSpec = {
   description:
     "A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps.",
   component: PlaneView,
-  required: ["points", "segments", "polygons", "circles", "vectors"],
+  required: ["points", "segments", "polygons", "circles", "vectors", "regions"],
   schema: {
     attributes: {
       xMin: number("Left edge. Default 0.", false),
@@ -25,16 +25,26 @@ export const planeSpec: FenceSpec = {
       grid: bool("Draw the unit grid. Default true.", false),
       axes: bool("Draw the axes through the origin. Default true.", false),
       aspect: enumOf(["equal", "auto"], '"equal" (default) keeps circles round and right angles right.', false),
-      points: objectList('`{x, y, id?, label?, style?: "dot"|"open"|"cross"|"square", color?}`.'),
-      segments: objectList("`{from, to, label?, arrow?, dashed?}`. Each end is a point id or a literal `[x, y]`."),
+      points: objectList(
+        '`{x, y, id?, label?, style?: "dot"|"open"|"cross"|"square", color?}`. `id` defaults to `pt0`, `pt1`, …',
+      ),
+      segments: objectList(
+        "`{from, to, label?, arrow?, dashed?, color?}`. Each end is a point id, a point index, or a literal `[x, y]`.",
+      ),
       polygons: objectList("`{points: [...], label?, open?, fill?}` — a triangle, a hull being built."),
       circles: objectList("`{at, r, label?, dashed?}`."),
       vectors: objectList("`{to, from?, label?}`. `from` defaults to the origin."),
       labels: objectList("Free text at a position: `{at, text, dx?, dy?}`."),
+      regions: objectList(
+        'Shaded where a formula holds: `{when: "x + y <= 6", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope; sampled on a grid of at most 60×60.',
+      ),
       sweep: { type: "object", description: '`{axis: "x"|"y"|"angle", at, origin?, label?}`.' },
       activeIds: many("Ids drawn in the active color."),
       highlightIds: many("Secondary-highlighted ids."),
       dimIds: many("Dimmed ids."),
+      selected: many("Point ids drawn as selected."),
+      why: anyValue("Point id → explanation, revealed when the reader selects it."),
+      widgetId: string("Name for the inspect bus.", false),
       xLabel: string("Caption under the x axis.", false),
       yLabel: string("Caption beside the y axis.", false),
       width: number("Canvas width, px.", false),

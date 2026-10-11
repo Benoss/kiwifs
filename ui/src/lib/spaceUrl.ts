@@ -71,7 +71,7 @@ export function parseSpaceLocation(pathname: string, hash = ""): SpaceLocation {
     return { space: null, path: decodePath(pathname.slice(PAGE_PREFIX.length)) };
   }
 
-  const legacyHash = hash.replace(/^#\/?/, "");
+  const legacyHash = hash.replace(/^#\/?/, "").split("?")[0]!;
   if (legacyHash) return { space: null, path: decodePath(legacyHash) };
 
   return { space: null, path: null };

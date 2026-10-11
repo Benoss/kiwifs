@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  coercePageVarValue,
   getPageVar,
   initPageVar,
   numericPageVars,
@@ -124,5 +125,50 @@ describe("parseInlineTags", () => {
   it("ignores text with no tags", () => {
     expect(parseInlineTags("100% done")).toEqual([]);
     expect(hasInlineTags("100% done")).toBe(false);
+  });
+});
+
+describe("placeholders next to braces", () => {
+  it("does not eat a closing brace after a bare name", () => {
+    expect(substitutePageVars("{a: $n}", { n: 4 })).toBe("{a: 4}");
+    expect(substitutePageVars("{a: ${n}}", { n: 4 })).toBe("{a: 4}");
+    expect(substitutePageVars("${n}px", { n: 4 })).toBe("4px");
+  });
+
+  it("names the variable either way", () => {
+    expect(referencedVars("{a: $n, b: ${m}}")).toEqual(["n", "m"]);
+  });
+});
+
+describe("select values", () => {
+  it("stores a numeric option as a number, so expressions see it", () => {
+    expect(coercePageVarValue("4")).toBe(4);
+    expect(coercePageVarValue("2.5")).toBe(2.5);
+    expect(coercePageVarValue("-1")).toBe(-1);
+  });
+
+  it("leaves words and non-canonical spellings as strings", () => {
+    expect(coercePageVarValue("fast")).toBe("fast");
+    expect(coercePageVarValue("04")).toBe("04");
+    expect(coercePageVarValue("")).toBe("");
+    expect(coercePageVarValue(" 4")).toBe(" 4");
+  });
+
+  it("reaches numericPageVars once coerced", () => {
+    resetPageVars();
+    setPageVar("k", coercePageVarValue("8"));
+    expect(numericPageVars()).toEqual({ k: 8 });
+    resetPageVars();
+  });
+});
+
+describe("inline tags with a percent in a quoted value", () => {
+  it("does not end the tag at a quoted %", () => {
+    const [tag] = parseInlineTags('{% range name="p" suffix="%" max=100 /%} done');
+    expect(tag).toMatchObject({ name: "range", attrs: { name: "p", suffix: "%", max: 100 } });
+    const text = '{% value p suffix=\'% off\' /%}';
+    const [single] = parseInlineTags(text);
+    expect(single!.attrs.suffix).toBe("% off");
+    expect(text.slice(single!.start, single!.end)).toBe(text);
   });
 });

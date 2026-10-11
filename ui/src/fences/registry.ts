@@ -56,6 +56,15 @@ export interface FenceSpec<P = any> {
    */
   reclaims?: string[];
   /**
+   * Each `steps:` entry applies over the base rather than the previous step.
+   * `kiwi-steps` bodies were written that way before the fence platform
+   * existed, and reading them as deltas would carry a `dim:` into every
+   * later step.
+   */
+  independentSteps?: boolean;
+  /** `steps:` must be a non-empty list. */
+  requireSteps?: boolean;
+  /**
    * Renders two linked panels instead of one component (a heap as tree and
    * array, a union-find forest beside its parent array).
    */
@@ -64,7 +73,10 @@ export interface FenceSpec<P = any> {
   example: string;
   /** Prose fallback for PDF export, search indexing and `aria-label`. */
   summarize?: (props: P) => string;
-  /** Third-party widget registered through `registerWidget`. */
+  /**
+   * Third-party widget registered through `registerWidget`. Rendered as
+   * `<Component config={body} />` with the whole YAML mapping, as it always was.
+   */
   legacy?: boolean;
 }
 
@@ -81,12 +93,29 @@ type AnySpec = FenceSpec<any>;
 
 const specs = new Map<string, AnySpec>();
 const byAlias = new Map<string, string>();
+let generation = 0;
+
+const STRICT_PREFIX = /^(kiwi-|widget:)/i;
+
+/**
+ * `kiwi-array` and `widget:array` always claim their block and report errors
+ * loudly. Every other spelling — the bare name, a declared alias, a case
+ * variant — has to be sniffed, because a vault may already use it for
+ * something else. The Go linter applies the same rule.
+ */
+export function isStrictTag(lang: string): boolean {
+  return STRICT_PREFIX.test(lang);
+}
+
+/** `kiwi-` and `widget:` spellings of a tag, unless it already has one. */
+export function strictSpellings(lang: string): string[] {
+  return isStrictTag(lang) ? [] : [`kiwi-${lang}`, `widget:${lang}`];
+}
 
 export function registerFence(spec: AnySpec): void {
   specs.set(spec.lang, spec);
   byAlias.set(spec.lang, spec.lang);
-  byAlias.set(`kiwi-${spec.lang}`, spec.lang);
-  byAlias.set(`widget:${spec.lang}`, spec.lang);
+  for (const tag of strictSpellings(spec.lang)) byAlias.set(tag, spec.lang);
   for (const alias of spec.aliases ?? []) byAlias.set(alias, spec.lang);
 }
 
@@ -98,7 +127,6 @@ export function unregisterFence(lang: string): boolean {
   return true;
 }
 
-/** Legacy widgets take the whole YAML mapping as one `config` prop. */
 function legacySpec(name: string, component: WidgetComponent): AnySpec {
   return {
     lang: name,
@@ -114,8 +142,10 @@ export function getFence(lang: string | undefined): AnySpec | undefined {
   if (!lang) return undefined;
   const target = byAlias.get(lang) ?? byAlias.get(lang.toLowerCase());
   if (target) return specs.get(target);
-  // `widget:foo` / `kiwi-foo` may still name a third-party registration.
-  const bare = lang.replace(/^widget:/, "").replace(/^kiwi-/, "");
+  // Only an explicit spelling may name a third-party registration: a bare
+  // ```chart in someone's vault must not turn into their embedder's widget.
+  if (!isStrictTag(lang)) return undefined;
+  const bare = lang.replace(STRICT_PREFIX, "");
   const legacy = getWidget(bare);
   return legacy ? legacySpec(bare, legacy) : undefined;
 }
@@ -129,8 +159,14 @@ export function fenceLangs(): string[] {
   return [...specs.keys()];
 }
 
+/** Bumped by `clearFences`, so `registerBuiltinFences` knows to run again. */
+export function registryGeneration(): number {
+  return generation;
+}
+
 /** Test seam. */
 export function clearFences(): void {
   specs.clear();
   byAlias.clear();
+  generation++;
 }

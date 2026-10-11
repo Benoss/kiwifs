@@ -21,7 +21,16 @@ interface Entry {
   columns: string[];
 }
 
-const byKind = new Map<string, Entry>();
+interface Registration extends Entry {
+  owner: object;
+}
+
+/**
+ * Every block registered under a kind, in registration order; the latest one
+ * is what readers see. Two blocks of one kind each own their registration, so
+ * one unmounting cannot take the other's records with it.
+ */
+const byKind = new Map<string, Registration[]>();
 const listeners = new Set<Listener>();
 let version = 0;
 
@@ -40,20 +49,41 @@ export function pageDataVersion(): number {
   return version;
 }
 
-export function registerPageData(kind: string, records: DataRecord[], columns: string[]) {
+/**
+ * Publish `records` under `kind`. `owner` identifies the block; without one
+ * the records array stands in for it.
+ */
+export function registerPageData(kind: string, records: DataRecord[], columns: string[], owner: object = records) {
   if (!kind) return;
-  const existing = byKind.get(kind);
-  if (existing && existing.records === records) return;
-  byKind.set(kind, { kind, records, columns });
+  const list = byKind.get(kind) ?? [];
+  const at = list.findIndex((r) => r.owner === owner);
+  if (at >= 0 && list[at]!.records === records && list[at]!.columns === columns) return;
+  const entry: Registration = { kind, records, columns, owner };
+  if (at >= 0) list[at] = entry;
+  else list.push(entry);
+  byKind.set(kind, list);
   refresh();
 }
 
-export function unregisterPageData(kind: string) {
-  if (byKind.delete(kind)) refresh();
+/** Withdraw `owner`'s records, or every block's under `kind` if no owner is given. */
+export function unregisterPageData(kind: string, owner?: object) {
+  const list = byKind.get(kind);
+  if (!list) return;
+  if (owner === undefined) {
+    byKind.delete(kind);
+    refresh();
+    return;
+  }
+  const at = list.findIndex((r) => r.owner === owner);
+  if (at < 0) return;
+  list.splice(at, 1);
+  if (list.length === 0) byKind.delete(kind);
+  refresh();
 }
 
 export function getPageData(kind: string): Entry | undefined {
-  return byKind.get(kind);
+  const list = byKind.get(kind);
+  return list?.[list.length - 1];
 }
 
 export function pageDataKinds(): string[] {

@@ -8,19 +8,36 @@
  */
 
 import { registerBuiltinFences } from "./builtins";
-import { allFences } from "./registry";
+import { allFences, isStrictTag, strictSpellings } from "./registry";
 import { RESERVED_STEP, RESERVED_TOP_LEVEL, serializeSchema, type SerializedAttribute } from "./schema";
 
 export interface FenceDoc {
   lang: string;
+  /** Every other tag that resolves here, strict spellings included. */
   aliases: string[];
+  /** The subset of `aliases` spelled `kiwi-…` / `widget:…`, which always claim their block. */
+  strictAliases: string[];
   description: string;
-  /** Any one of these keys marks a bare fence as belonging to this widget. */
+  /** Any one of these keys marks a non-strict fence as belonging to this widget. */
   required: string[];
   /** At least one of these has to be present for the fence to be valid. */
   requireOneOf?: string[];
+  /** Reserved top-level keys this fence reads as ordinary props. */
+  reclaims?: string[];
+  /** Each step applies over the base, not over the previous step. */
+  independentSteps?: boolean;
+  /** `steps:` must be a non-empty list. */
+  requireSteps?: boolean;
   example: string;
   attributes: Record<string, SerializedAttribute>;
+}
+
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function aliasesOf(lang: string, declared: string[] = []): string[] {
+  const out = new Set([...strictSpellings(lang), ...declared]);
+  out.delete(lang);
+  return [...out];
 }
 
 export interface FenceCatalogue {
@@ -37,20 +54,27 @@ export function fenceCatalogue(): FenceCatalogue {
   registerBuiltinFences();
   const fences = allFences()
     .filter((spec) => !spec.legacy)
-    .map<FenceDoc>((spec) => ({
-      lang: spec.lang,
-      aliases: [`kiwi-${spec.lang}`, `widget:${spec.lang}`, ...(spec.aliases ?? [])],
-      description: spec.description,
-      required:
-        spec.required ??
-        Object.entries(spec.schema.attributes)
-          .filter(([, a]) => a.required)
-          .map(([k]) => k),
-      requireOneOf: spec.requireOneOf,
-      example: spec.example,
-      attributes: serializeSchema(spec.schema),
-    }))
-    .sort((a, b) => a.lang.localeCompare(b.lang));
+    .map<FenceDoc>((spec) => {
+      const aliases = aliasesOf(spec.lang, spec.aliases);
+      return {
+        lang: spec.lang,
+        aliases,
+        strictAliases: aliases.filter(isStrictTag),
+        description: spec.description,
+        required:
+          spec.required ??
+          Object.entries(spec.schema.attributes)
+            .filter(([, a]) => a.required)
+            .map(([k]) => k),
+        requireOneOf: spec.requireOneOf,
+        reclaims: spec.reclaims?.length ? [...spec.reclaims] : undefined,
+        independentSteps: spec.independentSteps || undefined,
+        requireSteps: spec.requireSteps || undefined,
+        example: spec.example,
+        attributes: serializeSchema(spec.schema),
+      };
+    })
+    .sort((a, b) => byCodeUnit(a.lang, b.lang));
 
   return {
     version: 1,
@@ -70,7 +94,7 @@ function attributeRows(doc: FenceDoc): string {
   const names = Object.keys(doc.attributes).sort((a, b) => {
     const ra = doc.attributes[a]!.required ? 0 : 1;
     const rb = doc.attributes[b]!.required ? 0 : 1;
-    return ra - rb || a.localeCompare(b);
+    return ra - rb || byCodeUnit(a, b);
   });
   // A bare `|` would end the table cell, and every union type contains one.
   const cell = (text: string) => text.replace(/\|/g, "\\|");
@@ -129,6 +153,8 @@ export function referenceMarkdown(): string {
     "",
     "`code:` plus `lang:` render a listing that steps in lockstep. `props:` is the",
     "escape hatch for a widget property whose name collides with a reserved key.",
+    "`link: {to: <widget>, map: index}` maps this fence's keys onto another widget's,",
+    "so selecting one part lights the corresponding part of the other.",
     "",
   );
   out.push("## Meta string", "");
@@ -150,15 +176,17 @@ export function referenceMarkdown(): string {
   );
   out.push("## Naming and collisions", "");
   out.push(
-    "Each fence answers to three language tags: the bare name (`array`), the explicit",
-    "`kiwi-array`, and the legacy `widget:array`. A bare name only claims a block whose",
-    "YAML parses to a mapping carrying one of the fence's marker keys, so a vault that",
-    "already uses `tree` for directory listings keeps its code blocks. The `kiwi-` and",
-    "`widget:` spellings always render, or report an error, for authors who prefer",
-    "strictness.",
+    "Each fence answers to its bare name (`array`), the explicit `kiwi-array`, the",
+    "legacy `widget:array`, and any aliases listed below. Strictness is decided by",
+    "spelling: only a tag starting with `kiwi-` or `widget:` always renders, or reports",
+    "an error. Every other tag — the bare name, an alias such as `grid` or `heap`, a",
+    "capitalised `Tree` — only claims a block whose YAML parses to a mapping carrying",
+    "one of the fence's marker keys (at the top level, under `props:`, or in the first",
+    "step or frame), so a vault that already uses `tree` for directory listings keeps",
+    "its code blocks.",
     "",
-    "`[ui] typed_fences = false` in `.kiwi/config.toml` turns bare tags off for a",
-    "workspace; `typed_fence_tags = [\"array\", \"matrix\"]` allows only those.",
+    "`[ui] typed_fences = false` in `.kiwi/config.toml` turns every non-strict tag off",
+    "for a workspace; `typed_fence_tags = [\"array\", \"matrix\"]` allows only those.",
     "",
   );
   out.push("## Fences", "");

@@ -161,6 +161,21 @@ function areaPath(
   ].join(" ");
 }
 
+/** Formula series that `sampleSeries` dropped — it keeps order and only drops. */
+function droppedFormulas(input: readonly PlotSeries[], sampled: readonly PlotSeries[]): PlotSeries[] {
+  const dropped: PlotSeries[] = [];
+  let j = 0;
+  for (const s of input) {
+    const out = sampled[j];
+    const kept =
+      out !== undefined &&
+      (out === s || (s.expr !== undefined && out.expr === s.expr && out.label === s.label && out.id === s.id));
+    if (kept) j++;
+    else if (s.expr) dropped.push(s);
+  }
+  return dropped;
+}
+
 /**
  * A 2D plot: lines, area fills, and scatter, with optional shaded intervals,
  * axis guides, and labeled marks. Generic — densities, payoff diagrams,
@@ -198,16 +213,52 @@ export function PlotView({
     () => sampleSeries(seriesIn, bind, { xMin, xMax }),
     [seriesIn, bind, xMin, xMax],
   );
+  const domain = plotDomain(series, { shades, guides, marks, xMin, xMax, yMin, yMax });
+  const { xMin: dx0, xMax: dx1, yMin: dy0, yMax: dy1 } = domain;
+
+  // Keyed on the domain's numbers, not the object: plotDomain builds a new one
+  // every render, which would resample every region on every hover.
+  const regionCells = useMemo(
+    () =>
+      regions.map((region) => {
+        const { cells, error } = sampleRegion(
+          region.when,
+          { xMin: dx0, xMax: dx1, yMin: dy0, yMax: dy1 },
+          bind,
+          region.resolution,
+        );
+        return { region, cells, error };
+      }),
+    [regions, dx0, dx1, dy0, dy1, bind],
+  );
+
   const hasPoints = series.some((s) => (s.points?.length ?? 0) > 0);
-  if (!hasPoints && shades.length === 0 && guides.length === 0 && marks.length === 0) {
+  const hasRegions = regionCells.some((r) => r.cells.length > 0);
+  const nanErrors = droppedFormulas(seriesIn, series)
+    .map((s) => `${s.label ?? s.id ?? s.expr}`)
+    .filter((name) => !exprErrors.some((e) => e.startsWith(`${name}:`)))
+    .map((name) => `${name}: no finite values over the x range`);
+  // A broken formula says so under the chart rather than silently drawing
+  // nothing: an author sweeping a parameter needs to know which one failed.
+  const problems = [
+    ...exprErrors,
+    ...nanErrors,
+    ...regionCells.map((r) => r.error).filter((e): e is string => Boolean(e)),
+  ];
+
+  if (!hasPoints && !hasRegions && shades.length === 0 && guides.length === 0 && marks.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: 16, color: DEFAULTS.dimColor, fontSize: "0.8rem" }}>
         (no data)
+        {problems.map((message, i) => (
+          <div key={i} style={{ color: "var(--kw-widget-accent-rose, #f43f5e)", fontSize: 11 }}>
+            {message}
+          </div>
+        ))}
       </div>
     );
   }
 
-  const domain = plotDomain(series, { shades, guides, marks, xMin, xMax, yMin, yMax });
   const plotW = Math.max(40, width - PAD.left - PAD.right);
   const plotH = Math.max(40, height - PAD.top - PAD.bottom);
   const sx = (x: number) => PAD.left + ((x - domain.xMin) / (domain.xMax - domain.xMin)) * plotW;
@@ -220,22 +271,6 @@ export function PlotView({
 
   const findSeries = (id: string | number): PlotSeries | undefined =>
     series.find((s, i) => seriesId(s, i) === id);
-
-  const regionCells = useMemo(
-    () =>
-      regions.map((region) => {
-        const { cells, error } = sampleRegion(region.when, domain, bind, region.resolution);
-        return { region, cells, error };
-      }),
-    [regions, domain, bind],
-  );
-
-  // A broken formula says so under the chart rather than silently drawing
-  // nothing: an author sweeping a parameter needs to know which one failed.
-  const problems = [
-    ...exprErrors,
-    ...regionCells.map((r) => r.error).filter((e): e is string => Boolean(e)),
-  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0", overflow: "auto" }}>

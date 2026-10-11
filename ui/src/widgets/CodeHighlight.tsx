@@ -76,6 +76,7 @@ export function CodeHighlight({
   const activeSet = shift(toSet(activeLine));
   const nextSet = shift(toSet(nextLine));
   const softSet = shift(toSet(highlightLines));
+  const arrows = nextLine != null;
   const annotationAt = (row: number) => {
     const key = (row + indexBase) as keyof typeof annotations;
     return annotations?.[key] as string | number | null | undefined;
@@ -177,20 +178,24 @@ export function CodeHighlight({
                   {i + 1}
                 </span>
               )}
-              {/* Two arrows in the gutter: what just ran, and what runs next. */}
-              <span
-                aria-hidden
-                style={{
-                  width: 12,
-                  marginRight: 4,
-                  flexShrink: 0,
-                  color: active ? JUST_RAN : next ? NEXT_UP : "transparent",
-                  fontWeight: 700,
-                  userSelect: "none",
-                }}
-              >
-                {active ? "▸" : next ? "▸" : ""}
-              </span>
+              {/* Two arrows in the gutter: what just ran, and what runs next.
+                  Only when `nextLine` is in use, so a block without it keeps
+                  the layout it had before the gutter existed. */}
+              {arrows && (
+                <span
+                  aria-hidden
+                  style={{
+                    width: 12,
+                    marginRight: 4,
+                    flexShrink: 0,
+                    color: active ? JUST_RAN : next ? NEXT_UP : "transparent",
+                    fontWeight: 700,
+                    userSelect: "none",
+                  }}
+                >
+                  {active ? "▸" : next ? "▸" : ""}
+                </span>
+              )}
               <span style={{ whiteSpace: "pre" }}>
                 {tokens ? (
                   tokens.map((tok, j) => (

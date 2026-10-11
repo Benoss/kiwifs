@@ -85,4 +85,28 @@ describe("the expression engine behind kiwi-calc", () => {
   it("rejects a division that goes to infinity", () => {
     expect(() => evaluateExpression("1 / 0", {})).toThrow(/finite/);
   });
+
+  it("reads a magnitude or data unit written straight after a number", () => {
+    expect(evaluateExpression("dau * 2 k", { dau: 3 })).toBe(6000);
+    expect(evaluateExpression("2k + 1", {})).toBe(2001);
+    expect(evaluateExpression("1.5 M", {})).toBe(1.5e6);
+    expect(evaluateExpression("5 b", {})).toBe(5e9);
+    expect(evaluateExpression("3 MB", {})).toBe(3 * 1024 ** 2);
+    expect(evaluateExpression("users * 4 KB", { users: 2 })).toBe(8192);
+    expect(evaluateExpression("2 Mi", {})).toBe(2 * 1024 ** 2);
+    expect(evaluateExpression("90 min / 1 hour", {})).toBe(1.5);
+  });
+
+  it("does not resolve one-letter magnitudes as bare names", () => {
+    expect(() => evaluateExpression("b * 2", {})).toThrow(/unknown name "b"/);
+    expect(() => evaluateExpression("m * x", { x: 1 })).toThrow(/unknown name "m"/);
+    expect(() => evaluateExpression("k", {})).toThrow(/unknown name "k"/);
+    expect(evaluateExpression("m * x + b", { m: 2, x: 3, b: 1 })).toBe(7);
+    expect(evaluateExpression("dau / million", { dau: 3e6 })).toBe(3);
+  });
+
+  it("leaves names that merely contain digits alone", () => {
+    expect(evaluateExpression("x2 * 2", { x2: 4 })).toBe(8);
+    expect(evaluateExpression("max(3, 2)", {})).toBe(3);
+  });
 });

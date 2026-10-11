@@ -57,9 +57,10 @@ function* walkTree(node: TreeEntry): Generator<TreeEntry> {
 export function hasDeepLinkPath(): boolean {
   if (typeof window === "undefined") return false;
   const pathname = window.location.pathname;
-  const hash = window.location.hash.replace(/^#\/?/, "");
   if (pathname.startsWith("/page/")) return true;
-  return Boolean(hash);
+  // `#?step=4` is playback state, not a page; only what precedes `?` routes.
+  const route = window.location.hash.replace(/^#\/?/, "").split("?")[0];
+  return Boolean(route);
 }
 
 /** Start page applies only on root navigation without a deep link. */

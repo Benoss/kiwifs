@@ -19,7 +19,8 @@ export interface InlineTag {
   end: number;
 }
 
-const TAG = /\{%\s*([a-zA-Z][\w-]*)([^%]*?)\/?\s*%\}/g;
+/** Quoted attribute values may contain `%`; only an unquoted one ends the tag. */
+const TAG = /\{%\s*([a-zA-Z][\w-]*)((?:"[^"]*"|'[^']*'|[^%])*?)\/?\s*%\}/g;
 
 /** `a=1 b="two" c` → `{a: 1, b: "two", c: true}`, plus any leading bare word. */
 function parseAttrs(src: string): { positional?: string; attrs: Record<string, string | number | boolean> } {

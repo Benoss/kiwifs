@@ -107,17 +107,10 @@ func suggestForLive(source string, line int) *WidgetSuggestion {
 	}
 
 	// Exactly one view, or the shape is not a single picture.
-	names := map[string]bool{}
-	for _, m := range components {
-		names[m[1]] = true
-	}
-	if len(names) != 1 {
+	if len(components) != 1 {
 		return nil
 	}
-	var component string
-	for name := range names {
-		component = name
-	}
+	component := components[0][1]
 	fence, ok := componentToFence[component]
 	if !ok {
 		return nil
@@ -130,7 +123,11 @@ func suggestForLive(source string, line int) *WidgetSuggestion {
 		return nil
 	}
 
-	props := staticProps(source)
+	attrs, ok := elementAttributes(source, viewElement.FindStringIndex(source)[1])
+	if !ok {
+		return nil
+	}
+	props := staticProps(attrs)
 	if len(props) == 0 {
 		return nil
 	}
@@ -143,10 +140,36 @@ func suggestForLive(source string, line int) *WidgetSuggestion {
 	}
 }
 
+// elementAttributes returns the text between a JSX tag name and the `>` or
+// `/>` that ends the tag, so only the element's own attributes are read as
+// props — not a `const data = {…}` elsewhere in the block.
+func elementAttributes(source string, from int) (string, bool) {
+	depth := 0
+	var quote byte
+	for i := from; i < len(source); i++ {
+		c := source[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'' || c == '`':
+			quote = c
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+		case c == '>' && depth == 0:
+			return strings.TrimSuffix(source[from:i], "/"), true
+		}
+	}
+	return "", false
+}
+
 // staticProps pulls `name={literal}` pairs whose value is a JSON-ish literal.
 // A prop holding an expression disqualifies the block, because converting it
 // would silently drop behaviour.
-var propPair = regexp.MustCompile(`([a-zA-Z][\w]*)\s*=\s*\{`)
+var propPair = regexp.MustCompile(`(?:^|\s)([a-zA-Z][\w]*)\s*=\s*\{`)
 
 func staticProps(source string) map[string]string {
 	out := map[string]string{}

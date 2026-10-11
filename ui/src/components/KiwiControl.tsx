@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {
+  coercePageVarValue,
   getPageVar,
   initPageVar,
   pageVars,
@@ -42,7 +43,7 @@ export function KiwiControl({ kind, attrs }: KiwiControlProps) {
     }
     if (kind === "range" || kind === "select") {
       const min = Number(attrs.min ?? 0);
-      initPageVar(name, kind === "range" ? min : String(firstOption(attrs) ?? ""));
+      initPageVar(name, kind === "range" ? min : coercePageVarValue(firstOption(attrs) ?? ""));
     }
     if (kind === "toggle") initPageVar(name, false);
   }, [name, kind, declaredDefault, attrs]);
@@ -91,7 +92,7 @@ export function KiwiControl({ kind, attrs }: KiwiControlProps) {
         className="kiwi-control-select"
         aria-label={name}
         value={String(current ?? options[0] ?? "")}
-        onChange={(e) => setPageVar(name, e.target.value)}
+        onChange={(e) => setPageVar(name, coercePageVarValue(e.target.value))}
       >
         {options.map((o) => (
           <option key={o} value={o}>

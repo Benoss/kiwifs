@@ -12,8 +12,12 @@ import { getFence, sniffFence } from "@kw/fences";
 
 const FENCE_RE = /^(`{3,}|~{3,})[ \t]*([A-Za-z0-9_:.-]*)[^\n]*\n([\s\S]*?)^\1[ \t]*$/gm;
 
-/** Caption, title and step notes — everything that is prose, nothing that is coordinates. */
-export function summarizeFenceBody(source: string): string {
+/**
+ * Caption, title and step notes — everything that is prose, nothing that is
+ * coordinates. `includeCode` adds a `code:` listing, which the export leaves
+ * out because the YAML block below it already carries the listing.
+ */
+export function summarizeFenceBody(source: string, includeCode = true): string {
   let body: unknown;
   try {
     body = yaml.load(source);
@@ -36,7 +40,7 @@ export function summarizeFenceBody(source: string): string {
       }
     }
   }
-  if (typeof rec.code === "string" && rec.code.trim()) parts.push(rec.code.trim());
+  if (includeCode && typeof rec.code === "string" && rec.code.trim()) parts.push(rec.code.trim());
   return parts.join("\n");
 }
 
@@ -45,7 +49,7 @@ export function rewriteWidgetFences(markdown: string): string {
     const spec = getFence(lang);
     if (!spec || !sniffFence(spec, lang, body)) return match;
 
-    const summary = summarizeFenceBody(body);
+    const summary = summarizeFenceBody(body, false);
     const quoted = summary
       ? `${summary
           .split("\n")
@@ -53,6 +57,15 @@ export function rewriteWidgetFences(markdown: string): string {
           .join("\n")}\n>\n`
       : "";
     const note = `> *Interactive ${spec.lang} widget — open this page in KiwiFS to step through it.*\n`;
-    return `${quoted}${note}\n\`\`\`yaml\n${body.replace(/\n$/, "")}\n\`\`\`\n`;
+    const source = body.replace(/\n$/, "");
+    const fence = "`".repeat(Math.max(3, longestBacktickRun(source) + 1));
+    return `${quoted}${note}\n${fence}yaml\n${source}\n${fence}\n`;
   });
+}
+
+/** A `code:` listing holding a ``` fence of its own would otherwise close the YAML block early. */
+function longestBacktickRun(text: string): number {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+  return longest;
 }

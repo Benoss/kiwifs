@@ -11,6 +11,8 @@
  * `zetaloop/OnlinePythonTutor-Backup`). `dodona-json-tracer` emits the same.
  */
 
+import { shortText } from "./widgetA11y";
+
 export type HeapId = string | number;
 
 /** A primitive, or a pointer into the heap. */
@@ -60,14 +62,35 @@ export function refTarget(value: unknown): HeapId | null {
   return isRef(value) ? value[1] : null;
 }
 
-/** Display text for a primitive. */
-export function formatValue(value: TraceValue): string {
-  if (value === null) return "None";
+/** Display text for a primitive; anything else reads as truncated JSON. */
+export function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return "None";
   if (value === true) return "True";
   if (value === false) return "False";
   if (typeof value === "string") return JSON.stringify(value);
   if (Array.isArray(value) && value[0] === "SPECIAL_FLOAT") return String(value[1]);
+  if (typeof value === "object") return shortText(value);
   return String(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPair(value: unknown): value is readonly [unknown, unknown] {
+  return Array.isArray(value) && value.length >= 2;
+}
+
+/** A frame's locals, or none when the author left `vars` out. */
+export function varsOf(frame: StackFrame): Record<string, TraceValue> {
+  return isRecord(frame.vars) ? (frame.vars as Record<string, TraceValue>) : {};
+}
+
+/** The heap object with this id, ignoring anything inherited from `Object.prototype`. */
+export function heapGet(heap: Record<string, HeapObject>, id: HeapId): HeapObject | undefined {
+  if (!isRecord(heap)) return undefined;
+  const key = String(id);
+  return Object.prototype.hasOwnProperty.call(heap, key) ? heap[key] : undefined;
 }
 
 export interface HeapEntry {
@@ -80,8 +103,16 @@ export interface HeapEntry {
 }
 
 /** Normalise a tagged heap object into rows a renderer can lay out. */
-export function describeHeapObject(id: HeapId, raw: HeapObject): HeapEntry {
-  const kind = String(raw[0] ?? "OBJECT");
+export function describeHeapObject(id: HeapId, raw: HeapObject | unknown): HeapEntry {
+  if (!Array.isArray(raw)) {
+    // Not the tagged format: a plain `{field: value}` reads as an object's
+    // fields, and a bare primitive as a box holding it.
+    if (isRecord(raw)) {
+      return { id, kind: "OBJECT", slots: Object.entries(raw).map(([label, value]) => ({ label, value: value as TraceValue })) };
+    }
+    return { id, kind: "OBJECT", slots: raw === undefined ? [] : [{ value: raw as TraceValue }] };
+  }
+  const kind = typeof raw[0] === "string" ? raw[0] : "OBJECT";
   switch (kind) {
     case "LIST":
     case "TUPLE":
@@ -96,24 +127,24 @@ export function describeHeapObject(id: HeapId, raw: HeapObject): HeapEntry {
       return {
         id,
         kind,
-        slots: raw.slice(1).map((pair) => {
-          const [key, value] = pair as readonly [TraceValue, TraceValue];
-          return { label: formatValue(key), value };
-        }),
+        slots: raw
+          .slice(1)
+          .filter(isPair)
+          .map(([key, value]) => ({ label: formatValue(key), value: value as TraceValue })),
       };
     case "INSTANCE":
       return {
         id,
         kind,
-        title: String(raw[1] ?? ""),
-        slots: raw.slice(2).map((pair) => {
-          const [field, value] = pair as readonly [string, TraceValue];
-          return { label: field, value };
-        }),
+        title: shortText(raw[1] ?? ""),
+        slots: raw
+          .slice(2)
+          .filter(isPair)
+          .map(([field, value]) => ({ label: shortText(field), value: value as TraceValue })),
       };
     case "CLASS":
     case "FUNCTION":
-      return { id, kind, title: String(raw[1] ?? ""), slots: [] };
+      return { id, kind, title: shortText(raw[1] ?? ""), slots: [] };
     default:
       return {
         id,
@@ -145,22 +176,24 @@ export function heapOrder(
     queue.push(target);
   };
 
-  for (const frame of frames) {
-    for (const key of frameOrder(frame)) push(frame.vars[key]);
+  for (const frame of Array.isArray(frames) ? frames : []) {
+    if (!isRecord(frame as unknown)) continue;
+    const vars = varsOf(frame);
+    for (const key of frameOrder(frame)) push(vars[key]);
     push(frame.returned);
   }
 
   while (queue.length > 0) {
     const id = queue.shift()!;
-    const raw = heap[String(id)];
-    if (!raw) continue;
+    const raw = heapGet(heap, id);
+    if (raw === undefined) continue;
     out.push(id);
     for (const slot of describeHeapObject(id, raw).slots) push(slot.value);
   }
 
   // Anything unreachable still has to be drawn — an author stepping through a
   // leak wants to see the object nothing points at.
-  for (const id of Object.keys(heap)) {
+  for (const id of isRecord(heap) ? Object.keys(heap) : []) {
     if (!seen.has(id)) out.push(id);
   }
   return out;
@@ -168,10 +201,11 @@ export function heapOrder(
 
 /** A frame's variables, honouring an explicit `order`. */
 export function frameOrder(frame: StackFrame): string[] {
-  const keys = Object.keys(frame.vars);
-  if (!frame.order) return keys;
-  const named = frame.order.filter((k) => k in frame.vars);
-  return [...named, ...keys.filter((k) => !named.includes(k))];
+  const vars = varsOf(frame);
+  const keys = Object.keys(vars);
+  if (!Array.isArray(frame.order)) return keys;
+  const named = frame.order.map(String).filter((k) => Object.prototype.hasOwnProperty.call(vars, k));
+  return [...new Set(named), ...keys.filter((k) => !named.includes(k))];
 }
 
 /** Stable key for the arrow from a frame variable to its heap object. */

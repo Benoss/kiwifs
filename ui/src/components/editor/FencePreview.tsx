@@ -9,6 +9,20 @@ export interface FencePreviewProps {
   target: FencePreviewTarget | null;
 }
 
+/** FNV-1a: cheap enough per keystroke, and an edit that keeps the length still changes it. */
+function hashString(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+export function previewKey(target: FencePreviewTarget): string {
+  return `${target.lang}:${hashString(`${target.meta}\n${target.body}`)}`;
+}
+
 /**
  * The picture for the fence being edited, beside the YAML.
  *
@@ -38,17 +52,17 @@ export function FencePreview({ target }: FencePreviewProps) {
       </button>
       {!collapsed && (
         <div className="border-t px-2 pb-2">
+          {/* Reset on the source rather than remounting: every edit gets a
+              fresh attempt, but playback keeps its step and clock while typing. */}
           <ErrorBoundary
+            resetKeys={[previewKey(target)]}
             fallback={
               <p className="px-2 py-3 text-xs text-destructive">
                 This fence threw while rendering.
               </p>
             }
           >
-            {/* Keyed on the source so a structural edit remounts rather than
-                trying to reconcile a half-typed tree. */}
             <TypedFence
-              key={`${target.lang}:${target.body.length}`}
               spec={spec}
               source={target.body}
               meta={target.meta}

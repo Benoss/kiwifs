@@ -35,6 +35,11 @@
         "arraystack",
         "kiwi-arraystack"
       ],
+      "strictAliases": [
+        "kiwi-array",
+        "widget:array",
+        "kiwi-arraystack"
+      ],
       "description": "One or more arrays on a shared index axis, with pointers, dependency arrows and span brackets.",
       "required": [
         "values",
@@ -187,6 +192,10 @@
         "histogram",
         "barchart"
       ],
+      "strictAliases": [
+        "kiwi-bars",
+        "widget:bars"
+      ],
       "description": "Columns in value space: histograms, trapping rain water, largest rectangle, sorting passes, latency distributions.",
       "required": [
         "values"
@@ -287,8 +296,11 @@
       "aliases": [
         "kiwi-bits",
         "widget:bits",
-        "bitmask",
-        "kiwi-bits"
+        "bitmask"
+      ],
+      "strictAliases": [
+        "kiwi-bits",
+        "widget:bits"
       ],
       "description": "A value as labelled bits: bitmask DP, flag registers, permission sets, two's complement, IEEE-754 layouts.",
       "required": [
@@ -297,9 +309,9 @@
       "example": "```bits id=subsets caption=\"Bitmask DP: visiting city 2\"\nbits: 4\nlabels: [A, B, C, D]\nsteps:\n  - note: \"Start at A only\"\n    value: 1\n    activeBits: [0]\n  - note: \"Add C to the visited set\"\n    value: 5\n    activeBits: [2]\n    readBits: [0]\n  - note: \"All four visited — the subproblem is complete\"\n    value: 15\n    activeBits: [1, 3]\n```",
       "attributes": {
         "value": {
-          "type": "number",
+          "type": "number|string",
           "required": true,
-          "description": "The value to show."
+          "description": "The value to show. A number, or a `\"0x…\"` / `\"0b…\"` string for 64-bit patterns a JS number cannot hold exactly."
         },
         "bits": {
           "type": "number",
@@ -394,6 +406,10 @@
     {
       "lang": "graph",
       "aliases": [
+        "kiwi-graph",
+        "widget:graph"
+      ],
+      "strictAliases": [
         "kiwi-graph",
         "widget:graph"
       ],
@@ -583,62 +599,17 @@
       }
     },
     {
-      "lang": "kiwi-steps",
-      "aliases": [
-        "kiwi-kiwi-steps",
-        "widget:kiwi-steps",
-        "steps",
-        "mermaid-steps"
-      ],
-      "description": "A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep.",
-      "required": [
-        "diagram"
-      ],
-      "example": "```kiwi-steps id=write-path caption=\"A write through the pipeline\"\ndiagram: |\n  flowchart LR\n    A[Client] --> B[Storage]\n    B --> C[Git commit]\n    C --> D[Index update]\n    D --> E[SSE broadcast]\nsteps:\n  - note: \"The client PUTs a page\"\n    focus: [A]\n    dim: [C, D, E]\n  - note: \"Bytes land on disk — files are the source of truth\"\n    focus: [B]\n    dim: [D, E]\n  - note: \"The commit makes the version addressable\"\n    focus: [C]\n    dim: [E]\n  - note: \"Indexes are derivative, so they come last\"\n    focus: [D, E]\n```",
-      "attributes": {
-        "diagram": {
-          "type": "string",
-          "required": true,
-          "description": "Mermaid source. Unchanged across steps.",
-          "steppable": false
-        },
-        "kind": {
-          "type": "string",
-          "matches": [
-            "flowchart",
-            "sequence"
-          ],
-          "description": "Detected from the diagram's first line; set it only to override.",
-          "steppable": false
-        },
-        "focus": {
-          "type": "array",
-          "items": "string",
-          "description": "Node ids to emphasise this step."
-        },
-        "dim": {
-          "type": "array",
-          "items": "string",
-          "description": "Node ids to fade this step."
-        },
-        "messages": {
-          "type": "number",
-          "description": "Sequence diagrams: show the first N messages. Defaults to one more per step."
-        },
-        "caption": {
-          "type": "string",
-          "description": "Caption under the diagram.",
-          "steppable": false
-        }
-      }
-    },
-    {
       "lang": "list",
       "aliases": [
         "kiwi-list",
         "widget:list",
         "linkedlist",
         "linked-list",
+        "kiwi-linkedlist"
+      ],
+      "strictAliases": [
+        "kiwi-list",
+        "widget:list",
         "kiwi-linkedlist"
       ],
       "description": "A linked list: reversal, cycle detection, LRU chains, random pointers. A numeric `next` is how you draw a cycle back into the middle.",
@@ -720,6 +691,11 @@
         "hashtable",
         "kiwi-hashmap"
       ],
+      "strictAliases": [
+        "kiwi-map",
+        "widget:map",
+        "kiwi-hashmap"
+      ],
       "description": "Hash slots, chains and probe paths: hash tables, caches, symbol tables, routing tables, or a plain unordered dictionary.",
       "required": [
         "slots",
@@ -739,20 +715,19 @@
         },
         "capacity": {
           "type": "number",
-          "description": "Slot count. Defaults to `slots.length`."
+          "description": "Slot count, 0–1024. Defaults to `slots.length`."
         },
         "slots": {
           "type": "array",
-          "description": "One entry per slot: `null` empty, `\"DEL\"` a tombstone, `{key, value?}`, or a list of those for a chain."
+          "description": "One entry per slot: `null` empty, `\"DEL\"` a tombstone, `{key, value?}` or a bare key, or a list of those for a chain."
         },
         "entries": {
-          "type": "array",
-          "items": "object",
-          "description": "`{key, value?}` for `mode: \"map\"` — a frequency map, a seen-set."
+          "type": "array|object",
+          "description": "`[{key, value?}]` for `mode: \"map\"` — a frequency map, a seen-set. A plain `{key: value}` object works too."
         },
         "hashOf": {
           "type": "object",
-          "description": "Key → slot, shown as an `h(k)=i` badge."
+          "description": "Key → slot, shown as an `h(k)=i` badge beside the key in every mode."
         },
         "activeSlots": {
           "type": "array|number|string",
@@ -766,6 +741,10 @@
           "type": "array|number|string",
           "description": "Dimmed slots."
         },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Slot indices drawn as selected; keys in `mode: \"map\"`."
+        },
         "activeKey": {
           "type": "string|number",
           "description": "The key being inserted or looked up this step."
@@ -773,7 +752,7 @@
         "probePath": {
           "type": "array",
           "items": "number",
-          "description": "Slots visited in order, numbered above the row."
+          "description": "Slots visited in order, numbered above the row and joined by arrows."
         },
         "tombstones": {
           "type": "array|number|string",
@@ -781,7 +760,7 @@
         },
         "showLoadFactor": {
           "type": "boolean",
-          "description": "Show α = n/m. Default true.",
+          "description": "Show α = n/m: entries per slot for chaining, occupied slots for open addressing. Default true.",
           "steppable": false
         },
         "showIndices": {
@@ -796,7 +775,7 @@
         },
         "why": {
           "type": "any",
-          "description": "Slot index → explanation, revealed on select."
+          "description": "Slot index (key in `mode: \"map\"`) → explanation, revealed on select."
         },
         "widgetId": {
           "type": "string",
@@ -832,6 +811,11 @@
         "grid",
         "kiwi-grid",
         "dp"
+      ],
+      "strictAliases": [
+        "kiwi-matrix",
+        "widget:matrix",
+        "kiwi-grid"
       ],
       "description": "An index-addressed table: DP tables, grids, adjacency matrices, confusion matrices. Cells take `[r, c]` or `\"r,c\"`.",
       "required": [
@@ -992,10 +976,17 @@
         "heap",
         "stack-heap"
       ],
+      "strictAliases": [
+        "kiwi-memory",
+        "widget:memory"
+      ],
       "description": "Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in.",
       "required": [
         "frames",
         "heap"
+      ],
+      "reclaims": [
+        "frames"
       ],
       "example": "```memory id=alias caption=\"Why mutating b changed a\"\nframes:\n  - name: \"<module>\"\n    vars: {a: [REF, 1], b: [REF, 1]}\nheap:\n  1: [LIST, 1, 2, 3]\nsteps:\n  - note: \"a = [1, 2, 3] allocates one list\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b = a copies the pointer, not the list — both names are the one object\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1], b: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b.append(4) mutates that object, so a sees it too\"\n    heap:\n      1: [LIST, 1, 2, 3, 4]\n    activeIds: [1]\n    breakpoint: true\n```",
       "attributes": {
@@ -1006,11 +997,11 @@
         },
         "heap": {
           "type": "object",
-          "description": "Objects by id, tagged: `[\"LIST\", 1, 2]`, `[\"DICT\", [\"k\", 1]]`, `[\"INSTANCE\", \"Node\", [\"val\", 1]]`, `[\"TUPLE\", …]`, `[\"SET\", …]`."
+          "description": "Objects by id, tagged: `[\"LIST\", 1, 2]`, `[\"DICT\", [\"k\", 1]]`, `[\"INSTANCE\", \"Node\", [\"val\", 1]]`, `[\"TUPLE\", …]`, `[\"SET\", …]`. An untagged `{field: value}` draws as an object's fields."
         },
         "activeFrame": {
           "type": "string|number",
-          "description": "Which frame is executing. Defaults to the innermost."
+          "description": "Which frame is executing: a frame `id`, or a number for its index in `frames`. Defaults to the innermost."
         },
         "activeIds": {
           "type": "array|number|string",
@@ -1026,7 +1017,7 @@
         },
         "inlinePrimitives": {
           "type": "boolean",
-          "description": "Draw a primitive inside its slot rather than as its own box. Default true.",
+          "description": "Draw a frame variable's primitive inside its slot. Default true; `false` boxes each one on the heap with an arrow, Python Tutor's \"render all objects on the heap\".",
           "steppable": false
         },
         "framesLabel": {
@@ -1077,28 +1068,41 @@
         "number-line",
         "kiwi-number-line"
       ],
+      "strictAliases": [
+        "kiwi-numberline",
+        "widget:numberline",
+        "kiwi-number-line"
+      ],
       "description": "A single value axis: inequalities, interval arithmetic, binary-search-on-answer buckets, SLO thresholds. Closed endpoints are filled, open ones hollow.",
       "required": [
         "min",
-        "max"
+        "max",
+        "xRange"
+      ],
+      "requireOneOf": [
+        "max",
+        "xRange"
       ],
       "example": "```numberline id=bsearch caption=\"Binary search on the answer: narrowing [1, 32]\"\nmin: 0\nmax: 32\nstep: 4\nlabel: capacity\nsteps:\n  - note: \"The whole range is still feasible\"\n    intervals: [{from: 1, to: 32, label: \"candidates\"}]\n    pointers: [{at: 1, label: lo}, {at: 32, label: hi}, {at: 16, label: mid}]\n  - note: \"16 works — discard everything above it\"\n    intervals: [{from: 1, to: 16, label: \"candidates\", toOpen: false}]\n    pointers: [{at: 1, label: lo}, {at: 16, label: hi}, {at: 8, label: mid}]\n  - note: \"8 is too small — the answer is in (8, 16]\"\n    intervals: [{from: 8, to: 16, fromOpen: true, label: \"candidates\"}]\n    pointers: [{at: 9, label: lo}, {at: 16, label: hi}]\n```",
       "attributes": {
         "min": {
           "type": "number",
-          "required": true,
-          "description": "Left end of the axis.",
+          "description": "Left end of the axis. Default 0.",
           "steppable": false
         },
         "max": {
           "type": "number",
-          "required": true,
-          "description": "Right end of the axis.",
+          "description": "Right end of the axis. A reversed or empty range is repaired rather than rejected.",
           "steppable": false
+        },
+        "xRange": {
+          "type": "array",
+          "items": "number",
+          "description": "`[min, max]` or `[min, max, step]`, an alias for the three keys."
         },
         "step": {
           "type": "number",
-          "description": "Tick spacing. Omit for automatic nice ticks.",
+          "description": "Tick spacing. Omit for automatic nice ticks; a step giving more than 200 ticks falls back to them.",
           "steppable": false
         },
         "ticks": {
@@ -1117,7 +1121,7 @@
             "linear",
             "log"
           ],
-          "description": "Axis scale. `\"log\"` needs a positive `min`.",
+          "description": "Axis scale. `\"log\"` needs a positive `min`, ticks at powers of ten, and drops values ≤ 0.",
           "steppable": false
         },
         "points": {
@@ -1128,7 +1132,7 @@
         "intervals": {
           "type": "array",
           "items": "object",
-          "description": "`{from, to, fromOpen?, toOpen?, label?, color?, row?}`. Overlapping intervals stack."
+          "description": "`{from, to, fromOpen?, toOpen?, label?, color?, row?, id?}`. Overlapping intervals stack."
         },
         "rays": {
           "type": "array",
@@ -1153,6 +1157,19 @@
           "type": "string",
           "description": "Caption beside the sweep cursor."
         },
+        "predicate": {
+          "type": "string",
+          "description": "Shade the axis wherever this formula in `x` is true, e.g. `\"x^2 < 9\"`. Sampled at 400 points."
+        },
+        "predicateLabel": {
+          "type": "string",
+          "description": "Caption over the shaded run."
+        },
+        "predicateColor": {
+          "type": "string",
+          "description": "Color of the shading.",
+          "steppable": false
+        },
         "activeIds": {
           "type": "array|number|string",
           "description": "Ids drawn in the active color."
@@ -1164,6 +1181,19 @@
         "dimIds": {
           "type": "array|number|string",
           "description": "Dimmed ids."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Point or interval ids drawn as selected."
+        },
+        "why": {
+          "type": "any",
+          "description": "Point or interval id → explanation, revealed when the reader selects it."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
         },
         "label": {
           "type": "string",
@@ -1203,13 +1233,18 @@
         "widget:plane",
         "geometry"
       ],
+      "strictAliases": [
+        "kiwi-plane",
+        "widget:plane"
+      ],
       "description": "A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps.",
       "required": [
         "points",
         "segments",
         "polygons",
         "circles",
-        "vectors"
+        "vectors",
+        "regions"
       ],
       "example": "```plane id=hull caption=\"Andrew's monotone chain, lower hull\"\nxMin: 0\nxMax: 10\nyMin: 0\nyMax: 8\npoints:\n  - {id: a, x: 1, y: 1, label: a}\n  - {id: b, x: 3, y: 4, label: b}\n  - {id: c, x: 5, y: 2, label: c}\n  - {id: d, x: 8, y: 6, label: d}\n  - {id: e, x: 9, y: 2, label: e}\nsteps:\n  - note: \"Sort by x, start the lower hull with a and b\"\n    polygons: [{points: [a, b], open: true, id: hull}]\n    activeIds: [a, b]\n  - note: \"a→b→c turns clockwise, so b is not on the hull — pop it\"\n    polygons: [{points: [a, b, c], open: true, id: hull}]\n    activeIds: [b]\n  - note: \"Lower hull is a, c, e\"\n    polygons: [{points: [a, c, e], open: true, id: hull}]\n    highlightIds: [hull]\n    dimIds: [b, d]\n```",
       "attributes": {
@@ -1265,12 +1300,12 @@
         "points": {
           "type": "array",
           "items": "object",
-          "description": "`{x, y, id?, label?, style?: \"dot\"|\"open\"|\"cross\"|\"square\", color?}`."
+          "description": "`{x, y, id?, label?, style?: \"dot\"|\"open\"|\"cross\"|\"square\", color?}`. `id` defaults to `pt0`, `pt1`, …"
         },
         "segments": {
           "type": "array",
           "items": "object",
-          "description": "`{from, to, label?, arrow?, dashed?}`. Each end is a point id or a literal `[x, y]`."
+          "description": "`{from, to, label?, arrow?, dashed?, color?}`. Each end is a point id, a point index, or a literal `[x, y]`."
         },
         "polygons": {
           "type": "array",
@@ -1292,6 +1327,11 @@
           "items": "object",
           "description": "Free text at a position: `{at, text, dx?, dy?}`."
         },
+        "regions": {
+          "type": "array",
+          "items": "object",
+          "description": "Shaded where a formula holds: `{when: \"x + y <= 6\", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope; sampled on a grid of at most 60×60."
+        },
         "sweep": {
           "type": "object",
           "description": "`{axis: \"x\"|\"y\"|\"angle\", at, origin?, label?}`."
@@ -1307,6 +1347,19 @@
         "dimIds": {
           "type": "array|number|string",
           "description": "Dimmed ids."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Point ids drawn as selected."
+        },
+        "why": {
+          "type": "any",
+          "description": "Point id → explanation, revealed when the reader selects it."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
         },
         "xLabel": {
           "type": "string",
@@ -1355,6 +1408,10 @@
         "kiwi-plot",
         "widget:plot",
         "chart-xy"
+      ],
+      "strictAliases": [
+        "kiwi-plot",
+        "widget:plot"
       ],
       "description": "An x–y plot: complexity curves, predicate curves for binary search on the answer, latency against load, convergence.",
       "required": [
@@ -1489,6 +1546,10 @@
         "ringbuffer",
         "ring-buffer"
       ],
+      "strictAliases": [
+        "kiwi-queue",
+        "widget:queue"
+      ],
       "description": "FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point.",
       "required": [
         "values"
@@ -1502,7 +1563,7 @@
         },
         "front": {
           "type": "number",
-          "description": "Index of the head. Defaults to 0."
+          "description": "Index of the head, wrapped into the buffer. Defaults to 0, where the front marker is drawn."
         },
         "back": {
           "type": "number",
@@ -1510,7 +1571,7 @@
         },
         "capacity": {
           "type": "number",
-          "description": "Buffer size. Defaults to `values.length`.",
+          "description": "Buffer size, at most 1024. Defaults to `values.length`.",
           "steppable": false
         },
         "layout": {
@@ -1524,7 +1585,7 @@
         },
         "size": {
           "type": "number",
-          "description": "How many slots hold data — what tells a full ring from an empty one."
+          "description": "How many slots hold data, counted from `front`. Tells a full ring from an empty one when front and back coincide; slots outside the window draw as stale."
         },
         "activeIndices": {
           "type": "array|number|string",
@@ -1538,10 +1599,14 @@
           "type": "array|number|string",
           "description": "Dimmed slots."
         },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Slot indices drawn as selected."
+        },
         "pointers": {
           "type": "array",
           "items": "object",
-          "description": "Extra markers beside slots: `{index, label, color?}`."
+          "description": "Extra markers beside slots: `{index, label, color?}`. In a ring the index wraps."
         },
         "showIndices": {
           "type": "boolean",
@@ -1575,7 +1640,7 @@
         },
         "radius": {
           "type": "number",
-          "description": "Ring radius, px. Default 86.",
+          "description": "Ring radius, px. Defaults to whatever fits the slots, at least 86.",
           "steppable": false
         },
         "why": {
@@ -1615,9 +1680,16 @@
         "widget:sequence",
         "seq"
       ],
+      "strictAliases": [
+        "kiwi-sequence",
+        "widget:sequence"
+      ],
       "description": "A message sequence between participants: API flows, consensus rounds, handshakes, retries. Steps reveal one message at a time.",
       "required": [
         "participants"
+      ],
+      "reclaims": [
+        "frames"
       ],
       "example": "```sequence id=cache caption=\"Read-through cache on a miss\"\nparticipants:\n  - {id: C, label: Client, shape: person}\n  - {id: A, label: API}\n  - {id: R, label: Redis, shape: cylinder}\n  - {id: D, label: Postgres, shape: cylinder}\nitems:\n  - {from: C, to: A, label: \"GET /page/42\"}\n  - {from: A, to: R, label: \"GET page:42\"}\n  - {from: R, to: A, label: \"(nil)\", kind: reply}\n  - {from: A, to: D, label: \"SELECT …\"}\n  - {from: D, to: A, label: row, kind: reply}\n  - {from: A, to: R, label: \"SETEX page:42 60\", kind: async}\n  - {from: A, to: C, label: \"200 OK\", kind: reply}\nframes:\n  - {kind: alt, label: \"[cache miss]\", from: 3, to: 5}\nsteps:\n  - note: \"The client asks for a page\"\n  - note: \"The API checks Redis first\"\n  - note: \"Miss — nothing cached\"\n  - note: \"Fall through to Postgres\"\n  - note: \"Row comes back\"\n  - note: \"Populate the cache, without blocking the response\"\n  - note: \"Respond. The next read is a hit.\"\n```",
       "attributes": {
@@ -1697,6 +1769,10 @@
     {
       "lang": "stack",
       "aliases": [
+        "kiwi-stack",
+        "widget:stack"
+      ],
+      "strictAliases": [
         "kiwi-stack",
         "widget:stack"
       ],
@@ -1794,11 +1870,70 @@
       }
     },
     {
+      "lang": "steps",
+      "aliases": [
+        "kiwi-steps",
+        "widget:steps",
+        "mermaid-steps"
+      ],
+      "strictAliases": [
+        "kiwi-steps",
+        "widget:steps"
+      ],
+      "description": "A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep. Each step stands alone rather than patching the one before.",
+      "required": [
+        "diagram"
+      ],
+      "independentSteps": true,
+      "requireSteps": true,
+      "example": "```kiwi-steps id=write-path caption=\"A write through the pipeline\"\ndiagram: |\n  flowchart LR\n    A[Client] --> B[Storage]\n    B --> C[Git commit]\n    C --> D[Index update]\n    D --> E[SSE broadcast]\nsteps:\n  - note: \"The client PUTs a page\"\n    focus: [A]\n    dim: [C, D, E]\n  - note: \"Bytes land on disk — files are the source of truth\"\n    focus: [B]\n    dim: [D, E]\n  - note: \"The commit makes the version addressable\"\n    focus: [C]\n    dim: [E]\n  - note: \"Indexes are derivative, so they come last\"\n    focus: [D, E]\n```",
+      "attributes": {
+        "diagram": {
+          "type": "string",
+          "required": true,
+          "description": "Mermaid source. Unchanged across steps.",
+          "steppable": false
+        },
+        "kind": {
+          "type": "string",
+          "matches": [
+            "flowchart",
+            "sequence"
+          ],
+          "description": "Detected from the diagram's first line; set it only to override.",
+          "steppable": false
+        },
+        "focus": {
+          "type": "array|string",
+          "items": "string",
+          "description": "Node ids to emphasise this step: a list, or `A, B`."
+        },
+        "dim": {
+          "type": "array|string",
+          "items": "string",
+          "description": "Node ids to fade this step: a list, or `A, B`."
+        },
+        "messages": {
+          "type": "number",
+          "description": "Sequence diagrams: show the first N messages. Defaults to the step's position."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Caption under the diagram.",
+          "steppable": false
+        }
+      }
+    },
+    {
       "lang": "table",
       "aliases": [
         "kiwi-table",
         "widget:table",
         "relation"
+      ],
+      "strictAliases": [
+        "kiwi-table",
+        "widget:table"
       ],
       "description": "A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `\"rowKey.colKey\"`.",
       "required": [
@@ -1814,8 +1949,8 @@
       "attributes": {
         "columns": {
           "type": "array",
-          "items": "object",
-          "description": "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order.",
+          "items": "object|string",
+          "description": "`{key, label?, pk?, fk?: {table, column} | \"table.column\", align?, width?, type?}`, or a bare key string. Omit to infer one column per key seen in the rows, in first-seen order.",
           "steppable": false
         },
         "rows": {
@@ -1835,7 +1970,7 @@
         },
         "activeCells": {
           "type": "array|number|string",
-          "description": "Cells written this step, as `\"rowKey.colKey\"`."
+          "description": "Cells written this step, as `\"rowKey.colKey\"` or `[rowKey, colKey]`."
         },
         "highlightCells": {
           "type": "array|number|string",
@@ -1844,6 +1979,10 @@
         "dimCells": {
           "type": "array|number|string",
           "description": "Dimmed cells."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Cells drawn as selected."
         },
         "activeRows": {
           "type": "array|number|string",
@@ -1872,11 +2011,11 @@
         "arrows": {
           "type": "array",
           "items": "object",
-          "description": "Cell-to-cell references: `{from: \"r.c\", to: \"r.c\", label?}`."
+          "description": "Cell-to-cell references: `{from: \"r.c\", to: \"r.c\", label?, color?}`. Drawn as a ↳ glyph in the source cell, with the target in its tooltip — not a line."
         },
         "sort": {
-          "type": "object",
-          "description": "Sort indicator only: `{key, dir}`. Rows render in the order given."
+          "type": "object|string",
+          "description": "Sort indicator only: `{key, dir}` or a column key. Rows render in the order given."
         },
         "caption": {
           "type": "string",
@@ -1885,7 +2024,7 @@
         },
         "maxRows": {
           "type": "number",
-          "description": "Render at most this many rows, then a \"…n more\" line.",
+          "description": "Render at most this many rows, then a \"…n more\" line. Ignored unless a non-negative number.",
           "steppable": false
         },
         "maxHeight": {
@@ -1935,6 +2074,10 @@
         "widget:timeline",
         "gantt",
         "schedule"
+      ],
+      "strictAliases": [
+        "kiwi-timeline",
+        "widget:timeline"
       ],
       "description": "Spans on a shared axis with named lanes and causal arrows: scheduling, lock handoffs, happens-before, isolation anomalies, log spans.",
       "required": [
@@ -2045,6 +2188,10 @@
     {
       "lang": "tree",
       "aliases": [
+        "kiwi-tree",
+        "widget:tree"
+      ],
+      "strictAliases": [
         "kiwi-tree",
         "widget:tree"
       ],
@@ -2175,10 +2322,6 @@
           "type": "number",
           "description": "Width of one key cell in a keyed page, px. Default 30.",
           "steppable": false
-        },
-        "link": {
-          "type": "any",
-          "description": "Widget whose keys correspond to these node ids, for linked highlighting."
         },
         "activeColor": {
           "type": "string",

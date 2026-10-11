@@ -47,6 +47,11 @@ describe("parseSpaceLocation", () => {
     expect(parseSpaceLocation("/", "#/notes/a.md")).toEqual({ space: null, path: "notes/a.md" });
   });
 
+  it("does not read playback state in the fragment as a page", () => {
+    expect(parseSpaceLocation("/", "#?step=4")).toEqual({ space: null, path: null });
+    expect(parseSpaceLocation("/", "#/notes/a.md?step=4")).toEqual({ space: null, path: "notes/a.md" });
+  });
+
   it("returns the root for /", () => {
     expect(parseSpaceLocation("/")).toEqual({ space: null, path: null });
   });

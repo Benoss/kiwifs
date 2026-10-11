@@ -10,9 +10,10 @@
  */
 
 import yaml from "js-yaml";
-import type { FenceSpec } from "./registry";
+import { isStrictTag, type FenceSpec } from "./registry";
 import {
   applyDefaults,
+  isMissing,
   isReservedStepKey,
   isReservedTopLevel,
   validateAttributes,
@@ -40,6 +41,8 @@ export interface ParsedFence {
   base: Record<string, unknown>;
   /** Fully resolved props per step. Empty when the fence is static. */
   steps: Record<string, unknown>[];
+  /** What each step itself wrote, before it was merged over anything. */
+  patches: Record<string, unknown>[];
   stepMeta: StepMeta[];
   code?: string;
   lang?: string;
@@ -52,6 +55,35 @@ export interface ParsedFence {
   issues: ValidationIssue[];
   /** Set when the body is not a YAML mapping at all. */
   error?: string;
+}
+
+export type LoadedYaml = { value: unknown; error?: undefined } | { value?: undefined; error: string };
+
+const YAML_CACHE_LIMIT = 200;
+const yamlCache = new Map<string, LoadedYaml>();
+
+/**
+ * `yaml.load`, remembered. FenceBlock sniffs every fenced block on every
+ * render of a page and TypedFence parses the same text again, so a page of
+ * ` ```tree ` listings would otherwise re-parse each one per keystroke.
+ * The result is shared: callers must not mutate it.
+ */
+export function loadFenceYaml(source: string): LoadedYaml {
+  const hit = yamlCache.get(source);
+  if (hit) {
+    yamlCache.delete(source);
+    yamlCache.set(source, hit);
+    return hit;
+  }
+  let out: LoadedYaml;
+  try {
+    out = { value: yaml.load(source) };
+  } catch (err) {
+    out = { error: err instanceof Error ? err.message : String(err) };
+  }
+  yamlCache.set(source, out);
+  if (yamlCache.size > YAML_CACHE_LIMIT) yamlCache.delete(yamlCache.keys().next().value!);
+  return out;
 }
 
 /** Locate `key:` in the body so a validation issue can name a line. */
@@ -86,7 +118,8 @@ function stepMetaOf(patch: Record<string, unknown>): StepMeta {
   if (patch.label != null) meta.label = String(patch.label);
   if (patch.line != null) meta.line = asInt(patch.line);
   if (patch.next != null) meta.next = asInt(patch.next);
-  if (patch.breakpoint != null) meta.breakpoint = Boolean(patch.breakpoint);
+  // `breakpoint: "no"` is a truthy string; only a real yes counts.
+  if (patch.breakpoint != null) meta.breakpoint = patch.breakpoint === true || patch.breakpoint === "true";
   if (patch.duration != null) meta.duration = asInt(patch.duration);
   const why = whyMap(patch.why);
   if (why) meta.why = why;
@@ -101,21 +134,18 @@ function propsOf(body: Record<string, unknown>, reserved: (k: string) => boolean
   for (const [k, v] of Object.entries(body)) if (!reserved(k)) out[k] = v;
   // `props:` is the escape hatch for a widget prop whose name collides with a
   // reserved key — `props: {title: "…"}` reaches the view, `title:` does not.
+  delete out.props;
   const escaped = asRecord(body.props);
   if (escaped) Object.assign(out, escaped);
   return out;
 }
 
 export function parseFence(spec: FenceSpec, source: string): ParsedFence {
-  const empty: ParsedFence = { base: {}, steps: [], stepMeta: [], issues: [] };
+  const empty: ParsedFence = { base: {}, steps: [], patches: [], stepMeta: [], issues: [] };
 
-  let loaded: unknown;
-  try {
-    loaded = yaml.load(source);
-  } catch (err) {
-    return { ...empty, error: err instanceof Error ? err.message : String(err) };
-  }
-  const body = asRecord(loaded);
+  const loaded = loadFenceYaml(source);
+  if (loaded.error !== undefined) return { ...empty, error: loaded.error };
+  const body = asRecord(loaded.value);
   if (!body) {
     return { ...empty, error: "expected a YAML mapping of widget properties" };
   }
@@ -135,10 +165,11 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
   const rawSteps = Array.isArray(body.steps) ? body.steps : null;
   const rawFrames = reclaimed.has("frames") || !Array.isArray(body.frames) ? null : body.frames;
   const steps: Record<string, unknown>[] = [];
+  const patches: Record<string, unknown>[] = [];
   const stepMeta: StepMeta[] = [];
 
   const list = rawSteps ?? rawFrames ?? [];
-  const isPatch = rawSteps != null;
+  const isDelta = rawSteps != null && !spec.independentSteps;
   let previous = base;
 
   list.forEach((raw, i) => {
@@ -146,17 +177,22 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
     // that still says something, and how most walkthroughs start.
     const patch = typeof raw === "string" ? { note: raw } : (asRecord(raw) ?? {});
     const patchProps = applyDefaults(spec.schema, propsOf(patch, reservedStep));
+    const over = isDelta ? previous : base;
     if (!spec.legacy) {
       issues.push(
         ...validateAttributes(spec.schema, patchProps, {
-          prefix: `steps[${i}]`,
-          mode: "step",
+          prefix: `${rawSteps ? "steps" : "frames"}[${i}]`,
+          // A frame is a complete prop set, so it may set anything the base can.
+          mode: rawSteps ? "step" : "base",
+          requireAll: false,
+          previous: over,
           lineOf,
         }),
       );
     }
-    const resolved = isPatch ? { ...previous, ...patchProps } : { ...base, ...patchProps };
+    const resolved = { ...over, ...patchProps };
     steps.push(resolved);
+    patches.push(patchProps);
     stepMeta.push(stepMetaOf(patch));
     previous = resolved;
   });
@@ -165,7 +201,7 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
   if (!spec.legacy) {
     const first = steps[0] ?? base;
     for (const [key, attr] of Object.entries(spec.schema.attributes)) {
-      if (attr.required && !(key in first)) {
+      if (attr.required && isMissing(first, key)) {
         issues.push({
           path: key,
           message: `missing required key "${key}"`,
@@ -175,10 +211,18 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
       }
     }
     const oneOf = spec.requireOneOf ?? [];
-    if (oneOf.length > 0 && !oneOf.some((key) => key in first)) {
+    if (oneOf.length > 0 && oneOf.every((key) => isMissing(first, key))) {
       issues.push({
         path: oneOf[0]!,
         message: `needs one of ${oneOf.map((k) => `"${k}"`).join(", ")}`,
+        severity: "error",
+      });
+    }
+    if (spec.requireSteps && (!rawSteps || rawSteps.length === 0)) {
+      issues.push({
+        path: "steps",
+        message: "steps must be a non-empty list",
+        line: lineOf("steps"),
         severity: "error",
       });
     }
@@ -196,6 +240,7 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
   return {
     base,
     steps,
+    patches,
     stepMeta,
     code: body.code == null ? undefined : String(body.code),
     lang: body.lang == null ? undefined : String(body.lang),
@@ -207,29 +252,44 @@ export function parseFence(spec: FenceSpec, source: string): ParsedFence {
   };
 }
 
+/** Required keys, plus the older spellings `applyDefaults` would accept for them. */
+function markerKeys(spec: FenceSpec): string[] {
+  const required =
+    spec.required ??
+    Object.entries(spec.schema.attributes)
+      .filter(([, a]) => a.required)
+      .map(([k]) => k);
+  const out = new Set(required);
+  for (const key of required) {
+    const alias = spec.schema.attributes[key]?.alias;
+    if (alias) out.add(alias);
+  }
+  return [...out];
+}
+
 /**
  * Is this body really ours?
  *
- * A bare language tag (` ```tree `) has to coexist with vaults that already
- * use it for directory listings, so it only claims the block when the YAML
- * parses to a mapping carrying one of the spec's required keys. The explicit
+ * A non-strict tag (` ```tree `, ` ```heap `, ` ```Tree `) has to coexist with
+ * vaults that already use it for directory listings or prose, so it only
+ * claims the block when the YAML parses to a mapping carrying one of the
+ * spec's marker keys — at the top level, under `props:`, or in the first
+ * step or frame, which is where a stepped fence may first introduce it. The
  * `kiwi-…` / `widget:…` spellings always claim it, and report their errors
  * loudly, for authors who would rather see a message than a code block.
  */
 export function sniffFence(spec: FenceSpec, lang: string, source: string): boolean {
-  if (lang !== spec.lang) return true;
-  let loaded: unknown;
-  try {
-    loaded = yaml.load(source);
-  } catch {
-    return false;
-  }
-  const body = asRecord(loaded);
+  if (isStrictTag(lang)) return true;
+  const loaded = loadFenceYaml(source);
+  const body = asRecord(loaded.value);
   if (!body) return false;
-  if (spec.sniff) return spec.sniff(body);
-  const required = spec.required ?? Object.entries(spec.schema.attributes)
-    .filter(([, a]) => a.required)
-    .map(([k]) => k);
-  if (required.length === 0) return true;
-  return required.some((key) => key in body);
+  const first = (list: unknown) => (Array.isArray(list) ? asRecord(list[0]) : null);
+  const step = first(body.steps);
+  const candidates = [body, asRecord(body.props), step, asRecord(step?.props), first(body.frames)].filter(
+    (c): c is Record<string, unknown> => c != null,
+  );
+  if (spec.sniff) return candidates.some((c) => spec.sniff!(c));
+  const markers = markerKeys(spec);
+  if (markers.length === 0) return true;
+  return candidates.some((c) => markers.some((key) => key in c));
 }

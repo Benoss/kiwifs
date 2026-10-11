@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { InspectContext, moveFocus, parseLinks, refEquals, toKeySet, whyFor } from "./inspect";
-import type { InspectState } from "./inspect";
+import {
+  holdsTabStop,
+  InspectContext,
+  linkedKeysFor,
+  moveFocus,
+  nextSelection,
+  parseLinks,
+  partHandlers,
+  refEquals,
+  toKeySet,
+  useInspectState,
+  whyFor,
+} from "./inspect";
+import type { InspectRef, InspectState } from "./inspect";
 import { ArrayView } from "./ArrayView";
 import { MatrixView } from "./MatrixView";
 import { TreeView } from "./TreeView";
@@ -201,8 +213,143 @@ describe("StackView selection", () => {
   });
 });
 
+/** Just enough of an element for roving focus: attributes, scope, focus. */
+class FakeEl {
+  tabIndex: number;
+  focused = false;
+  attrs: Record<string, string>;
+  scope: FakeScope | null = null;
+  constructor(attrs: Record<string, string>, tabIndex: number) {
+    this.attrs = attrs;
+    this.tabIndex = tabIndex;
+  }
+  getAttribute(name: string) {
+    return this.attrs[name] ?? null;
+  }
+  closest(sel: string) {
+    return sel === "[data-kw-canvas]" ? this.scope : null;
+  }
+  focus() {
+    this.focused = true;
+  }
+}
+
+class FakeScope {
+  parts: FakeEl[];
+  constructor(parts: FakeEl[]) {
+    this.parts = parts;
+    for (const p of parts) p.scope = this;
+  }
+  querySelectorAll(sel: string) {
+    if (sel === "[data-kw-part]") return this.parts.filter((p) => p.attrs["data-kw-part"] !== undefined);
+    return this.parts;
+  }
+}
+
 describe("moveFocus", () => {
   it("declines keys it does not own, so the event keeps bubbling", () => {
     expect(moveFocus(null, "ArrowRight")).toBe(false);
+  });
+
+  it("reaches parts outside the tab order, and hands the tab stop over", () => {
+    const parts = [0, -1, -1].map((t) => new FakeEl({ "data-kw-part": "array" }, t));
+    new FakeScope(parts);
+    expect(moveFocus(parts[0] as unknown as Element, "ArrowRight")).toBe(true);
+    expect(parts[1]!.focused).toBe(true);
+    expect(parts.map((p) => p.tabIndex)).toEqual([-1, 0, -1]);
+
+    expect(moveFocus(parts[1] as unknown as Element, "End")).toBe(true);
+    expect(parts[2]!.focused).toBe(true);
+    expect(parts.map((p) => p.tabIndex)).toEqual([-1, -1, 0]);
+  });
+
+  it("stays inside its own panel", () => {
+    const array = [new FakeEl({ "data-kw-part": "array" }, 0), new FakeEl({ "data-kw-part": "array" }, -1)];
+    const tree = [new FakeEl({ "data-kw-part": "tree" }, 0)];
+    new FakeScope([...array, ...tree]);
+    expect(moveFocus(array[1] as unknown as Element, "ArrowRight")).toBe(true);
+    expect(tree[0]!.focused).toBe(false);
+  });
+});
+
+describe("the roving tab stop", () => {
+  const ref = (key: string, widget = "array"): InspectRef => ({ widget, kind: "cell", key });
+
+  it("starts where the canvas says and then follows focus", () => {
+    expect(holdsTabStop(ref("0"), null, true)).toBe(true);
+    expect(holdsTabStop(ref("2"), ref("2"), false)).toBe(true);
+    expect(holdsTabStop(ref("0"), ref("2"), true)).toBe(false);
+  });
+
+  it("is not moved by focus in another panel", () => {
+    expect(holdsTabStop(ref("0"), ref("5", "tree"), true)).toBe(true);
+  });
+
+  it("is rendered by partHandlers from the bus's focused part", () => {
+    const focusedBus = bus({ focused: ref("1"), why: { "0": "a", "1": "b" } });
+    expect(partHandlers("array", "cell", "0", focusedBus, { tabbable: true }).tabIndex).toBe(-1);
+    expect(partHandlers("array", "cell", "1", focusedBus, { tabbable: false }).tabIndex).toBe(0);
+  });
+
+  it("marks only describable parts as roving targets", () => {
+    const b = bus({ why: { "1": "b" } });
+    expect(partHandlers("array", "cell", "1", b)["data-kw-part"]).toBe("array");
+    expect(partHandlers("array", "cell", "2", b)["data-kw-part"]).toBeUndefined();
+  });
+});
+
+describe("selection", () => {
+  const a = { widget: "w", kind: "cell" as const, key: "1" };
+
+  it("toggles off when the same part is selected again", () => {
+    expect(nextSelection(null, a)).toEqual(a);
+    expect(nextSelection(a, { ...a })).toBe(null);
+    expect(nextSelection(a, null)).toBe(null);
+  });
+
+  it("tells onSelect about the toggle-off with null", () => {
+    const calls: (InspectRef | null)[] = [];
+    let state: InspectState | null = null;
+    function Probe() {
+      state = useInspectState({ onSelect: (r) => calls.push(r) });
+      return null;
+    }
+    renderToStaticMarkup(<Probe />);
+    state!.select(a);
+    state!.select(a);
+    expect(calls).toEqual([a, null]);
+  });
+
+  it("hands out the same empty why and links on every render", () => {
+    const seen: InspectState[] = [];
+    function Probe() {
+      seen.push(useInspectState());
+      return null;
+    }
+    renderToStaticMarkup(<Probe />);
+    renderToStaticMarkup(<Probe />);
+    expect(seen[0]!.why).toBe(seen[1]!.why);
+    expect(seen[0]!.links).toBe(seen[1]!.links);
+  });
+});
+
+describe("directional links", () => {
+  const hover = (widget: string, key: string): InspectRef => ({ widget, kind: "cell", key });
+
+  it("fires only from the widget the link was written on, and back", () => {
+    const links = parseLinks({ to: "tree", map: { "0": "root" } }, "array");
+    expect(links).toEqual([{ from: "array", to: "tree", map: { "0": "root" } }]);
+    expect([...linkedKeysFor(hover("array", "0"), "tree", links)]).toEqual(["root"]);
+    expect([...linkedKeysFor(hover("tree", "root"), "array", links)]).toEqual(["0"]);
+    expect(linkedKeysFor(hover("matrix", "0"), "tree", links).size).toBe(0);
+  });
+
+  it("keeps an unsourced link working from any widget", () => {
+    const links = parseLinks("tree");
+    expect([...linkedKeysFor(hover("matrix", "3"), "tree", links)]).toEqual(["3"]);
+  });
+
+  it("lets a link name its own source", () => {
+    expect(parseLinks({ from: "list", to: "tree" }, "array")).toEqual([{ from: "list", to: "tree", map: "index" }]);
   });
 });

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kiwifs/kiwifs/internal/config"
+	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/schema"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +22,8 @@ Reports:
   - empty-file  — a .md file has no content
   - missing-schema — SCHEMA.md itself is missing
 
-Exits 0 on a clean run, 1 if any issues are found.`,
+Exits 0 on a clean run, 1 if any issues are found. Info-level suggestions
+are printed but never fail the run.`,
 	Example: `  kiwifs lint --root ~/my-knowledge
   kiwifs lint --root /data/knowledge --json`,
 	RunE: runLint,
@@ -35,6 +38,11 @@ func init() {
 func runLint(cmd *cobra.Command, args []string) error {
 	root, _ := cmd.Flags().GetString("root")
 	asJSON, _ := cmd.Flags().GetBool("json")
+
+	// One process, one workspace: the process-wide default is safe here.
+	if cfg, err := config.Load(root); err == nil {
+		markdown.SetDefaultFenceOptions(fenceOptions(cfg))
+	}
 
 	result, err := schema.Lint(root)
 	if err != nil {
@@ -51,10 +59,31 @@ func runLint(cmd *cobra.Command, args []string) error {
 		fmt.Print(result.Summary())
 	}
 
-	if len(result.Issues) > 0 {
+	if lintFailed(result) {
 		// Non-zero exit so CI can gate on lint; don't print the error
 		// since we've already emitted a human-readable summary.
 		os.Exit(1)
 	}
 	return nil
+}
+
+// lintFailed reports whether any issue should fail CI. Info-level findings
+// are suggestions (a widget:live block that could be a typed fence), not
+// defects.
+func lintFailed(result *schema.Result) bool {
+	for _, issue := range result.Issues {
+		if issue.Severity != "info" {
+			return true
+		}
+	}
+	return false
+}
+
+// fenceOptions maps `[ui] typed_fences` / `typed_fence_tags` onto the
+// linter, so a bare tag the UI renders as code is not checked as a widget.
+func fenceOptions(cfg *config.Config) markdown.FenceOptions {
+	return markdown.FenceOptions{
+		DisableBare: !cfg.UI.TypedFencesEnabled(),
+		BareTags:    cfg.UI.FenceAllow,
+	}
 }

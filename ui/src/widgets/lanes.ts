@@ -5,6 +5,8 @@
  * other — and solving it twice would let the two drift apart visually.
  */
 
+const MAX_LANE = 256;
+
 export interface Span {
   start: number;
   end: number;
@@ -20,10 +22,14 @@ export interface Span {
 export function assignLanes(spans: readonly Span[]): number[] {
   const laneEnds: number[] = [];
   const out: number[] = [];
+  // A declared lane is an index, and `row: 1e9` from a model must not allocate
+  // a billion lanes. Named timeline lanes resolve to small indices, so this
+  // bound only ever bites on garbage.
+  const maxLane = Math.max(MAX_LANE, spans.length);
 
   spans.forEach((span, i) => {
     if (span.lane != null && Number.isFinite(span.lane)) {
-      const lane = Math.max(0, Math.trunc(span.lane));
+      const lane = Math.min(maxLane, Math.max(0, Math.trunc(span.lane)));
       // Fill the skipped lanes rather than leaving holes: a hole reads as
       // `undefined` to the search below, and `undefined <= start` is false,
       // so lane 0 would stay unusable for everyone else.
@@ -43,5 +49,5 @@ export function assignLanes(spans: readonly Span[]): number[] {
 
 /** Highest lane index in use, so a caller can size its canvas. */
 export function laneCount(lanes: readonly number[]): number {
-  return lanes.length === 0 ? 1 : Math.max(...lanes) + 1;
+  return lanes.reduce((hi, lane) => Math.max(hi, lane + 1), 1);
 }

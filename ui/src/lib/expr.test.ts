@@ -116,6 +116,15 @@ describe("predicates", () => {
     expect(evaluate("not (3 > 2)")).toBe(0);
   });
 
+  it("binds not looser than comparison and tighter than and/or, as Python does", () => {
+    expect(evaluate("not a == b", { a: 1, b: 2 })).toBe(1);
+    expect(evaluate("not a == b", { a: 2, b: 2 })).toBe(0);
+    expect(evaluate("not a < 3 and b", { a: 5, b: 0 })).toBe(0);
+    expect(evaluate("not a and b", { a: 0, b: 1 })).toBe(1);
+    expect(evaluate("a or not b > 1", { a: 0, b: 0 })).toBe(1);
+    expect(evaluate("not x + 1", { x: -1 })).toBe(1);
+  });
+
   it("evaluateBool reads as a boolean", () => {
     expect(evaluateBool("x < 5", { x: 1 })).toBe(true);
     expect(evaluateBool("x < 5", { x: 9 })).toBe(false);
@@ -125,6 +134,27 @@ describe("predicates", () => {
 describe("errors", () => {
   it("rejects an empty expression", () => {
     expect(() => evaluate("")).toThrow(ExprError);
+  });
+
+  it("rejects deep nesting with an ExprError instead of a stack overflow", () => {
+    expect(() => evaluate("(".repeat(5000) + "1" + ")".repeat(5000))).toThrow(ExprError);
+    expect(() => evaluate("-".repeat(1000) + "1")).toThrow(/nested too deeply/);
+    expect(evaluate("(".repeat(50) + "1" + ")".repeat(50))).toBe(1);
+  });
+
+  it("rejects overlong input with an ExprError", () => {
+    expect(() => evaluate("1+".repeat(6000) + "1")).toThrow(/too long/);
+  });
+
+  it("evaluates a long flat sum, and reports one too long to recurse as an ExprError", () => {
+    expect(evaluate("1+".repeat(400) + "1")).toBe(401);
+    let thrown: unknown;
+    try {
+      evaluate("1+".repeat(4900) + "1");
+    } catch (err) {
+      thrown = err;
+    }
+    if (thrown !== undefined) expect(thrown).toBeInstanceOf(ExprError);
   });
 
   it("names the offending character", () => {

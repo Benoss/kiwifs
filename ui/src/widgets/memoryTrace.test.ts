@@ -9,6 +9,7 @@ import {
   slotKey,
   type HeapObject,
   type StackFrame,
+  type TraceValue,
 } from "./memoryTrace";
 
 describe("refs", () => {
@@ -137,6 +138,51 @@ describe("heapOrder", () => {
 
   it("skips a dangling reference instead of crashing", () => {
     expect(heapOrder([{ name: "f", vars: { a: ["REF", 404] } }], {})).toEqual([]);
+  });
+});
+
+describe("malformed traces", () => {
+  it("treats a frame with no vars as having no locals", () => {
+    const frame = { name: "f" } as unknown as StackFrame;
+    expect(frameOrder(frame)).toEqual([]);
+    expect(heapOrder([frame], { 1: ["LIST"] })).toEqual(["1"]);
+  });
+
+  it("ignores an order that is not a list", () => {
+    const frame = { name: "f", vars: { a: 1, b: 2 }, order: "b" } as unknown as StackFrame;
+    expect(frameOrder(frame)).toEqual(["a", "b"]);
+  });
+
+  it("does not list a variable twice when order repeats it", () => {
+    expect(frameOrder({ name: "f", vars: { a: 1, b: 2 }, order: ["b", "b"] })).toEqual(["b", "a"]);
+  });
+
+  it("skips dict and instance entries that are not pairs", () => {
+    const dict = describeHeapObject(1, ["DICT", ["a", 1], "junk", ["b"], null, ["c", 3]] as unknown as HeapObject);
+    expect(dict.slots.map((s) => s.label)).toEqual(['"a"', '"c"']);
+    const inst = describeHeapObject(1, ["INSTANCE", "Node", 7, ["val", 5]] as unknown as HeapObject);
+    expect(inst.slots).toEqual([{ label: "val", value: 5 }]);
+  });
+
+  it("draws an untagged object as fields and a bare value as one slot", () => {
+    const obj = describeHeapObject(1, { val: 1, next: ["REF", 2] } as unknown as HeapObject);
+    expect(obj.kind).toBe("OBJECT");
+    expect(obj.slots.map((s) => s.label)).toEqual(["val", "next"]);
+    expect(describeHeapObject(2, 42 as unknown as HeapObject).slots).toEqual([{ value: 42 }]);
+  });
+
+  it("follows a pointer out of an untagged object", () => {
+    const heap = { 1: { next: ["REF", 2] }, 2: ["LIST", 1] } as unknown as Record<string, HeapObject>;
+    expect(heapOrder([{ name: "f", vars: { a: ["REF", 1] } }], heap)).toEqual([1, 2]);
+  });
+
+  it("does not resolve a reference through Object.prototype", () => {
+    expect(heapOrder([{ name: "f", vars: { a: ["REF", "constructor"] } }], {})).toEqual([]);
+  });
+
+  it("formats an inline structure as JSON rather than [object Object]", () => {
+    expect(formatValue(["LIST", 1, 2] as unknown as TraceValue)).toBe('["LIST",1,2]');
+    expect(formatValue({ a: 1 } as unknown as TraceValue)).toBe('{"a":1}');
   });
 });
 

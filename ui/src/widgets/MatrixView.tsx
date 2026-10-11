@@ -14,6 +14,7 @@ import {
 } from "./cellOverlay";
 import { canvasAria, summarizeMatrix } from "./widgetA11y";
 import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { cellEditHandlers } from "./ArrayView";
 
 export interface MatrixArrow {
   /** Cell read from, as `[r, c]` or `"r,c"`. */
@@ -106,6 +107,10 @@ export interface MatrixViewProps {
    * recurrence and knowing it.
    */
   editable?: boolean;
+  /**
+   * Called with `(r, c, value)` when an edit commits with a changed value — on
+   * Enter or blur, not after Escape. Note ArrayView's order is `(index, value, row)`.
+   */
   onCellEdit?: (r: number, c: number, value: string) => void;
 }
 
@@ -193,6 +198,7 @@ export function MatrixView({
   const entries: [string, string][] = [];
   values.forEach((row, r) => row.forEach((v, c) => entries.push([`${r},${c}`, formatCell(v, empty).text])));
   const { flash: flashSet, versions } = useChangedCells(entries, flash);
+  const bus = useInspect();
 
   if (values.length === 0) {
     return (
@@ -285,7 +291,6 @@ export function MatrixView({
     onLayerChange?.(i);
   };
 
-  const bus = useInspect();
   const mergedWhy = { ...bus.why, ...(why ?? {}) };
   const linked = bus.linkedKeys(widgetId);
   const selectable = (cell: string) =>
@@ -539,19 +544,7 @@ export function MatrixView({
                             suppressContentEditableWarning
                             role="textbox"
                             aria-label={`Cell ${r}, ${c}`}
-                            onBlur={(e) => onCellEdit(r, c, e.currentTarget.textContent ?? "")}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                (e.currentTarget as HTMLElement).blur();
-                              }
-                              if (e.key === "Escape") {
-                                e.currentTarget.textContent = cell.text;
-                                (e.currentTarget as HTMLElement).blur();
-                              }
-                              // Arrows inside a cell move the caret, not the clock.
-                              e.stopPropagation();
-                            }}
+                            {...cellEditHandlers(cell.text, (value) => onCellEdit(r, c, value))}
                             style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
                           >
                             {cell.text}

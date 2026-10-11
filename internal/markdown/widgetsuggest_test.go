@@ -30,13 +30,13 @@ func TestSuggestsAStaticArrayBlock(t *testing.T) {
 
 func TestSuggestsForEveryMappedComponent(t *testing.T) {
 	cases := map[string]string{
-		"<MatrixView values={[[1]]} />":                "matrix",
-		"<TreeView root={{value: 1}} />":               "tree",
-		"<GraphView nodes={[]} edges={[]} />":          "graph",
-		"<BitsView value={5} />":                       "bits",
-		"<LinkedListView nodes={[]} />":                "list",
-		"<TimelineView intervals={[]} />":              "timeline",
-		"<NumberLineView min={0} max={1} />":           "numberline",
+		"<MatrixView values={[[1]]} />":       "matrix",
+		"<TreeView root={{value: 1}} />":      "tree",
+		"<GraphView nodes={[]} edges={[]} />": "graph",
+		"<BitsView value={5} />":              "bits",
+		"<LinkedListView nodes={[]} />":       "list",
+		"<TimelineView intervals={[]} />":     "timeline",
+		"<NumberLineView min={0} max={1} />":  "numberline",
 	}
 	for jsx, want := range cases {
 		got := SuggestWidgetFences([]byte(fence("widget:live", "render("+jsx+")")))
@@ -139,5 +139,26 @@ func TestDraftsLintClean(t *testing.T) {
 		if issue.Rule == "fence-widget-invalid" {
 			t.Errorf("draft is not clean: %s\n%s", issue.Message, got[0].Draft)
 		}
+	}
+}
+
+func TestSuggestIgnoresObjectAssignmentsOutsideTheElement(t *testing.T) {
+	page := fence("widget:live", "const style = {color: 'red'}\nrender(<ArrayView values={[1, 2]} />)")
+	got := SuggestWidgetFences([]byte(page))
+	if len(got) != 1 {
+		t.Fatalf("expected one suggestion, got %+v", got)
+	}
+	if strings.Contains(got[0].Draft, "style") {
+		t.Errorf("a const outside the element is not a prop:\n%s", got[0].Draft)
+	}
+	if !strings.Contains(got[0].Draft, "values: [1, 2]") {
+		t.Errorf("expected the element's own prop:\n%s", got[0].Draft)
+	}
+}
+
+func TestSuggestSkipsTwoElementsOfTheSameView(t *testing.T) {
+	page := fence("widget:live", "render(<>\n<ArrayView values={[1]} />\n<ArrayView values={[2]} />\n</>)")
+	if got := SuggestWidgetFences([]byte(page)); len(got) != 0 {
+		t.Fatalf("two pictures are not one fence: %+v", got)
 	}
 }

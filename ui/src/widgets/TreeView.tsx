@@ -2,6 +2,7 @@ import { useId } from "react";
 import { toSet, type Many } from "./sets";
 import { canvasAria, summarizeTree } from "./widgetA11y";
 import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { inspectLinked } from "./inspectLinked";
 import { alpha, lookupKeyed, type KeyedValues } from "./colors";
 import { SvgLabel } from "./WidgetText";
 import {
@@ -267,6 +268,7 @@ export function TreeView({
   for (const n of nodes) if (!nodeByKey.has(String(n.key))) nodeByKey.set(String(n.key), n);
   /** Half-width, so a sibling arrow between two keyed pages clears both. */
   const halfOf = (k: string | number) => (nodeByKey.get(String(k))?.width ?? nodeSize) / 2;
+  const bus = useInspect();
 
   if (nodes.length === 0) {
     return (
@@ -285,9 +287,8 @@ export function TreeView({
     pointerMap.set(key, list);
   }
 
-  const bus = useInspect();
   const mergedWhy = { ...bus.why, ...(why ?? {}) };
-  const linked = bus.linkedKeys(widgetId);
+  const linked = inspectLinked(bus, widgetId, hoverPredecessors || why !== undefined);
   const selectable = (key: string | number) =>
     onSelect !== undefined ||
     whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(key) }) !== undefined;
@@ -518,8 +519,8 @@ export function TreeView({
             ? new Set(toSet(activeKeys?.[String(n.key)] as Many<number>))
             : null;
 
+          // A ring outside the node, so the author's active / dim styling stays.
           const isLinked = !isGhost && (predecessors.has(String(n.key)) || linked.has(String(n.key)));
-          if (isLinked) stroke = highlightColor;
 
           return (
             <g
@@ -537,6 +538,21 @@ export function TreeView({
                 cursor: !isGhost && selectable(n.key) ? "pointer" : undefined,
               }}
             >
+              {isLinked &&
+                (pageKeys?.length ? (
+                  <rect
+                    x={cx - n.width / 2 - 4}
+                    y={cy - nodeSize / 2 - 4}
+                    width={n.width + 8}
+                    height={nodeSize + 8}
+                    rx={6}
+                    fill="none"
+                    stroke={highlightColor}
+                    strokeWidth={2}
+                  />
+                ) : (
+                  <circle cx={cx} cy={cy} r={radius + 4} fill="none" stroke={highlightColor} strokeWidth={2} />
+                ))}
               {pageKeys?.length ? (
                 <>
                   <rect

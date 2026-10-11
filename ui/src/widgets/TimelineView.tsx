@@ -3,6 +3,7 @@ import { toSet, type Many } from "./sets";
 import { SvgLabel } from "./WidgetText";
 import { summarizeTimeline } from "./widgetA11y";
 import { assignLanes as packLanes } from "./lanes";
+import { textWidth } from "./graphGeometry";
 import { useId, useState } from "react";
 
 export interface TimelineInterval {
@@ -107,7 +108,9 @@ const MAX_AUTO_TICKS = 14;
 /**
  * First-fit lane packing, so overlapping intervals stack instead of collide.
  * A named `lane` resolves against `laneNames`; an unknown name gets its own
- * row appended rather than silently landing in lane 0.
+ * row appended rather than silently landing in lane 0. With named lanes, an
+ * interval without a `lane` is packed into unlabelled rows below them, so it
+ * neither overlaps nor borrows a label that is not its own.
  */
 export function assignLanes(intervals: TimelineInterval[], laneNames: string[] = []): number[] {
   const extra: string[] = [];
@@ -122,16 +125,17 @@ export function assignLanes(intervals: TimelineInterval[], laneNames: string[] =
   const spans = intervals.map((iv) => ({
     start: Math.min(iv.start, iv.end),
     end: Math.max(iv.start, iv.end),
-    lane:
-      typeof iv.lane === "string"
-        ? indexOfName(iv.lane)
-        : iv.lane != null
-          ? iv.lane
-          : laneNames.length > 0
-            ? 0
-            : undefined,
+    lane: typeof iv.lane === "string" ? indexOfName(iv.lane) : iv.lane ?? undefined,
   }));
-  return packLanes(spans);
+  if (laneNames.length === 0) return packLanes(spans);
+
+  const declared = spans.filter((s) => s.lane != null);
+  const declaredLanes = packLanes(declared);
+  const base = Math.max(laneNames.length + extra.length, ...declaredLanes.map((l) => l + 1));
+  const autoLanes = packLanes(spans.filter((s) => s.lane == null));
+  let d = 0;
+  let a = 0;
+  return spans.map((s) => (s.lane != null ? declaredLanes[d++]! : base + autoLanes[a++]!));
 }
 
 /** Hatch pattern ids per state, so one <defs> entry serves every bar. */
@@ -143,6 +147,34 @@ const STATE_LABEL: Record<string, string> = {
   waiting: "waiting",
   holding: "holding",
 };
+
+/** Own keys only: a state named `constructor` must print as itself. */
+export function stateLabel(state: string): string {
+  return Object.hasOwn(STATE_LABEL, state) ? STATE_LABEL[state]! : state;
+}
+
+const LEGEND_SWATCH = 19;
+const LEGEND_GAP = 14;
+const LEGEND_ROW = 14;
+
+/**
+ * Legend entries laid out by their measured width, wrapping onto a new row
+ * rather than overlapping when the labels are long.
+ */
+export function legendLayout(labels: string[], maxWidth: number): { x: number; row: number }[] {
+  let x = 0;
+  let row = 0;
+  return labels.map((label) => {
+    const w = LEGEND_SWATCH + textWidth(label, 9) + LEGEND_GAP;
+    if (x > 0 && x + w - LEGEND_GAP > maxWidth) {
+      x = 0;
+      row += 1;
+    }
+    const at = { x, row };
+    x += w;
+    return at;
+  });
+}
 
 /**
  * Intervals as spans on a shared axis, with an optional sweep cursor.
@@ -206,9 +238,11 @@ export function TimelineView({
     intervals.map((iv) => iv.state).filter((st): st is string => Boolean(st)),
   );
   const legend = showLegend ?? states.size > 0;
-  const legendH = legend && states.size > 0 ? 20 : 0;
-
   const plotW = width - leftPad - PAD_X;
+  const legendItems = legendLayout([...states].map(stateLabel), plotW);
+  const legendRows = legendItems.length ? Math.max(...legendItems.map((p) => p.row)) + 1 : 0;
+  const legendH = legend && states.size > 0 ? 20 + (legendRows - 1) * LEGEND_ROW : 0;
+
   const height = PAD_TOP + laneCount * laneHeight + (showAxis ? AXIS_H : 6) + legendH;
   const scale = (v: number) => leftPad + ((v - lo) / span) * plotW;
 
@@ -512,8 +546,8 @@ export function TimelineView({
         {legend && states.size > 0 && (
           <g>
             {[...states].map((st, i) => {
-              const x = leftPad + i * 86;
-              const y = height - 6;
+              const x = leftPad + legendItems[i]!.x;
+              const y = height - 6 - (legendRows - 1 - legendItems[i]!.row) * LEGEND_ROW;
               const hatch = HATCHED_STATES.has(st);
               return (
                 <g key={st}>
@@ -534,7 +568,7 @@ export function TimelineView({
                     fontSize={9}
                     fontFamily="system-ui, sans-serif"
                   >
-                    {STATE_LABEL[st] ?? st}
+                    {stateLabel(st)}
                   </text>
                 </g>
               );

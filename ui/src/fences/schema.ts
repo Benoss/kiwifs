@@ -163,6 +163,26 @@ export function didYouMean(key: string, candidates: Iterable<string>): string | 
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
+/** `values:` with nothing after it is YAML null, and draws nothing. */
+export function isMissing(body: Record<string, unknown>, key: string): boolean {
+  return body[key] == null;
+}
+
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    const bb = b as unknown[];
+    return a.length === bb.length && a.every((v, i) => deepEqual(v, bb[i]));
+  }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  const rb = b as Record<string, unknown>;
+  return ka.every((k) => k in rb && deepEqual((a as Record<string, unknown>)[k], rb[k]));
+}
+
 export interface ValidateOptions {
   /** `path` prefix for issues, e.g. `steps[1]`. */
   prefix?: string;
@@ -170,6 +190,11 @@ export interface ValidateOptions {
   lineOf?: (key: string) => number | undefined;
   /** Step patches may not set keys marked `steppable: false`. */
   mode?: "base" | "step";
+  /**
+   * In step mode, the props the patch applies over. A fixed key restated
+   * with the value it already has is not a change, and is not reported.
+   */
+  previous?: Record<string, unknown>;
   /**
    * Report missing required keys. Off when the caller checks them against the
    * first resolved step instead, which is where they actually have to hold.
@@ -202,7 +227,11 @@ export function validateAttributes(
       push(key, `unknown key "${key}"${hint ? ` — did you mean "${hint}"?` : ""}`, "warning");
       continue;
     }
-    if (mode === "step" && attr.steppable === false) {
+    if (
+      mode === "step" &&
+      attr.steppable === false &&
+      !(opts.previous && deepEqual(opts.previous[key], value))
+    ) {
       push(key, `"${key}" cannot change between steps`);
       continue;
     }
@@ -227,7 +256,7 @@ export function validateAttributes(
 
   if (mode === "base" && opts.requireAll !== false) {
     for (const [key, attr] of Object.entries(schema.attributes)) {
-      if (attr.required && !(key in body)) {
+      if (attr.required && isMissing(body, key)) {
         issues.push({ path: `${prefix}${key}`, message: `missing required key "${key}"`, severity: "error" });
       }
     }

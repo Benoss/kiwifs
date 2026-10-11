@@ -119,4 +119,50 @@ describe("toggleBit", () => {
     expect(toggleBit(0, 31)).toBe(2 ** 31);
     expect(toggleBit(2 ** 31, 31)).toBe(0);
   });
+
+  it("does not wrap negative when a low bit flips above 2^31", () => {
+    expect(toggleBit(2 ** 31 + 1, 0)).toBe(2 ** 31);
+    expect(toggleBit(2 ** 32, 3)).toBe(2 ** 32 + 8);
+  });
+
+  it("keeps a bigint or string pattern exact", () => {
+    expect(toggleBit(0n, 63)).toBe(1n << 63n);
+    expect(toggleBit("0x8000000000000000", 63)).toBe(0n);
+  });
+});
+
+describe("32 bits and wider", () => {
+  it("masks at width 32 instead of collapsing to -1", () => {
+    expect(asUint(0x80000000, 32)).toBe(0x80000000);
+    expect(asUint(-1, 32)).toBe(0xffffffff);
+    expect(asUint(2 ** 40 + 5, 32)).toBe(5);
+    expect(decodeBits(0x80000000, 32, "hex").text).toBe("0x80000000");
+    expect(decodeBits(0xffffffff, 32, "uint").text).toBe("4294967295");
+  });
+
+  it("reads fields above bit 31", () => {
+    expect(fieldValue(2 ** 40, { from: 40, to: 40, label: "b40" })).toBe(1);
+    expect(fieldValue("0x3FF0000000000000", { from: 52, to: 62, label: "exp" })).toBe(1023);
+    expect(fieldValue(0xffffffff, { from: 0, to: 31, label: "all" })).toBe(0xffffffff);
+  });
+
+  it("treats non-finite numbers as zero rather than throwing", () => {
+    expect(asUint(NaN, 64)).toBe(0);
+    expect(asUint(Infinity, 40)).toBe(0);
+    expect(decodeBits(NaN, 64, "ieee64").text).toBe("0");
+  });
+
+  it("decodes a real double from a hex string or bigint", () => {
+    expect(decodeBits("0x3FB999999999999A", 64, "ieee64").text).toBe("0.1");
+    expect(decodeBits(0x3fb999999999999an, 64, "ieee64").text).toBe("0.1");
+    expect(decodeBits("0b11", 8, "uint").text).toBe("3");
+    expect(decodeBits("0xFFFFFFFFFFFFFFFF", 64, "twos").text).toBe("-1");
+    expect(decodeBits("0xFFFFFFFFFFFFFFFF", 64, "uint").text).toBe("18446744073709551615");
+  });
+
+  it("prints negative zero and subnormal exponents", () => {
+    expect(decodeBits(0x80000000, 32, "ieee32").text).toBe("-0");
+    expect(asFloat(0x00000001, 32).parts[1]).toBe("exponent 00000000 (-126)");
+    expect(asFloat(1, 64).parts[1]).toContain("(-1022)");
+  });
 });

@@ -45,7 +45,16 @@ export interface InputField {
 export interface InputPanelProps {
   fields: InputField[];
   values: Record<string, unknown>;
+  /**
+   * One field changed. When `persist` restores several saved fields at once
+   * and `onChangeAll` is absent, this is called once per field in the same
+   * tick — so write it with a functional update
+   * (`setValues((v) => ({ ...v, [key]: value }))`), or all but the last
+   * restored field are lost.
+   */
   onChange: (key: string, value: unknown) => void;
+  /** Several fields changed at once (a `persist` restore). Preferred over per-field `onChange` when given. */
+  onChangeAll?: (values: Record<string, unknown>) => void;
   /** Optional title. */
   title?: string;
   /** Layout: "row" or "column". Default "row". */
@@ -92,11 +101,12 @@ export function InputPanel({
   fields,
   values,
   onChange,
+  onChangeAll,
   title,
   layout = "row",
   persist,
 }: InputPanelProps) {
-  usePersistedInputs(persist, fields, values, onChange);
+  usePersistedInputs(persist, fields, values, onChange, onChangeAll);
 
   return (
     <div style={{
@@ -296,33 +306,56 @@ function coerceOption(raw: string, options: InputOption[]): string | number {
 }
 
 /**
- * Restore saved values once, then write back on every change.
+ * The saved values for fields not restored yet, marking them restored.
  *
- * Restoring once rather than continuously matters: a reader who moves a slider
- * must not have it snapped back by the save that their own move triggered.
+ * Each field restores once rather than continuously: a reader who moves a
+ * slider must not have it snapped back by the save their own move triggered.
  */
+export function takeRestorable(
+  fields: InputField[],
+  saved: Record<string, unknown> | null,
+  done: Set<string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (done.has(field.key)) continue;
+    done.add(field.key);
+    const value = saved?.[field.key];
+    if (value !== undefined) out[field.key] = value;
+  }
+  return out;
+}
+
+/** Restore saved values once per field, then write back on every change. */
 function usePersistedInputs(
   persist: string | undefined,
   fields: InputField[],
   values: Record<string, unknown>,
   onChange: (key: string, value: unknown) => void,
+  onChangeAll: ((values: Record<string, unknown>) => void) | undefined,
 ) {
   const state = useLocalState<Record<string, unknown>>(persist ?? "");
-  const restored = useRef(false);
+  const restoredKeys = useRef(new Set<string>());
+  // Set once the first read settles, found or not: a missing or failed
+  // document must not stop the reader's changes from being saved.
+  const loaded = useRef(false);
   const known = fields.map((f) => f.key).join(",");
 
   useEffect(() => {
-    if (!persist || restored.current || state.loading || !state.data) return;
-    restored.current = true;
-    for (const field of fields) {
-      const saved = state.data[field.key];
-      if (saved !== undefined) onChange(field.key, saved);
-    }
-    // `known` is in the deps so a fence that adds a field restores it too.
-  }, [persist, state.loading, state.data, fields, onChange, known]);
+    if (!persist || state.loading) return;
+    loaded.current = true;
+    const restore = takeRestorable(fields, state.data, restoredKeys.current);
+    const keys = Object.keys(restore);
+    if (keys.length === 0) return;
+    if (onChangeAll) onChangeAll(restore);
+    else for (const key of keys) onChange(key, restore[key]);
+    // `known` rather than `fields`: the array is rebuilt every render, while a
+    // fence that adds a field changes the key list and restores just that one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persist, state.loading, state.data, known]);
 
   useEffect(() => {
-    if (!persist || !restored.current) return;
+    if (!persist || !loaded.current) return;
     const timer = setTimeout(() => {
       void state.save({ ...(state.data ?? {}), ...values });
     }, 400);

@@ -21,9 +21,9 @@ export const tableSpec: FenceSpec = {
     attributes: {
       columns: {
         type: "array",
-        items: "object",
+        items: ["object", "string"],
         description:
-          "`{key, label?, pk?, fk?: {table, column}, align?, width?, type?}`. Omit to infer one column per key seen in the rows, in first-seen order.",
+          '`{key, label?, pk?, fk?: {table, column} | "table.column", align?, width?, type?}`, or a bare key string. Omit to infer one column per key seen in the rows, in first-seen order.',
         steppable: false,
       },
       rows: {
@@ -36,19 +36,25 @@ export const tableSpec: FenceSpec = {
         false,
       ),
       rowKey: string("Column whose value identifies a row. Defaults to the `pk` column.", false),
-      activeCells: many('Cells written this step, as `"rowKey.colKey"`.'),
+      activeCells: many('Cells written this step, as `"rowKey.colKey"` or `[rowKey, colKey]`.'),
       highlightCells: many("Secondary-highlighted cells."),
       dimCells: many("Dimmed cells."),
+      selected: many("Cells drawn as selected."),
       activeRows: many("Row keys active this step."),
       highlightRows: many("Secondary-highlighted row keys."),
       dimRows: many("Dimmed row keys."),
       highlightCols: many("Highlighted column keys — the join key, the column being scanned."),
       insertedRows: many("Rows added this step, drawn green with a `+` gutter."),
       deletedRows: many("Rows removed this step, struck through."),
-      arrows: objectList('Cell-to-cell references: `{from: "r.c", to: "r.c", label?}`.'),
-      sort: { type: "object", description: "Sort indicator only: `{key, dir}`. Rows render in the order given." },
+      arrows: objectList(
+        'Cell-to-cell references: `{from: "r.c", to: "r.c", label?, color?}`. Drawn as a ↳ glyph in the source cell, with the target in its tooltip — not a line.',
+      ),
+      sort: {
+        type: ["object", "string"],
+        description: "Sort indicator only: `{key, dir}` or a column key. Rows render in the order given.",
+      },
       caption: string("Caption under the table.", false),
-      maxRows: number("Render at most this many rows, then a \"…n more\" line.", false),
+      maxRows: number("Render at most this many rows, then a \"…n more\" line. Ignored unless a non-negative number.", false),
       maxHeight: number("Scroll past this height, px. Default 420.", false),
       why: anyValue("Cell key → explanation, revealed when the reader selects it."),
       widgetId: string("Name for the inspect bus, for cross-widget linking.", false),

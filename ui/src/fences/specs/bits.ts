@@ -16,7 +16,11 @@ export const bitsSpec: FenceSpec = {
   required: ["value"],
   schema: {
     attributes: {
-      value: { type: "number", required: true, description: "The value to show." },
+      value: {
+        type: ["number", "string"],
+        required: true,
+        description: 'The value to show. A number, or a `"0x…"` / `"0b…"` string for 64-bit patterns a JS number cannot hold exactly.',
+      },
       bits: number("How many bits to draw. Defaults to the value's bit length.", false),
       labels: { type: "array", description: "What each bit stands for, indexed by bit position (bit 0 = least significant)." },
       label: string("Row title, e.g. `mask`."),

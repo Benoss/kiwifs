@@ -35,6 +35,7 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { MarkdownSourceEditor } from "./editor/MarkdownSourceEditor";
 import { FencePreview } from "./editor/FencePreview";
+import { splitFenceExample } from "./editor/markdownSlashCommands";
 import type { FencePreviewTarget } from "./editor/fenceAssist";
 import { blockNoteSlashItems, loadSlashCommandTemplate } from "@kw/lib/editorSlashCommands";
 import { useEditorSlashCommands } from "../hooks/useEditorSlashCommands";
@@ -1152,17 +1153,14 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
   };
 
   /**
-   * A fence is several lines, and BlockNote has no markdown-fence block, so
-   * each line goes in as its own paragraph. The round-trip through markdown
-   * on save reassembles it into the fence the author picked.
+   * One code block tagged with the fence's language: the same block a loaded
+   * page's fence parses into, so it saves back as ```` ```lang ```` rather
+   * than as escaped paragraphs.
    */
-  const insertFenceBlock = (example: string) => {
+  const insertFenceBlock = (example: string, lang: string) => {
     const cur = editor.getTextCursorPosition().block;
-    const blocks = example
-      .replace(/\n$/, "")
-      .split("\n")
-      .map((line) => ({ type: "paragraph" as const, content: line }));
-    editor.insertBlocks(blocks, cur, "after");
+    const { language, body } = splitFenceExample(example, lang);
+    editor.insertBlocks([{ type: "codeBlock", props: { language }, content: body }], cur, "after");
   };
 
   return [
@@ -1216,7 +1214,7 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
         aliases: ["widget", "fence", spec.lang, ...(spec.aliases ?? [])],
         group: "Widgets",
         icon: <Puzzle size={18} />,
-        onItemClick: () => insertFenceBlock(spec.example),
+        onItemClick: () => insertFenceBlock(spec.example, spec.lang),
       })),
   ];
 }

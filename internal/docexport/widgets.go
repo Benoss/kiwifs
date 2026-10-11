@@ -19,27 +19,49 @@ func RewriteWidgetFences(content []byte) []byte {
 	return []byte(markdown.StripWidgetFences(string(content), renderStaticFence))
 }
 
-func renderStaticFence(lang, summary, source string) string {
+func renderStaticFence(block markdown.WidgetFenceBlock) string {
 	var buf strings.Builder
 
-	lines := strings.Split(strings.TrimRight(summary, "\n"), "\n")
-	// The first line of a summary is the caption or title when there is one.
-	// Blockquote the prose: it is a figure's text, not body copy.
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			buf.WriteString(">\n")
-			continue
+	// The code listing is already in the YAML below; repeating it as
+	// blockquoted prose would print it twice, and unformatted.
+	if prose := block.Prose(false); prose != "" {
+		for _, line := range strings.Split(prose, "\n") {
+			if strings.TrimSpace(line) == "" {
+				buf.WriteString(">\n")
+				continue
+			}
+			buf.WriteString("> ")
+			buf.WriteString(line)
+			buf.WriteString("\n")
 		}
-		buf.WriteString("> ")
-		buf.WriteString(line)
-		buf.WriteString("\n")
-	}
-	if buf.Len() > 0 {
 		buf.WriteString(">\n")
 	}
+	lang := block.Lang
+	if block.Spec != nil {
+		lang = block.Spec.Lang
+	}
 	buf.WriteString(fmt.Sprintf("> *Interactive %s widget — open this page in KiwiFS to step through it.*\n", lang))
-	buf.WriteString("\n```yaml\n")
-	buf.WriteString(strings.TrimRight(source, "\n"))
-	buf.WriteString("\n```\n")
+
+	source := strings.TrimRight(block.Source, "\n")
+	marker := strings.Repeat("`", max(3, longestBacktickRun(source)+1))
+	buf.WriteString("\n" + marker + "yaml\n")
+	buf.WriteString(source)
+	buf.WriteString("\n" + marker + "\n")
 	return buf.String()
+}
+
+// longestBacktickRun is the longest run of consecutive backticks in s. A
+// `code:` listing holding a ``` fence of its own would otherwise close the
+// YAML block early.
+func longestBacktickRun(s string) int {
+	longest, run := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '`' {
+			run++
+			longest = max(longest, run)
+			continue
+		}
+		run = 0
+	}
+	return longest
 }

@@ -102,7 +102,10 @@ export function KiwiWidget({ name, source, meta, onNavigate }: Props) {
   const bus = useInspectState();
   if (name === "live") {
     return (
-      <ErrorBoundary fallback={<WidgetError name={name} source={source} />}>
+      <ErrorBoundary
+        resetKeys={[source]}
+        fallback={(error) => <WidgetError name={name} source={source} message={error.message} />}
+      >
         <WidgetRootContext.Provider value={rootRef}>
           <InspectContext.Provider value={bus}>
             <div ref={rootRef} className="kiwi-widget my-4 rounded-lg border border-border overflow-hidden">
@@ -126,7 +129,10 @@ export function KiwiWidget({ name, source, meta, onNavigate }: Props) {
     let config: Record<string, unknown> = {};
     try { config = (yaml.load(source) as Record<string, unknown>) ?? {}; } catch {}
     return (
-      <ErrorBoundary fallback={<WidgetError name={name} source={source} />}>
+      <ErrorBoundary
+        resetKeys={[name, source]}
+        fallback={(error) => <WidgetError name={name} source={source} message={error.message} />}
+      >
         <Widget config={config} />
       </ErrorBoundary>
     );
@@ -147,10 +153,10 @@ export function KiwiWidget({ name, source, meta, onNavigate }: Props) {
   );
 }
 
-function WidgetError({ name, source }: { name: string; source: string }) {
+function WidgetError({ name, source, message }: { name: string; source: string; message?: string }) {
   return (
     <pre className="kiwi-widget-error">
-      <code>{`Widget "${name}" threw an error\n\n${source}`}</code>
+      <code>{`Widget "${name}" threw an error${message ? `: ${message}` : ""}\n\n${source}`}</code>
     </pre>
   );
 }

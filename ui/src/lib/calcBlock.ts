@@ -98,28 +98,45 @@ const TIME: Record<string, number> = {
 };
 
 /**
- * Magnitude units, in scope for a derivation line only.
+ * Magnitude words that may stand alone in a derivation (`dau / million`).
  *
- * `lib/expr.ts` deliberately does not define these globally: in a plot curve,
- * `m` means slope, not mega. In a capacity model it means mega, and a reader
- * writing `dau * 2 k` means two thousand.
+ * The one- and two-letter forms (`k`, `m`, `b`, `Mi`) only count as a suffix
+ * straight after a number — `dau * 2 k` is two thousand — because as bare names
+ * they would silently answer `b * 2` or `m * x` with a billion or a million
+ * when the author meant an undefined variable.
  */
-const MAGNITUDE: Record<string, number> = {
-  k: 1e3,
+const MAGNITUDE_WORDS: Record<string, number> = {
   thousand: 1e3,
-  m: 1e6,
   million: 1e6,
-  b: 1e9,
   billion: 1e9,
-  t: 1e12,
   trillion: 1e12,
+};
+
+const BINARY_PREFIX: Record<string, number> = {
   ki: 1024,
   mi: 1024 ** 2,
   gi: 1024 ** 3,
   ti: 1024 ** 4,
 };
 
-const BUILTINS: Record<string, number> = { ...TIME, ...MAGNITUDE, pi: Math.PI, e: Math.E };
+const BUILTINS: Record<string, number> = { ...TIME, ...MAGNITUDE_WORDS, pi: Math.PI, e: Math.E };
+
+/** Same precedence as `parseQuantity`: `5 b` is five billion, not five bytes. */
+const SUFFIX: Record<string, number> = { ...TIME, ...DATA, ...BINARY_PREFIX, ...SCALE };
+
+const SUFFIX_RE = new RegExp(
+  String.raw`(?<![A-Za-z0-9_.])(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)\s*(` +
+    Object.keys(SUFFIX)
+      .sort((a, b) => b.length - a.length)
+      .join("|") +
+    String.raw`)(?![A-Za-z0-9_(])`,
+  "gi",
+);
+
+/** `2 k` → `(2 * 1000)`, `3 MB` → `(3 * 1048576)`: a unit only after a number. */
+function expandNumberUnits(expr: string): string {
+  return expr.replace(SUFFIX_RE, (_, num: string, unit: string) => `(${num} * ${SUFFIX[unit.toLowerCase()]})`);
+}
 
 function splitComment(line: string): { body: string; comment?: string } {
   const hash = line.indexOf("#");
@@ -256,7 +273,7 @@ export function formatQuantity(value: number): string {
 export function evaluateExpression(expr: string, scope: Record<string, number>): number {
   let result: number;
   try {
-    result = evaluate(expr, { ...BUILTINS, ...scope });
+    result = evaluate(expandNumberUnits(expr), { ...BUILTINS, ...scope });
   } catch (err) {
     throw new CalcParseError(err instanceof ExprError ? err.message : `cannot evaluate "${expr}"`);
   }

@@ -142,12 +142,21 @@ function resolveBarColor(
  */
 export function binSamples(spec: BarBinning): { counts: number[]; labels: string[] } {
   const samples = spec.samples.filter((v) => Number.isFinite(v));
-  const count = Math.max(1, Math.min(200, Math.trunc(spec.binCount ?? 10)));
+  const requested = Math.trunc(Number(spec.binCount ?? 10));
+  const count = Number.isFinite(requested) ? Math.max(1, Math.min(200, requested)) : 10;
   if (samples.length === 0) {
     return { counts: new Array(count).fill(0), labels: new Array(count).fill("") };
   }
-  const lo = spec.min ?? Math.min(...samples);
-  const hi = spec.max ?? Math.max(...samples);
+  // A loop rather than Math.min(...samples): spreading a few hundred thousand
+  // samples overflows the argument limit.
+  let sampleMin = Infinity;
+  let sampleMax = -Infinity;
+  for (const v of samples) {
+    if (v < sampleMin) sampleMin = v;
+    if (v > sampleMax) sampleMax = v;
+  }
+  const lo = spec.min != null && Number.isFinite(spec.min) ? spec.min : sampleMin;
+  const hi = spec.max != null && Number.isFinite(spec.max) ? spec.max : sampleMax;
   const span = hi - lo || 1;
   const counts = new Array(count).fill(0);
   for (const v of samples) {

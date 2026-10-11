@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { keyLine, parseFence, sniffFence } from "./parseFence";
+import { afterEach, describe, expect, it } from "vitest";
+import { keyLine, loadFenceYaml, parseFence, sniffFence } from "./parseFence";
 import { parseFenceMeta, tokenizeMeta } from "./meta";
 import { didYouMean, editDistance, serializeSchema, validateAttributes } from "./schema";
 import { arraySpec } from "./specs/array";
@@ -7,7 +7,8 @@ import { treeSpec } from "./specs/tree";
 import { tableSpec } from "./specs/table";
 import { bitsSpec } from "./specs/bits";
 import { stepsSpec } from "./specs/steps";
-import { allFences, getFence } from "./index";
+import { allFences, clearFences, getFence, isStrictTag, registerBuiltinFences, type FenceSpec } from "./index";
+import { registerWidget, unregisterWidget } from "@kw/widgets/registry";
 
 describe("parseFence", () => {
   it("splits base props from reserved keys", () => {
@@ -353,5 +354,187 @@ steps:
 `);
     const prepared = stepsSpec.prepare!(parsed);
     expect(prepared.steps.every((s) => s.messages === undefined)).toBe(true);
+  });
+
+  it("reads an old-format body the way lib/stepsBlock did: every step stands alone", () => {
+    const parsed = parseFence(stepsSpec, `
+diagram: |
+  flowchart LR
+    A --> B --> C
+steps:
+  - note: "start"
+    dim: [B]
+  - focus: [B]
+  - focus: A, B
+    dim: C
+  - "just a note"
+`);
+    expect(parsed.issues).toEqual([]);
+    const shown = parsed.steps.map((s) => stepsSpec.normalize!(s));
+    expect(shown.map((s) => [s.focus, s.dim])).toEqual([
+      [[], ["B"]],
+      // Not dimmed any more: the previous step's `dim` does not carry over.
+      [["B"], []],
+      [["A", "B"], ["C"]],
+      [[], []],
+    ]);
+  });
+
+  it("counts sequence messages from what each step wrote, not what it inherited", () => {
+    const parsed = parseFence(stepsSpec, `
+diagram: |
+  sequenceDiagram
+    A->>B: one
+    B->>C: two
+    C->>A: three
+steps:
+  - messages: 3
+  - note: b
+  - note: c
+`);
+    expect(stepsSpec.prepare!(parsed).steps.map((s) => s.messages)).toEqual([3, 2, 3]);
+  });
+
+  it("requires a non-empty steps list", () => {
+    const parsed = parseFence(stepsSpec, `diagram: "flowchart LR\\n  A --> B"\n`);
+    expect(parsed.issues.find((i) => i.path === "steps")?.severity).toBe("error");
+  });
+
+  it("is the `steps` spec, spelled kiwi-steps without a doubled prefix", () => {
+    expect(stepsSpec.lang).toBe("steps");
+    expect(getFence("kiwi-steps")).toBe(stepsSpec);
+    expect(getFence("kiwi-kiwi-steps")).toBeUndefined();
+    expect(getFence("widget:kiwi-steps")).toBeUndefined();
+  });
+});
+
+describe("strictness by spelling", () => {
+  const listing = "src/\n  widgets/\n    ArrayView.tsx\n";
+
+  it("knows kiwi- and widget: as the only strict prefixes", () => {
+    expect(isStrictTag("kiwi-array")).toBe(true);
+    expect(isStrictTag("Widget:array")).toBe(true);
+    expect(isStrictTag("array")).toBe(false);
+    expect(isStrictTag("heap")).toBe(false);
+  });
+
+  it("sniffs declared aliases instead of claiming them", () => {
+    const heap = getFence("heap")!;
+    expect(sniffFence(heap, "heap", "the heap grows upward\n")).toBe(false);
+    const grid = getFence("grid")!;
+    expect(sniffFence(grid, "grid", "a b c\nd e f\n")).toBe(false);
+    expect(sniffFence(grid, "grid", "values: [[1, 2]]\n")).toBe(true);
+    expect(sniffFence(stepsSpec, "steps", "1. do this\n2. then that\n")).toBe(false);
+    expect(sniffFence(stepsSpec, "kiwi-steps", "1. do this\n")).toBe(true);
+  });
+
+  it("sniffs a case variant", () => {
+    expect(getFence("Tree")).toBe(treeSpec);
+    expect(sniffFence(treeSpec, "Tree", listing)).toBe(false);
+  });
+
+  it("finds marker keys under props:, in the first step or frame, and by alias", () => {
+    expect(sniffFence(bitsSpec, "bits", "props: {value: 5}\n")).toBe(true);
+    expect(sniffFence(bitsSpec, "bits", "bits: 4\nsteps:\n  - value: 5\n")).toBe(true);
+    expect(sniffFence(bitsSpec, "bits", "bits: 4\nframes:\n  - value: 5\n")).toBe(true);
+    const aliased: FenceSpec = {
+      ...bitsSpec,
+      required: undefined,
+      schema: { attributes: { value: { type: "number", required: true, alias: "val" } } },
+    };
+    expect(sniffFence(aliased, "bits", "val: 5\n")).toBe(true);
+  });
+});
+
+describe("step and frame validation", () => {
+  it("lets a frame set a layout constant, since a frame is a full prop set", () => {
+    const parsed = parseFence(arraySpec, `
+values: [1]
+frames:
+  - cellSize: 80
+`);
+    expect(parsed.issues).toEqual([]);
+  });
+
+  it("accepts a fixed key restated unchanged in a step", () => {
+    const parsed = parseFence(arraySpec, `
+values: [1]
+cellSize: 40
+steps:
+  - cellSize: 40
+  - cellSize: 80
+`);
+    expect(parsed.issues.map((i) => i.path)).toEqual(["steps[1].cellSize"]);
+  });
+
+  it("treats a null required key as missing", () => {
+    const parsed = parseFence(bitsSpec, `value:\n`);
+    expect(parsed.issues.some((i) => i.path === "value" && i.severity === "error")).toBe(true);
+    expect(validateAttributes(bitsSpec.schema, { value: null }).some((i) => i.path === "value")).toBe(true);
+  });
+
+  it("only counts a real yes as a breakpoint", () => {
+    const parsed = parseFence(arraySpec, `
+values: [1]
+steps:
+  - breakpoint: "no"
+  - breakpoint: "true"
+  - breakpoint: 1
+`);
+    expect(parsed.stepMeta.map((m) => m.breakpoint)).toEqual([false, true, false]);
+  });
+
+  it("never passes `props` itself through to the view", () => {
+    const parsed = parseFence(arraySpec, `
+values: [1]
+steps:
+  - props: {label: dp}
+`);
+    expect(parsed.steps[0]).toEqual({ values: [1], label: "dp" });
+    expect(parsed.patches[0]).toEqual({ label: "dp" });
+  });
+});
+
+describe("loadFenceYaml", () => {
+  it("returns the same parse for the same text", () => {
+    expect(loadFenceYaml("a: 1\n")).toBe(loadFenceYaml("a: 1\n"));
+    expect(loadFenceYaml("a: [\n").error).toBeTruthy();
+  });
+
+  it("forgets the oldest entry past its bound", () => {
+    const first = loadFenceYaml("evict: me\n");
+    for (let i = 0; i < 250; i++) loadFenceYaml(`k: ${i}\n`);
+    expect(loadFenceYaml("evict: me\n")).not.toBe(first);
+  });
+});
+
+describe("legacy registerWidget components", () => {
+  const Legacy = () => null;
+
+  afterEach(() => unregisterWidget("thirdparty"));
+
+  it("resolve only through an explicit spelling", () => {
+    registerWidget("thirdparty", Legacy);
+    expect(getFence("thirdparty")).toBeUndefined();
+    expect(getFence("kiwi-thirdparty")?.legacy).toBe(true);
+    expect(getFence("widget:thirdparty")?.component).toBe(Legacy);
+  });
+
+  it("never shadow a built-in", () => {
+    registerWidget("array", Legacy);
+    try {
+      expect(getFence("kiwi-array")).toBe(arraySpec);
+    } finally {
+      unregisterWidget("array");
+    }
+  });
+});
+
+describe("clearFences", () => {
+  it("lets the built-ins register again", () => {
+    clearFences();
+    expect(allFences()).toEqual([]);
+    registerBuiltinFences();
+    expect(getFence("array")).toBe(arraySpec);
   });
 });

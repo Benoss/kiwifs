@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@kw/components/ui/button";
 import { Check, ChevronLeft, ChevronRight, Download, Link, Pause, Play, RotateCcw } from "lucide-react";
 import type { PlaybackControlsBinding } from "./usePlayback";
@@ -38,6 +38,16 @@ const noop = () => {};
 
 export function PlaybackControls({ pb, ...props }: Props) {
   const [copied, setCopied] = useState(false);
+  const [snapshotNote, setSnapshotNote] = useState<string | null>(null);
+  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (noteTimer.current) clearTimeout(noteTimer.current);
+  }, []);
+  const flashSnapshotNote = (note: string | null) => {
+    if (noteTimer.current) clearTimeout(noteTimer.current);
+    setSnapshotNote(note);
+    if (note) noteTimer.current = setTimeout(() => setSnapshotNote(null), 4000);
+  };
   const b = { ...pb?.controls, ...stripUndefined(props) };
   const currentStep = b.currentStep ?? 0;
   const totalSteps = b.totalSteps ?? 1;
@@ -135,24 +145,31 @@ export function PlaybackControls({ pb, ...props }: Props) {
 
         {/* Download the frame the reader is looking at */}
         {snapshot && (
-          <button
-            onClick={() => {
-              const el = snapshot.root.current;
-              if (!el) return;
-              // Shift-click gives SVG, which stays sharp and stays editable.
-              void downloadSnapshot(el, snapshot.name, "png").catch(() => {});
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              const el = snapshot.root.current;
-              if (el) void downloadSnapshot(el, snapshot.name, "svg").catch(() => {});
-            }}
-            className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
-            title="Download this step as PNG (right-click for SVG)"
-            aria-label="Download this step as an image"
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
+          <>
+            <button
+              onClick={(e) => {
+                const el = snapshot.root.current;
+                if (!el) return;
+                // Shift-click gives SVG, which stays sharp and stays editable.
+                const format = e.shiftKey ? "svg" : "png";
+                downloadSnapshot(el, snapshot.name, format).then(
+                  (saved) => flashSnapshotNote(saved === format ? null : "Saved as SVG"),
+                  (err: unknown) =>
+                    flashSnapshotNote(`Snapshot failed${err instanceof Error && err.message ? `: ${err.message}` : ""}`),
+                );
+              }}
+              className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
+              title="Download this step as PNG (Shift-click for SVG)"
+              aria-label="Download this step as an image"
+            >
+              <Download className="h-3.5 w-3.5" />
+            </button>
+            {snapshotNote && (
+              <span role="status" className="ml-1 text-[10px] text-muted-foreground" title={snapshotNote}>
+                {snapshotNote}
+              </span>
+            )}
+          </>
         )}
 
         {/* Speed badge — single click cycles */}

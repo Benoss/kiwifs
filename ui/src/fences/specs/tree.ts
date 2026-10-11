@@ -1,7 +1,7 @@
 import { lazy } from "react";
 import type { FencePanel, FenceSpec } from "../registry";
 import { summarizeTree } from "@kw/widgets/widgetA11y";
-import { CANVAS_ATTRS, anyValue, bool, enumOf, many, number, objectList } from "./common";
+import { CANVAS_ATTRS, bool, enumOf, many, number, objectList } from "./common";
 
 const TreeView = lazy(() =>
   import("@kw/widgets/TreeView").then((m) => ({ default: m.TreeView })),
@@ -63,7 +63,6 @@ export const treeSpec: FenceSpec = {
       vGap: number("Vertical gap between levels, px.", false),
       nodeSize: number("Node diameter, px.", false),
       keyCell: number("Width of one key cell in a keyed page, px. Default 30.", false),
-      link: anyValue("Widget whose keys correspond to these node ids, for linked highlighting."),
       ...CANVAS_ATTRS,
     },
   },

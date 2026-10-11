@@ -3,16 +3,19 @@ import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { WidgetText } from "./WidgetText";
 import { CellOverlay, linkPath, useCellRects, type OverlayShape } from "./cellOverlay";
-import { canvasAria, sentence } from "./widgetA11y";
+import { canvasAria, objectsOf, sentence, shortText } from "./widgetA11y";
 import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 import {
   describeHeapObject,
   formatValue,
   frameOrder,
+  heapGet,
   heapOrder,
   isRef,
   refTarget,
   slotKey,
+  varsOf,
+  type HeapEntry,
   type HeapId,
   type HeapObject,
   type StackFrame,
@@ -43,7 +46,10 @@ export interface MemoryViewProps {
   frames?: StackFrame[];
   /** Heap objects by id. Values reference them as `["REF", id]`. */
   heap?: Record<string, HeapObject>;
-  /** Which frame is executing. Defaults to the last, as a call stack does. */
+  /**
+   * Which frame is executing: a frame `id` (or `name#index`), or a number for
+   * its position in `frames`. Defaults to the last, as a call stack does.
+   */
   activeFrame?: string | number;
   /** Heap ids to emphasise this step. */
   activeIds?: Many<HeapId>;
@@ -52,9 +58,11 @@ export interface MemoryViewProps {
   /** Dimmed heap ids — garbage, or a frame about to return. */
   dimIds?: Many<HeapId>;
   /**
-   * Draw a primitive inside its slot rather than as a separate box. Default
-   * true: a diagram where `3` gets its own heap object teaches the wrong
-   * thing about Python, and the right thing about nothing.
+   * Draw a frame variable's primitive inside its slot rather than as a
+   * separate box. Default true: a diagram where `3` gets its own heap object
+   * teaches the wrong thing about Python, and the right thing about nothing.
+   * `false` is Python Tutor's "render all objects on the heap", for when the
+   * lesson is that a name always holds a reference.
    */
   inlinePrimitives?: boolean;
   /** Caption above the frames column. Default "Frames". */
@@ -80,17 +88,27 @@ const DEFAULTS = {
 
 const MONO = "ui-monospace, SFMono-Regular, monospace";
 
-function summarize(frames: StackFrame[], heap: Record<string, HeapObject>): string {
-  const names = frames.map((f) => f.name);
+/** Python's name for a primitive's type, as the boxed heap object's tag. */
+function typeName(value: TraceValue): string {
+  if (value === null || value === undefined) return "NONETYPE";
+  if (typeof value === "boolean") return "BOOL";
+  if (typeof value === "number") return Number.isInteger(value) ? "INT" : "FLOAT";
+  if (typeof value === "string") return "STR";
+  if (Array.isArray(value) && value[0] === "SPECIAL_FLOAT") return "FLOAT";
+  return "VALUE";
+}
+
+function summarize(frames: StackFrame[], heapCount: number): string {
+  const names = frames.map((f, i) => shortText(f.name ?? `frame ${i}`));
   return sentence(
     frames.length ? `call stack ${names.join(" → ")}` : "no frames",
-    `${Object.keys(heap).length} heap objects`,
+    `${heapCount} heap ${heapCount === 1 ? "object" : "objects"}`,
   );
 }
 
 export function MemoryView({
-  frames = [],
-  heap = {},
+  frames: framesIn,
+  heap: heapIn,
   activeFrame,
   activeIds,
   highlightIds,
@@ -111,31 +129,61 @@ export function MemoryView({
   const boxRef = useRef<HTMLDivElement>(null);
   const rects = useCellRects(boxRef, true);
 
-  const active = toSet(activeIds);
-  const highlight = toSet(highlightIds);
-  const dim = toSet(dimIds);
+  const frames = objectsOf<StackFrame>(framesIn);
+  const heap: Record<string, HeapObject> =
+    typeof heapIn === "object" && heapIn !== null && !Array.isArray(heapIn) ? heapIn : {};
 
-  const frameId = (frame: StackFrame, i: number) => frame.id ?? `${frame.name}#${i}`;
-  const activeFrameId =
-    activeFrame != null
-      ? String(activeFrame)
-      : frames.find((f) => f.active)
-        ? frameId(frames.find((f) => f.active)!, frames.findIndex((f) => f.active))
-        : frames.length
-          ? frameId(frames[frames.length - 1]!, frames.length - 1)
-          : "";
+  const active = new Set([...toSet(activeIds)].map(String));
+  const highlight = new Set([...toSet(highlightIds)].map(String));
+  const dim = new Set([...toSet(dimIds)].map(String));
 
-  const order = heapOrder(frames, heap);
-  const entries = order
+  const frameId = (frame: StackFrame, i: number) => String(frame.id ?? `${frame.name ?? "frame"}#${i}`);
+  const activeIndex = (() => {
+    if (typeof activeFrame === "number") return Number.isInteger(activeFrame) ? activeFrame : -1;
+    if (activeFrame != null) return frames.findIndex((f, i) => frameId(f, i) === String(activeFrame));
+    const flagged = frames.findIndex((f) => f.active);
+    return flagged >= 0 ? flagged : frames.length - 1;
+  })();
+  const activeFrameId = frames[activeIndex] ? frameId(frames[activeIndex]!, activeIndex) : "";
+
+  const heapEntries = heapOrder(frames, heap)
     .map((id) => {
-      const raw = heap[String(id)];
-      return raw ? describeHeapObject(id, raw) : null;
+      const raw = heapGet(heap, id);
+      return raw === undefined ? null : describeHeapObject(id, raw);
     })
-    .filter((e): e is NonNullable<typeof e> => e !== null);
+    .filter((e): e is HeapEntry => e !== null);
+
+  // Boxed primitives for "render all objects on the heap". Their ids cannot
+  // collide with an author's, and they are not inspectable parts.
+  const boxed = new Map<string, HeapEntry>();
+  if (!inlinePrimitives) {
+    frames.forEach((frame, i) => {
+      const scope = frameId(frame, i);
+      const vars = varsOf(frame);
+      const box = (name: string, value: TraceValue) => {
+        if (isRef(value)) return;
+        const id = `prim:${slotKey(scope, name)}`;
+        boxed.set(id, { id, kind: typeName(value), slots: [{ value }] });
+      };
+      for (const name of frameOrder(frame)) box(name, vars[name]!);
+      if (frame.returned !== undefined) box("return", frame.returned);
+    });
+  }
+  const entries = [...boxed.values(), ...heapEntries];
+  const isBoxed = (id: HeapId) => boxed.has(String(id));
 
   const selectable = (key: string) =>
-    onSelect !== undefined || whyFor(mergedWhy, { widget: widgetId, kind: "node", key }) !== undefined;
-  const firstSelectable = entries.find((e) => selectable(String(e.id)))?.id;
+    !boxed.has(key) &&
+    (onSelect !== undefined || whyFor(mergedWhy, { widget: widgetId, kind: "node", key }) !== undefined);
+  const firstSelectable = entries.map((e) => String(e.id)).find(selectable);
+
+  /** The heap box a frame slot points at, if it points anywhere. */
+  const pointee = (scope: string, name: string, value: TraceValue): HeapId | null => {
+    const target = refTarget(value);
+    if (target != null) return target;
+    const id = `prim:${slotKey(scope, name)}`;
+    return boxed.has(id) ? id : null;
+  };
 
   // Every pointer, drawn from the slot that holds it to the object it names.
   const shapes: OverlayShape[] = [];
@@ -156,29 +204,33 @@ export function MemoryView({
     frames.forEach((frame, i) => {
       const scope = frameId(frame, i);
       const lit = scope === activeFrameId;
+      const vars = varsOf(frame);
       for (const name of frameOrder(frame)) {
-        const target = refTarget(frame.vars[name]);
+        const target = pointee(scope, name, vars[name]!);
         if (target != null) arrow(`var:${slotKey(scope, name)}`, target, lit);
       }
-      const returned = refTarget(frame.returned);
-      if (returned != null) arrow(`var:${slotKey(scope, "return")}`, returned, lit);
+      if (frame.returned !== undefined) {
+        const returned = pointee(scope, "return", frame.returned);
+        if (returned != null) arrow(`var:${slotKey(scope, "return")}`, returned, lit);
+      }
     });
-    for (const entry of entries) {
+    for (const entry of heapEntries) {
       entry.slots.forEach((slot, j) => {
         const target = refTarget(slot.value);
         if (target != null) {
-          arrow(`slot:${entry.id}:${j}`, target, active.has(entry.id));
+          arrow(`slot:${entry.id}:${j}`, target, active.has(String(entry.id)));
         }
       });
     }
   }
 
   const toneOf = (id: HeapId) => {
-    if (active.has(id)) return { border: activeColor, bg: alpha(activeColor, 14), opacity: 1 };
-    if (highlight.has(id) || linked.has(String(id))) {
+    const key = String(id);
+    if (active.has(key)) return { border: activeColor, bg: alpha(activeColor, 14), opacity: 1 };
+    if (highlight.has(key) || linked.has(key)) {
       return { border: highlightColor, bg: alpha(highlightColor, 12), opacity: 1 };
     }
-    if (dim.has(id)) return { border: DEFAULTS.dimColor, bg: "transparent", opacity: 0.45 };
+    if (dim.has(key)) return { border: DEFAULTS.dimColor, bg: "transparent", opacity: 0.45 };
     return { border: DEFAULTS.border, bg: DEFAULTS.surface, opacity: 1 };
   };
 
@@ -190,8 +242,8 @@ export function MemoryView({
     );
   }
 
-  const slotValue = (value: TraceValue) => {
-    if (isRef(value)) {
+  const slotValue = (value: TraceValue, pointer = isRef(value)) => {
+    if (pointer) {
       // The arrow says where it points; the text says it is a pointer at all,
       // which matters when the target has scrolled out of view.
       return <span style={{ color: DEFAULTS.dimColor }}>→</span>;
@@ -201,7 +253,7 @@ export function MemoryView({
 
   return (
     <div
-      {...canvasAria(ariaLabel ?? summarize(frames, heap), onSelect !== undefined)}
+      {...canvasAria(ariaLabel ?? summarize(frames, heapEntries.length), firstSelectable !== undefined)}
       style={{ padding: "0.5rem 0", overflowX: "auto" }}
     >
       <div
@@ -224,9 +276,10 @@ export function MemoryView({
             const scope = frameId(frame, i);
             const isActive = scope === activeFrameId;
             const rows = frameOrder(frame);
+            const vars = varsOf(frame);
             return (
               <div
-                key={scope}
+                key={`${scope}-${i}`}
                 style={{
                   borderRadius: 6,
                   border: `2px solid ${isActive ? activeColor : DEFAULTS.border}`,
@@ -242,7 +295,7 @@ export function MemoryView({
                     borderBottom: `1px solid ${DEFAULTS.border}`,
                   }}
                 >
-                  <WidgetText text={frame.name} />
+                  <WidgetText text={shortText(frame.name ?? `frame ${i}`)} />
                 </div>
                 {rows.length === 0 && frame.returned === undefined && (
                   <div style={{ padding: "2px 8px", color: DEFAULTS.dimColor }}>(no locals)</div>
@@ -257,7 +310,7 @@ export function MemoryView({
                       data-cell={`var:${slotKey(scope, name)}`}
                       style={{ marginLeft: "auto", minWidth: 18, textAlign: "right" }}
                     >
-                      {slotValue(frame.vars[name]!)}
+                      {slotValue(vars[name]!, pointee(scope, name, vars[name]!) != null)}
                     </span>
                   </div>
                 ))}
@@ -276,7 +329,7 @@ export function MemoryView({
                       data-cell={`var:${slotKey(scope, "return")}`}
                       style={{ marginLeft: "auto", minWidth: 18, textAlign: "right" }}
                     >
-                      {slotValue(frame.returned)}
+                      {slotValue(frame.returned, pointee(scope, "return", frame.returned) != null)}
                     </span>
                   </div>
                 )}
@@ -288,18 +341,20 @@ export function MemoryView({
         {/* Heap */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 150 }}>
           <ColumnLabel text={heapLabel} />
-          {entries.map((entry) => {
+          {entries.map((entry, index) => {
+            const key = String(entry.id);
             const tone = toneOf(entry.id);
             const isTuple = entry.kind === "TUPLE";
+            const isRow = entry.kind === "LIST" || entry.kind === "TUPLE";
             return (
               <div
-                key={String(entry.id)}
+                key={`${key}-${index}`}
                 data-cell={`obj:${entry.id}`}
-                {...(selectable(String(entry.id))
-                  ? partHandlers(widgetId, "node", String(entry.id), bus, {
+                {...(selectable(key)
+                  ? partHandlers(widgetId, "node", key, bus, {
                       onSelect,
                       why: mergedWhy,
-                      tabbable: entry.id === firstSelectable,
+                      tabbable: key === firstSelectable,
                     })
                   : {})}
                 style={{
@@ -308,9 +363,10 @@ export function MemoryView({
                   background: tone.bg,
                   opacity: tone.opacity,
                   overflow: "hidden",
-                  cursor: selectable(String(entry.id)) ? "pointer" : undefined,
+                  cursor: selectable(key) ? "pointer" : undefined,
                   transition: "border-color 0.25s ease, background 0.25s ease, opacity 0.25s ease",
                   outline: "none",
+                  alignSelf: isBoxed(entry.id) ? "flex-start" : undefined,
                 }}
               >
                 <div
@@ -329,38 +385,24 @@ export function MemoryView({
                 )}
                 {/* A list lays its slots out in a row, which is what makes an
                     index visible; a dict or instance reads better as rows. */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: entry.kind === "LIST" || entry.kind === "TUPLE" ? "row" : "column",
-                  }}
-                >
+                <div style={{ display: "flex", flexDirection: isRow ? "row" : "column" }}>
                   {entry.slots.map((slot, j) => (
                     <div
                       key={j}
                       style={{
                         display: "flex",
-                        flexDirection: entry.kind === "LIST" || entry.kind === "TUPLE" ? "column" : "row",
-                        gap: entry.kind === "LIST" || entry.kind === "TUPLE" ? 0 : 8,
+                        flexDirection: isRow ? "column" : "row",
+                        gap: isRow ? 0 : 8,
                         alignItems: "center",
                         padding: "2px 8px",
-                        borderRight:
-                          (entry.kind === "LIST" || entry.kind === "TUPLE") && j < entry.slots.length - 1
-                            ? `1px solid ${DEFAULTS.border}`
-                            : undefined,
+                        borderRight: isRow && j < entry.slots.length - 1 ? `1px solid ${DEFAULTS.border}` : undefined,
                         minWidth: 24,
                       }}
                     >
                       {slot.label != null && (
                         <span style={{ color: DEFAULTS.dimColor, fontSize: "0.62rem" }}>{slot.label}</span>
                       )}
-                      <span data-cell={`slot:${entry.id}:${j}`}>
-                        {inlinePrimitives || isRef(slot.value) ? (
-                          slotValue(slot.value)
-                        ) : (
-                          <span style={{ color: DEFAULTS.text }}>{formatValue(slot.value)}</span>
-                        )}
-                      </span>
+                      <span data-cell={`slot:${entry.id}:${j}`}>{slotValue(slot.value)}</span>
                     </div>
                   ))}
                 </div>
@@ -388,7 +430,7 @@ function ColumnLabel({ text }: { text: string }) {
         color: DEFAULTS.dimColor,
       }}
     >
-      {text}
+      {shortText(text)}
     </div>
   );
 }

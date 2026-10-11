@@ -1,4 +1,5 @@
 import { useId, useMemo } from "react";
+import yaml from "js-yaml";
 import { toSet, type Many } from "./sets";
 
 import { alpha, lookupKeyed, type KeyedValues } from "./colors";
@@ -21,6 +22,7 @@ import { SvgLabel } from "./WidgetText";
 import { ZoomPanel } from "./ZoomPanel";
 import { canvasAria, summarizeGraph } from "./widgetA11y";
 import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { inspectLinked } from "./inspectLinked";
 
 export interface GraphNode {
   id: string | number;
@@ -267,7 +269,7 @@ export function GraphView({
   const dimEdges = toSet(dimEdgesIn);
   const bus = useInspect();
   const mergedWhy = { ...bus.why, ...(why ?? {}) };
-  const linkedNodes = bus.linkedKeys(widgetId);
+  const linkedNodes = inspectLinked(bus, widgetId, hoverPredecessors || why !== undefined);
   const clickable = (id: Id) =>
     Boolean(onNodeClick) ||
     onSelect !== undefined ||
@@ -792,11 +794,9 @@ export function GraphView({
         }
 
         // A hovered node's feeders, and whatever a linked widget is pointing
-        // at, read as highlights even when the author highlighted nothing.
-        if (incoming.has(String(n.id)) || linkedNodes.has(String(n.id))) {
-          stroke = highlightColor;
-          opacity = 1;
-        }
+        // at, get a ring even when the author highlighted nothing. The ring is
+        // drawn outside the node so the author's active/dim styling survives.
+        const isLinked = incoming.has(String(n.id)) || linkedNodes.has(String(n.id));
 
         const lineH = box.lineHeight;
         const subH = box.subFontSize + 3;
@@ -828,6 +828,9 @@ export function GraphView({
               cursor: clickable(n.id) ? "pointer" : undefined,
             }}
           >
+            {isLinked && (
+              <ShapeOutline shape={g.shape} x={g.x} y={g.y} w={g.w + 8} h={g.h + 8} fill="none" stroke={highlightColor} />
+            )}
             <ShapeOutline shape={g.shape} x={g.x} y={g.y} w={g.w} h={g.h} fill={fill} stroke={stroke} />
             {box.lines.map((line, j) => (
               <SvgLabel
@@ -963,30 +966,33 @@ export function GraphView({
 
 /** The current graph as a `graph` fence body, with positions baked in. */
 export function graphToYAML(nodes: GraphNode[], edges: GraphEdge[], directed: boolean): string {
-  const scalar = (v: unknown) =>
-    typeof v === "string" && /[:#{}\[\],&*?|<>=!%@`"\x27\s]/.test(v) ? JSON.stringify(v) : String(v);
-  const lines: string[] = [];
-  if (directed) lines.push("directed: true");
-  lines.push("nodes:");
-  for (const n of nodes) {
-    const parts = [`id: ${scalar(n.id)}`];
-    if (n.label !== undefined) parts.push(`label: ${scalar(n.label)}`);
-    if (n.sublabel !== undefined) parts.push(`sublabel: ${scalar(n.sublabel)}`);
-    if (n.shape !== undefined) parts.push(`shape: ${n.shape}`);
-    if (n.x !== undefined) parts.push(`x: ${Math.round(n.x)}`);
-    if (n.y !== undefined) parts.push(`y: ${Math.round(n.y)}`);
-    if (n.group !== undefined) parts.push(`group: ${scalar(n.group)}`);
-    lines.push(`  - {${parts.join(", ")}}`);
-  }
+  const pick = (entries: [string, unknown][]) =>
+    Object.fromEntries(entries.filter(([, v]) => v !== undefined));
+  const doc: Record<string, unknown> = {};
+  if (directed) doc.directed = true;
+  doc.nodes = nodes.map((n) =>
+    pick([
+      ["id", n.id],
+      ["label", n.label],
+      ["sublabel", n.sublabel],
+      ["shape", n.shape],
+      ["x", n.x === undefined ? undefined : Math.round(n.x)],
+      ["y", n.y === undefined ? undefined : Math.round(n.y)],
+      ["group", n.group],
+    ]),
+  );
   if (edges.length > 0) {
-    lines.push("edges:");
-    for (const e of edges) {
-      const parts = [`from: ${scalar(e.from)}`, `to: ${scalar(e.to)}`];
-      if (e.label !== undefined) parts.push(`label: ${scalar(e.label)}`);
-      if (e.weight !== undefined) parts.push(`weight: ${e.weight}`);
-      if (e.style !== undefined) parts.push(`style: ${e.style}`);
-      lines.push(`  - {${parts.join(", ")}}`);
-    }
+    doc.edges = edges.map((e) =>
+      pick([
+        ["from", e.from],
+        ["to", e.to],
+        ["label", e.label],
+        ["weight", e.weight],
+        ["style", e.style],
+      ]),
+    );
   }
-  return `${lines.join("\n")}\n`;
+  // js-yaml quotes whatever YAML would otherwise retype (`007`, `true`, `no`,
+  // `~`, `a: b`), so the pasted body reads back as the same strings.
+  return yaml.dump(doc, { flowLevel: 2, lineWidth: -1 });
 }

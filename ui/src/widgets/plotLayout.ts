@@ -73,7 +73,10 @@ export function niceNum(span: number, round: boolean): number {
 
 function roundTo(step: number, value: number): number {
   const decimals = Math.max(0, -Math.floor(Math.log10(step)) + 1);
-  const factor = 10 ** Math.min(decimals, 8);
+  // Past 8 decimals a fixed factor would round every tick of a 1e-10 range to
+  // the same value; significant digits still strip the float noise.
+  if (decimals > 8) return Number(value.toPrecision(15));
+  const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
 }
 
@@ -87,7 +90,8 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   const ticks: number[] = [];
   const limit = end + step * 0.5;
   for (let v = start, i = 0; v <= limit && i < 24; v += step, i++) {
-    ticks.push(roundTo(step, v));
+    const t = roundTo(step, v);
+    if (ticks[ticks.length - 1] !== t) ticks.push(t);
   }
   return ticks;
 }
@@ -296,7 +300,8 @@ export function sampleRegion(
       let on = false;
       if (j < n) {
         try {
-          on = f({ ...scope, x: x0 + dx / 2, y: y0 + dy / 2 }) !== 0;
+          const v = f({ ...scope, x: x0 + dx / 2, y: y0 + dy / 2 });
+          on = v !== 0 && !Number.isNaN(v);
         } catch (err) {
           return { cells: [], error: err instanceof Error ? err.message : String(err) };
         }
