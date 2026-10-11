@@ -74,6 +74,7 @@ const DEFAULTS = {
 };
 
 const MAX_SLOTS = 1024;
+const MAX_CHAIN = 32;
 const SLOT_GAP = 2;
 const PROBE_H = 22;
 
@@ -244,7 +245,8 @@ export function MapView({
       : items.filter((list, i) => list.length > 0 && !tombSet.has(i)).length;
   const load = m > 0 ? used / m : 0;
   const showLoad = showLoadFactor ?? true;
-  const maxChain = items.reduce((hi, list) => Math.max(hi, list.length), 1);
+  const rowsOf = (list: unknown[]) => (list.length > MAX_CHAIN ? MAX_CHAIN + 1 : list.length);
+  const maxChain = items.reduce((hi, list) => Math.max(hi, rowsOf(list)), 1);
   const firstSelectable = cells.findIndex((_, i) => selectable(String(i)));
 
   const centreOf = (i: number) => i * (slotWidth + SLOT_GAP) + slotWidth / 2;
@@ -352,7 +354,7 @@ export function MapView({
                 {entries.length === 0 && !isTomb && (
                   <span style={{ fontSize: "0.68rem", color: DEFAULTS.dimColor, textAlign: "center" }}>·</span>
                 )}
-                {entries.map((e, j) => {
+                {entries.slice(0, MAX_CHAIN).map((e, j) => {
                   const entryKey = String(e.key);
                   const isActiveKey = activeKey != null && String(activeKey) === entryKey;
                   return (
@@ -377,10 +379,15 @@ export function MapView({
                     </span>
                   );
                 })}
+                {entries.length > MAX_CHAIN && (
+                  <span style={{ fontSize: "0.62rem", color: DEFAULTS.dimColor, textAlign: "center" }}>
+                    +{entries.length - MAX_CHAIN} more
+                  </span>
+                )}
                 {/* Reserve the tallest chain's height so the row does not jump
                     as entries move between buckets. */}
-                {resolved === "chain" && entries.length < maxChain && (
-                  <span aria-hidden style={{ height: (maxChain - entries.length) * 15 }} />
+                {resolved === "chain" && rowsOf(entries) < maxChain && (
+                  <span aria-hidden style={{ height: (maxChain - rowsOf(entries)) * 15 }} />
                 )}
               </div>
               {showIndices && (

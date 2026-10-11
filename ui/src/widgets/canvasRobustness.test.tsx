@@ -285,7 +285,15 @@ describe("MapView on malformed input", () => {
 
   it("survives a long chain without spreading it into Math.max", () => {
     const chain = Array.from({ length: 200_000 }, (_, i) => ({ key: i }));
-    expect(() => render(<MapView mode="chain" slots={[chain]} showIndices={false} />)).not.toThrow();
+    const html = render(<MapView mode="chain" slots={[chain]} showIndices={false} />);
+    expect(html).toContain(`+${200_000 - 32} more`);
+    expect(html).toContain("α = 200000/1 = 200000.00");
+  });
+
+  it("keeps every slot level when only some are on the probe path", () => {
+    const html = render(<MapView mode="open" slots={[{ key: "a" }, { key: "b" }, { key: "c" }]} probePath={[1]} />);
+    expect(html.match(/visibility:hidden/g)?.length).toBe(2);
+    expect(html).toContain("1↓");
   });
 
   it("shows the hash badge in chain and open modes too", () => {
