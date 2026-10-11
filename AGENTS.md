@@ -12,7 +12,7 @@ KiwiFS is a single Go binary that turns a folder of markdown files into a search
 
 ```
 kiwifs/
-|-- cmd/              # Cobra CLI commands (serve, init, mcp, query, import, export, ...)
+|-- cmd/              # Cobra CLI commands (serve, init, mcp, query, import, export, widgets, ...)
 |-- internal/         # All backend packages (~40 subpackages)
 |   |-- api/          # REST API handlers (Echo framework)
 |   |-- bootstrap/    # Dependency wiring
@@ -21,7 +21,7 @@ kiwifs/
 |   |-- storage/      # Filesystem abstraction
 |   |-- vectorstore/  # Pluggable vector search backends
 |   |-- versioning/   # Git, copy-on-write, noop
-|   |-- mcpserver/    # MCP server (71 tools)
+|   |-- mcpserver/    # MCP server (73 tools)
 |   |-- dataview/     # DQL parser and query engine (Pratt parser)
 |   |-- workflow/     # Workflow state machine engine
 |   |-- claims/       # Task claim system (path-level leases)
@@ -97,7 +97,14 @@ All PRs must pass the `test` CI check (go vet, go test, UI build) before merge.
 ## Key Patterns
 
 - **REST handlers** are in `internal/api/handlers*.go`, registered in `internal/api/server.go`.
-- **MCP tools** are registered in `internal/mcpserver/mcpserver.go` (71 tools: 69 there + 2 in memory_tools.go).
+- **MCP tools** are registered in `internal/mcpserver/mcpserver.go` (73 tools: 70
+  there + 2 in memory_tools.go + 1 in widget_tools.go). `TestToolCountMatchesTheDocs`
+  fails when that number drifts from this file.
+- **Widget fences** (` ```array `, ` ```tree `, …) are declared once in
+  `ui/src/fences/specs/*.ts`. `make ui` regenerates
+  `internal/markdown/fenceschemas/fences.json` from them, which the Go linter
+  embeds and `kiwi_widget_reference` serves; CI fails if it drifts. Adding a
+  widget means adding a spec, not touching the renderer.
 - **DQL queries** go through the Pratt parser in `internal/dataview/parser.go` and evaluator in `internal/dataview/evaluator.go`.
 - **Workflows** are JSON state machines in `.kiwi/workflows/*.json`, managed by `internal/workflow/`.
 - **UI state** uses React context + localStorage. No global state library.
@@ -106,6 +113,9 @@ All PRs must pass the `test` CI check (go vet, go test, UI build) before merge.
 ## What NOT To Do
 
 - Don't bypass the write pipeline. All file mutations must go through `internal/pipeline/`.
+- Don't hand-edit `internal/markdown/fenceschemas/fences.json` or `docs/WIDGETS.md`;
+  both are generated. Edit the spec in `ui/src/fences/specs/` and run
+  `cd ui && npm run emit-schemas`.
 - Don't add CGo dependencies. The SQLite driver (`modernc.org/sqlite`) is pure Go by design.
 - Don't commit `.kiwi/state/` files — they're derivative and rebuildable via `kiwifs reindex`.
 - Don't use `internal/` packages from outside the module. Use `pkg/kiwi/` for embedding.

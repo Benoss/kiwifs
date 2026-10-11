@@ -1,6 +1,7 @@
 import { markdown2typst } from "markdown2typst";
 import { version as compilerVersion } from "@myriaddreamin/typst-ts-web-compiler/package.json";
 import { version as rendererVersion } from "@myriaddreamin/typst-ts-renderer/package.json";
+import { rewriteWidgetFences } from "./exportFences";
 
 // The wasm must match the installed JS bindings exactly; an unpinned URL
 // resolves to the latest release and breaks with mismatched bindgen symbols.
@@ -52,6 +53,9 @@ export function wikiLinksToText(markdown: string): string {
 
 export async function exportPdf(markdown: string): Promise<Uint8Array> {
   await ensureInit();
-  const typstSource = PREAMBLE + markdown2typst(wikiLinksToText(markdown));
+  // Widget fences become prose plus their YAML, matching what the server's
+  // export pre-pass does, so a PDF reads the same whichever side printed it.
+  const prepared = rewriteWidgetFences(wikiLinksToText(markdown));
+  const typstSource = PREAMBLE + markdown2typst(prepared);
   return $typst.pdf({ mainContent: typstSource });
 }

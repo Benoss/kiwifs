@@ -10,7 +10,8 @@ import {
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
-import { Check, ChevronDown, ChevronRight, Circle, Code, Info, Link as LinkIcon, ListTree, Loader2, PenLine, Save, TriangleAlert, User, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Circle, Code, Info, Link as LinkIcon, ListTree, Loader2, PenLine, Puzzle, Save, TriangleAlert, User, X, XCircle } from "lucide-react";
+import { allFences } from "@kw/fences";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import matter from "gray-matter";
@@ -33,6 +34,9 @@ import {
 } from "@kw/lib/editorMode";
 import { formatDistanceToNow } from "date-fns";
 import { MarkdownSourceEditor } from "./editor/MarkdownSourceEditor";
+import { FencePreview } from "./editor/FencePreview";
+import { splitFenceExample } from "./editor/markdownSlashCommands";
+import type { FencePreviewTarget } from "./editor/fenceAssist";
 import { blockNoteSlashItems, loadSlashCommandTemplate } from "@kw/lib/editorSlashCommands";
 import { useEditorSlashCommands } from "../hooks/useEditorSlashCommands";
 import {
@@ -400,6 +404,7 @@ function EditorInner({
 }) {
   const [editorMode, setEditorMode] = useState<EditorMode>(() => loadEditorModePreference());
   const [sourceText, setSourceText] = useState(initialMd);
+  const [fenceUnderCursor, setFenceUnderCursor] = useState<FencePreviewTarget | null>(null);
   const syncedMdRef = useRef(initialMd);
   const editorModeRef = useRef(editorMode);
   editorModeRef.current = editorMode;
@@ -843,17 +848,23 @@ function EditorInner({
 
           <div className="max-w-3xl min-h-[50vh]">
             {editorMode === "source" ? (
-              <MarkdownSourceEditor
-                value={sourceText}
-                onChange={handleSourceTextChange}
-                dark={isDark}
-                onSaveShortcut={() => onSaveRef.current({ close: true })}
-                pages={wikiPages}
-                minHeight="60vh"
-                customSlashCommands={customSlashCommands}
-                loadSlashTemplate={loadSlashTemplate}
-                onSlashTemplateError={onSlashTemplateError}
-              />
+              <div className="flex flex-col gap-2">
+                <MarkdownSourceEditor
+                  value={sourceText}
+                  onChange={handleSourceTextChange}
+                  dark={isDark}
+                  onSaveShortcut={() => onSaveRef.current({ close: true })}
+                  pages={wikiPages}
+                  minHeight="60vh"
+                  customSlashCommands={customSlashCommands}
+                  loadSlashTemplate={loadSlashTemplate}
+                  onSlashTemplateError={onSlashTemplateError}
+                  onFenceUnderCursor={setFenceUnderCursor}
+                />
+                {/* Only while the caret is in a widget fence, so the pane does
+                    not take height from ordinary prose editing. */}
+                <FencePreview target={fenceUnderCursor} />
+              </div>
             ) : visualParseError ? (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
                 <p className="font-medium">Could not open in Visual mode</p>
@@ -1141,6 +1152,17 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
     );
   };
 
+  /**
+   * One code block tagged with the fence's language: the same block a loaded
+   * page's fence parses into, so it saves back as ```` ```lang ```` rather
+   * than as escaped paragraphs.
+   */
+  const insertFenceBlock = (example: string, lang: string) => {
+    const cur = editor.getTextCursorPosition().block;
+    const { language, body } = splitFenceExample(example, lang);
+    editor.insertBlocks([{ type: "codeBlock", props: { language }, content: body }], cur, "after");
+  };
+
   return [
     {
       title: "Wiki link",
@@ -1182,6 +1204,18 @@ function kiwiSlashItems(editor: BlockNoteEditor) {
       icon: <ListTree size={18} />,
       onItemClick: () => insertParagraph("<!-- toc -->"),
     },
+    // One entry per widget fence, generated from the registry so the visual
+    // editor offers exactly what the linter accepts.
+    ...allFences()
+      .filter((spec) => !spec.legacy)
+      .map((spec) => ({
+        title: `${spec.lang} widget`,
+        subtext: spec.description,
+        aliases: ["widget", "fence", spec.lang, ...(spec.aliases ?? [])],
+        group: "Widgets",
+        icon: <Puzzle size={18} />,
+        onItemClick: () => insertFenceBlock(spec.example, spec.lang),
+      })),
   ];
 }
 

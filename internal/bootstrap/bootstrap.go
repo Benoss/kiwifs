@@ -47,28 +47,28 @@ func janitorInterval(cfg *config.Config) time.Duration {
 }
 
 type Stack struct {
-	Name                string
-	Root                string
-	Config              *config.Config
-	Store               storage.Storage
-	Versioner           versioning.Versioner
-	Searcher            search.Searcher
-	Linker              links.Linker
-	LinkResolver        *links.Resolver
-	Hub                 *events.Hub
-	Pipeline            *pipeline.Pipeline
-	Vectors             *vectorstore.Service
-	Comments            *comments.Store
-	Server              *api.Server
-	JanitorSched        *janitor.Scheduler
-	Emitter             tracing.Emitter
-	WebhookDispatcher   *webhooks.Dispatcher
-	ClaimStore          *claims.Store
-	DraftMgr            *draft.Manager
-	AuditLogger         *api.AuditLogger // B.3
-	claimCancel         context.CancelFunc
-	resyncCancel        context.CancelFunc
-	resyncDone          chan struct{}
+	Name              string
+	Root              string
+	Config            *config.Config
+	Store             storage.Storage
+	Versioner         versioning.Versioner
+	Searcher          search.Searcher
+	Linker            links.Linker
+	LinkResolver      *links.Resolver
+	Hub               *events.Hub
+	Pipeline          *pipeline.Pipeline
+	Vectors           *vectorstore.Service
+	Comments          *comments.Store
+	Server            *api.Server
+	JanitorSched      *janitor.Scheduler
+	Emitter           tracing.Emitter
+	WebhookDispatcher *webhooks.Dispatcher
+	ClaimStore        *claims.Store
+	DraftMgr          *draft.Manager
+	AuditLogger       *api.AuditLogger // B.3
+	claimCancel       context.CancelFunc
+	resyncCancel      context.CancelFunc
+	resyncDone        chan struct{}
 }
 
 func Build(name, root string, cfg *config.Config) (*Stack, error) {
@@ -272,6 +272,13 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 	// issues (runs after auto-format has cleaned cosmetic issues).
 	if cfg.Lint.IsRejectErrors() {
 		existingValidate := pipe.ValidateWrite
+		// Per space, not the process-wide default: each space has its own
+		// [ui] typed_fences, and a bare tag it renders as code must not
+		// block a write.
+		fenceOpts := markdown.FenceOptions{
+			DisableBare: !cfg.UI.TypedFencesEnabled(),
+			BareTags:    cfg.UI.FenceAllow,
+		}
 		pipe.ValidateWrite = func(ctx context.Context, path string, content []byte, kind pipeline.WriteKind) error {
 			// Run existing schema validation first.
 			if existingValidate != nil {
@@ -283,7 +290,7 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 			if !strings.HasSuffix(strings.ToLower(path), ".md") {
 				return nil
 			}
-			issues := markdown.LintMarkdown(content)
+			issues := markdown.LintMarkdownWithOptions(content, fenceOpts)
 			for _, issue := range issues {
 				if issue.Severity == "error" {
 					return fmt.Errorf("%s (line %d): %s", issue.Rule, issue.Line, issue.Message)

@@ -1,6 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { getHighlighter, hasLang } from "@kw/lib/shiki";
+import {
+  hasNotation,
+  notationClass,
+  parseNotation,
+  withSourceHighlights,
+  type NotatedCode,
+} from "@kw/lib/codeNotation";
 
 type Props = {
   code: string;
@@ -24,6 +31,24 @@ function applyLineHighlights(html: string, highlightLines: Set<number>): string 
       }).join("\n");
       return `${openCode}${wrapped}${closeCode}`;
     }
+  );
+}
+
+/**
+ * Apply the classes a `[!code …]` notation pass decided on. The markers are
+ * stripped from the source before highlighting, so the line numbers here are
+ * the ones a reader sees.
+ */
+function applyNotation(html: string, notated: NotatedCode): string {
+  return html.replace(
+    /(<code[^>]*>)([\s\S]*?)(<\/code>)/,
+    (_match, openCode, content, closeCode) => {
+      const wrapped = content
+        .split("\n")
+        .map((line: string, i: number) => `<span class="${notationClass(i + 1, notated)}">${line}</span>`)
+        .join("\n");
+      return `${openCode}${wrapped}${closeCode}`;
+    },
   );
 }
 
@@ -86,6 +111,10 @@ function CopyIcon({ code }: { code: string }) {
 
 export function ShikiCode({ code, lang, title, highlightLines }: Props) {
   const [html, setHtml] = useState<string | null>(null);
+  // `// [!code highlight]` and friends are stripped before highlighting, so
+  // the marker never shows up as a comment in the rendered block.
+  const notated = useMemo(() => (hasNotation(code) ? parseNotation(code) : null), [code]);
+  const source = notated?.code ?? code;
   const isDark =
     typeof document !== "undefined" &&
     document.documentElement.classList.contains("dark");
@@ -96,14 +125,19 @@ export function ShikiCode({ code, lang, title, highlightLines }: Props) {
     getHighlighter().then((hl) => {
       if (cancelled) return;
       try {
-        let rendered = hl.codeToHtml(code, {
+        let rendered = hl.codeToHtml(source, {
           lang,
           theme: isDark ? "github-dark" : "github-light",
         });
         if (lang === "diff") {
           rendered = applyDiffStyles(rendered);
         }
-        if (highlightLines && highlightLines.size > 0) {
+        if (notated) {
+          rendered = applyNotation(
+            rendered,
+            highlightLines ? withSourceHighlights(notated, highlightLines) : notated,
+          );
+        } else if (highlightLines && highlightLines.size > 0) {
           rendered = applyLineHighlights(rendered, highlightLines);
         }
         setHtml(rendered);
@@ -114,7 +148,7 @@ export function ShikiCode({ code, lang, title, highlightLines }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [code, lang, isDark, highlightLines]);
+  }, [source, notated, lang, isDark, highlightLines]);
 
   const langLabel = lang ? formatLangLabel(lang) : undefined;
 
@@ -125,7 +159,7 @@ export function ShikiCode({ code, lang, title, highlightLines }: Props) {
         {langLabel && !title && <span className="kiwi-code-lang">{langLabel}</span>}
         {title && langLabel && <span className="kiwi-code-lang ml-2">{langLabel}</span>}
       </div>
-      <CopyIcon code={code} />
+      <CopyIcon code={source} />
     </div>
   );
 
@@ -144,7 +178,7 @@ export function ShikiCode({ code, lang, title, highlightLines }: Props) {
     <div className="kiwi-shiki my-4 text-sm rounded-lg overflow-hidden">
       {headerEl}
       <pre className="p-4 overflow-x-auto">
-        <code>{code}</code>
+        <code>{source}</code>
       </pre>
     </div>
   );

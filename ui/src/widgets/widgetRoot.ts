@@ -26,6 +26,19 @@ export function ensureRootTracking() {
   document.addEventListener("focusin", track, true);
 }
 
+export const PART_SELECTOR = '[role="graphics-symbol"]';
+
+/**
+ * True when a selectable part of a canvas has focus, and so owns the arrow
+ * keys. Without this, focusing a cell and pressing → would step the animation
+ * out from under the reader instead of moving to the next cell.
+ */
+export function partHasFocus(root: Element, target: EventTarget | null): boolean {
+  const node = target as Element | null;
+  if (!node || typeof node.closest !== "function") return false;
+  return root.contains(node) && node.closest(PART_SELECTOR) !== null;
+}
+
 /**
  * True when a key event should drive the widget rooted at `root`: focus is
  * inside it, or nothing is focused and the reader last touched this widget.

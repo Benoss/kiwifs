@@ -1,0 +1,2348 @@
+{
+  "version": 1,
+  "reservedTopLevel": [
+    "steps",
+    "frames",
+    "code",
+    "lang",
+    "props",
+    "link",
+    "caption",
+    "title",
+    "id",
+    "clock",
+    "width",
+    "autoplay",
+    "loop",
+    "why"
+  ],
+  "reservedStep": [
+    "note",
+    "line",
+    "next",
+    "label",
+    "breakpoint",
+    "duration",
+    "why",
+    "expect"
+  ],
+  "fences": [
+    {
+      "lang": "array",
+      "aliases": [
+        "kiwi-array",
+        "widget:array",
+        "arraystack",
+        "kiwi-arraystack"
+      ],
+      "strictAliases": [
+        "kiwi-array",
+        "widget:array",
+        "kiwi-arraystack"
+      ],
+      "description": "One or more arrays on a shared index axis, with pointers, dependency arrows and span brackets.",
+      "required": [
+        "values",
+        "rows"
+      ],
+      "example": "```array id=two-sum caption=\"Two-pointer sweep on a sorted array\"\nvalues: [2, 7, 11, 15, 19]\npointers:\n  - {index: 0, label: lo}\n  - {index: 4, label: hi}\nsteps:\n  - note: \"2 + 19 = 21 > 9 — move hi left\"\n    activeIndices: [0, 4]\n    line: 3\n  - note: \"2 + 15 = 17 > 9 — move hi left\"\n    pointers: [{index: 0, label: lo}, {index: 3, label: hi}]\n    activeIndices: [0, 3]\n  - note: \"2 + 7 = 9 — found it\"\n    pointers: [{index: 0, label: lo}, {index: 1, label: hi}]\n    activeIndices: [0, 1]\n    breakpoint: true\ncode: |\n  lo, hi = 0, len(a) - 1\n  while lo < hi:\n      s = a[lo] + a[hi]\n      if s == target: return lo, hi\n      if s > target: hi -= 1\n      else: lo += 1\nlang: python\n```",
+      "attributes": {
+        "values": {
+          "type": "array|string",
+          "description": "Cell values. `null` is an unfilled slot; ±Infinity shows ∞; a string is split into characters."
+        },
+        "label": {
+          "type": "string",
+          "description": "Row title in the left gutter, e.g. `nums` or `dp`."
+        },
+        "sublabels": {
+          "type": "array",
+          "description": "Caption under each value — a choice arrow ↖ ↑ ←, a parent pointer."
+        },
+        "activeIndex": {
+          "type": "array|number|string",
+          "description": "The cell being written this step."
+        },
+        "activeIndices": {
+          "type": "array|number|string",
+          "description": "Cells being written this step."
+        },
+        "readIndices": {
+          "type": "array|number|string",
+          "description": "Cells the active cell reads from — `dp[i-1]`, `dp[c-w]`."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary highlight, e.g. the current window."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Done / greyed-out cells."
+        },
+        "cellColors": {
+          "type": "array",
+          "description": "Base color per cell, matching the same items in a tree or graph."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Named pointers above or below cells: `{index, label, color?, side?}`."
+        },
+        "arrows": {
+          "type": "array",
+          "items": "object",
+          "description": "Dependency arcs within the row: `{from, to, label?, dashed?, side?}`."
+        },
+        "ranges": {
+          "type": "array",
+          "items": "object",
+          "description": "Brackets over spans: `{start, end, label?, color?, side?}`."
+        },
+        "tooltips": {
+          "type": "array",
+          "description": "Hover text per cell."
+        },
+        "empty": {
+          "type": "array",
+          "items": "string",
+          "description": "Strings that render as unfilled slots, e.g. `[\".\"]`."
+        },
+        "indexLabels": {
+          "type": "array",
+          "description": "Index captions instead of 0..n-1 — characters, amounts, `∅`."
+        },
+        "offset": {
+          "type": "number",
+          "description": "Blank cells before the first value, to line this row up under another."
+        },
+        "showIndices": {
+          "type": "boolean|string",
+          "description": "Show the index row. With `rows:`: true, false, \"last\" (default) or \"all\"."
+        },
+        "rows": {
+          "type": "array",
+          "items": "object",
+          "description": "Several rows sharing one index axis. Each entry takes the single-row keys above."
+        },
+        "arrowsBetweenRows": {
+          "type": "array",
+          "items": "object",
+          "description": "With `rows:`: arrows between rows, `{from: [row, index], to: [row, index], label?}`."
+        },
+        "rowGap": {
+          "type": "number",
+          "description": "Vertical gap between rows in px. Default 2, or 36 when arrows are drawn.",
+          "steppable": false
+        },
+        "cellSize": {
+          "type": "number",
+          "description": "Cell size in px. Defaults to 48, shrinking for long arrays.",
+          "steppable": false
+        },
+        "indexBase": {
+          "type": "number",
+          "description": "First index number. Default 0.",
+          "steppable": false
+        },
+        "wrap": {
+          "type": "boolean",
+          "description": "Wrap long arrays onto more lines instead of scrolling.",
+          "steppable": false
+        },
+        "flash": {
+          "type": "boolean",
+          "description": "Pulse cells whose value changed since the previous step. Default true."
+        },
+        "labelWidth": {
+          "type": "number",
+          "description": "Width of the row-label gutter in px.",
+          "steppable": false
+        },
+        "readColor": {
+          "type": "string",
+          "description": "Color of cells read by the active cell.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "bars",
+      "aliases": [
+        "kiwi-bars",
+        "widget:bars",
+        "histogram",
+        "barchart"
+      ],
+      "strictAliases": [
+        "kiwi-bars",
+        "widget:bars"
+      ],
+      "description": "Columns in value space: histograms, trapping rain water, largest rectangle, sorting passes, latency distributions.",
+      "required": [
+        "values"
+      ],
+      "example": "```bars id=rain caption=\"Trapping rain water\"\nvalues: [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]\nsteps:\n  - note: \"Water sits wherever both sides are higher\"\n    overlays: [{startIndex: 2, toValue: 1, label: \"1\"}]\n    activeIndices: [1, 3]\n  - note: \"The big basin between 3 and 7 holds four units\"\n    overlays:\n      - {startIndex: 2, toValue: 1}\n      - {startIndex: 4, endIndex: 6, toValue: 2, label: \"4\"}\n    activeIndices: [3, 7]\n  - note: \"Total: 6\"\n    overlays:\n      - {startIndex: 2, toValue: 1}\n      - {startIndex: 4, endIndex: 6, toValue: 2}\n      - {startIndex: 9, toValue: 2, label: \"1\"}\n```",
+      "attributes": {
+        "values": {
+          "type": "array",
+          "required": true,
+          "items": "number",
+          "description": "Bar heights. Negatives draw below a zero baseline."
+        },
+        "labels": {
+          "type": "array",
+          "description": "Labels under each bar. Defaults to the index; `null` hides one."
+        },
+        "valueLabels": {
+          "type": "boolean|array",
+          "description": "Value labels on the bar tips: true (default), false, or custom text per bar."
+        },
+        "activeIndices": {
+          "type": "array|number|string",
+          "description": "Emphasised columns."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted columns."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Dimmed or eliminated columns."
+        },
+        "barColors": {
+          "type": "array",
+          "description": "Per-bar fill override."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Named pointers above columns: `{index, label, color?}`."
+        },
+        "overlays": {
+          "type": "array",
+          "items": "object",
+          "description": "Value-space rectangles: `{startIndex, endIndex?, fromValue?, toValue, label?}` — a water fill, a chosen rectangle."
+        },
+        "guides": {
+          "type": "array",
+          "items": "object",
+          "description": "Horizontal reference lines: `{value, label?, color?}` — a water level, an SLO."
+        },
+        "maxValue": {
+          "type": "number",
+          "description": "Top of the value axis."
+        },
+        "minValue": {
+          "type": "number",
+          "description": "Bottom of the value axis."
+        },
+        "chartHeight": {
+          "type": "number",
+          "description": "Plot height, px. Default 220.",
+          "steppable": false
+        },
+        "barWidth": {
+          "type": "number",
+          "description": "Bar width, px. Default 40.",
+          "steppable": false
+        },
+        "gap": {
+          "type": "number",
+          "description": "Gap between bars, px. Default 10.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "bits",
+      "aliases": [
+        "kiwi-bits",
+        "widget:bits",
+        "bitmask"
+      ],
+      "strictAliases": [
+        "kiwi-bits",
+        "widget:bits"
+      ],
+      "description": "A value as labelled bits: bitmask DP, flag registers, permission sets, two's complement, IEEE-754 layouts.",
+      "required": [
+        "value"
+      ],
+      "example": "```bits id=subsets caption=\"Bitmask DP: visiting city 2\"\nbits: 4\nlabels: [A, B, C, D]\nsteps:\n  - note: \"Start at A only\"\n    value: 1\n    activeBits: [0]\n  - note: \"Add C to the visited set\"\n    value: 5\n    activeBits: [2]\n    readBits: [0]\n  - note: \"All four visited — the subproblem is complete\"\n    value: 15\n    activeBits: [1, 3]\n```",
+      "attributes": {
+        "value": {
+          "type": "number|string",
+          "required": true,
+          "description": "The value to show. A number, or a `\"0x…\"` / `\"0b…\"` string for 64-bit patterns a JS number cannot hold exactly."
+        },
+        "bits": {
+          "type": "number",
+          "description": "How many bits to draw. Defaults to the value's bit length.",
+          "steppable": false
+        },
+        "labels": {
+          "type": "array",
+          "description": "What each bit stands for, indexed by bit position (bit 0 = least significant)."
+        },
+        "label": {
+          "type": "string",
+          "description": "Row title, e.g. `mask`."
+        },
+        "activeBits": {
+          "type": "array|number|string",
+          "description": "Bit positions being set or tested this step."
+        },
+        "readBits": {
+          "type": "array|number|string",
+          "description": "Bit positions read by this step."
+        },
+        "highlightBits": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted bit positions."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Pointers by bit position: `{bit, label, color?, side?}`."
+        },
+        "arrows": {
+          "type": "array",
+          "items": "object",
+          "description": "Arcs between bit positions: `{from, to, label?, dashed?}`."
+        },
+        "fields": {
+          "type": "array",
+          "items": "object",
+          "description": "Named bit ranges drawn as brackets under the row: `{from, to, label, color?}` — a float's sign, exponent and mantissa; a flags register; a packed struct. Each bracket shows the field's value."
+        },
+        "decode": {
+          "type": "string|array",
+          "matches": [
+            "uint",
+            "int",
+            "twos",
+            "ieee32",
+            "ieee64",
+            "hex",
+            "oct",
+            "raw"
+          ],
+          "description": "How to read the pattern in the summary row. A list shows several readings at once. Default uint."
+        },
+        "lsbFirst": {
+          "type": "boolean",
+          "description": "Draw bit 0 on the left. Default false (most significant first).",
+          "steppable": false
+        },
+        "showSummary": {
+          "type": "boolean",
+          "description": "Show the decimal value and popcount beside the bits. Default true.",
+          "steppable": false
+        },
+        "cellSize": {
+          "type": "number",
+          "description": "Cell size, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "graph",
+      "aliases": [
+        "kiwi-graph",
+        "widget:graph"
+      ],
+      "strictAliases": [
+        "kiwi-graph",
+        "widget:graph"
+      ],
+      "description": "Nodes and edges: algorithm graphs, service architecture, state machines, dependency DAGs. Edge keys are `\"from->to\"` or an explicit `id`.",
+      "required": [
+        "nodes"
+      ],
+      "example": "```graph id=bfs layout=layered caption=\"BFS from A\"\ndirected: true\nnodes:\n  - {id: A}\n  - {id: B}\n  - {id: C}\n  - {id: D}\nedges:\n  - {from: A, to: B}\n  - {from: A, to: C}\n  - {from: B, to: D}\n  - {from: C, to: D}\nbadges: {A: 0}\nsteps:\n  - note: \"Start at A, distance 0\"\n    activeNodes: [A]\n  - note: \"Visit A's neighbours at distance 1\"\n    activeNodes: [B, C]\n    dimNodes: [A]\n    activeEdges: [\"A->B\", \"A->C\"]\n    badges: {A: 0, B: 1, C: 1}\n  - note: \"D is reached at distance 2\"\n    activeNodes: [D]\n    dimNodes: [A, B, C]\n    activeEdges: [\"B->D\"]\n    badges: {A: 0, B: 1, C: 1, D: 2}\n```",
+      "attributes": {
+        "nodes": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{id, label?, sublabel?, shape?, x?, y?, color?, group?}`. Omit x/y to have the layout place the node."
+        },
+        "edges": {
+          "type": "array",
+          "items": "object",
+          "description": "`{from, to, weight?, label?, id?, style?, color?, animated?, bidirectional?}`."
+        },
+        "activeNodes": {
+          "type": "array|number|string",
+          "description": "Node ids active this step."
+        },
+        "highlightNodes": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted node ids."
+        },
+        "dimNodes": {
+          "type": "array|number|string",
+          "description": "Dimmed node ids."
+        },
+        "activeEdges": {
+          "type": "array|number|string",
+          "description": "Edge keys (`\"from->to\"` or `id`) active this step."
+        },
+        "highlightEdges": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted edge keys."
+        },
+        "dimEdges": {
+          "type": "array|number|string",
+          "description": "Dimmed edge keys."
+        },
+        "directed": {
+          "type": "boolean",
+          "description": "Draw arrowheads. Default false.",
+          "steppable": false
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Labels beside nodes: `{id, label, color?}`."
+        },
+        "layout": {
+          "type": "string",
+          "matches": [
+            "force",
+            "layered",
+            "circular",
+            "grid",
+            "dagre"
+          ],
+          "description": "Placement for nodes without x/y. \"dagre\" for architecture and flow diagrams, \"layered\" for DAGs and trees, \"circular\" for small dense graphs.",
+          "steppable": false
+        },
+        "flow": {
+          "type": "string",
+          "matches": [
+            "down",
+            "up"
+          ],
+          "description": "Layered layout: \"up\" draws edge targets on top (child → parent pointers).",
+          "steppable": false
+        },
+        "direction": {
+          "type": "string",
+          "matches": [
+            "TB",
+            "BT",
+            "LR",
+            "RL"
+          ],
+          "description": "Dagre rank direction. Default TB.",
+          "steppable": false
+        },
+        "nodeSpacing": {
+          "type": "number",
+          "description": "Dagre: gap between nodes in a rank, px. Default 36.",
+          "steppable": false
+        },
+        "rankSpacing": {
+          "type": "number",
+          "description": "Dagre: gap between ranks, px. Default 52.",
+          "steppable": false
+        },
+        "shape": {
+          "type": "string",
+          "description": "Default node outline: circle, box, person, cylinder, queue, pill, cloud, …",
+          "steppable": false
+        },
+        "groups": {
+          "type": "array",
+          "items": "object",
+          "description": "Labelled containers behind their members: `{id, label?, nodes?, parent?, color?}`."
+        },
+        "packets": {
+          "type": "array",
+          "items": "object",
+          "description": "Dots travelling along edges: `{edge, t?, label?, reverse?}`."
+        },
+        "packetDuration": {
+          "type": "number",
+          "description": "How long an untimed packet takes to cross its edge, ms. Default 900.",
+          "steppable": false
+        },
+        "nodeColors": {
+          "type": "object",
+          "description": "Base color per node id."
+        },
+        "edgeColors": {
+          "type": "object",
+          "description": "Base color per edge key — tree vs back edges in a DFS."
+        },
+        "badges": {
+          "type": "object",
+          "description": "Small value at each node's corner: distance, degree, rank."
+        },
+        "animate": {
+          "type": "boolean",
+          "description": "Glide nodes to new positions between steps. Default true.",
+          "steppable": false
+        },
+        "zoomable": {
+          "type": "boolean",
+          "description": "Wrap in a zoom / pan viewport.",
+          "steppable": false
+        },
+        "ring": {
+          "type": "boolean|object",
+          "description": "Draw a circular backdrop with tick marks: `true`, or `{ticks, labels}`. With `layout: circular` this is a hash ring — consistent hashing is a graph on a ring, not a widget of its own."
+        },
+        "tokens": {
+          "type": "array",
+          "items": "object",
+          "description": "Dots on the ring: `{at, label?, color?, degrees?}`. `at` is a fraction of the circumference from the top, clockwise, or a degree when `degrees: true`."
+        },
+        "editable": {
+          "type": "boolean",
+          "description": "Show a \"copy as YAML\" button that turns the laid-out graph into a fence body.",
+          "steppable": false
+        },
+        "nodeSize": {
+          "type": "number",
+          "description": "Node diameter in px. Default 36.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Canvas width in px.",
+          "steppable": false
+        },
+        "height": {
+          "type": "number",
+          "description": "Canvas height in px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "list",
+      "aliases": [
+        "kiwi-list",
+        "widget:list",
+        "linkedlist",
+        "linked-list",
+        "kiwi-linkedlist"
+      ],
+      "strictAliases": [
+        "kiwi-list",
+        "widget:list",
+        "kiwi-linkedlist"
+      ],
+      "description": "A linked list: reversal, cycle detection, LRU chains, random pointers. A numeric `next` is how you draw a cycle back into the middle.",
+      "required": [
+        "nodes"
+      ],
+      "example": "```list id=floyd caption=\"Floyd's cycle detection\"\nnodes:\n  - {value: 1}\n  - {value: 2}\n  - {value: 3}\n  - {value: 4}\n  - {value: 5, next: 2}\nsteps:\n  - note: \"slow and fast both start at the head\"\n    pointers: [{index: 0, label: slow}, {index: 0, label: fast}]\n  - note: \"slow moves one, fast moves two\"\n    pointers: [{index: 1, label: slow}, {index: 2, label: fast}]\n  - note: \"fast has entered the cycle\"\n    pointers: [{index: 2, label: slow}, {index: 4, label: fast}]\n  - note: \"They meet inside the cycle — there is one\"\n    pointers: [{index: 3, label: \"slow,fast\"}]\n    activeIndex: 3\n    breakpoint: true\n```",
+      "attributes": {
+        "nodes": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{value, next?}`. `next` omitted or `true` means the following node, `false` means null, a number means that index — a cycle."
+        },
+        "activeIndex": {
+          "type": "number",
+          "description": "Index of the active node."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted indices."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Dimmed indices."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Named pointers: `{index, label, color?}` — `slow`, `fast`, `prev`, `curr`."
+        },
+        "doubly": {
+          "type": "boolean",
+          "description": "Draw a backward arrow beside each forward one.",
+          "steppable": false
+        },
+        "edges": {
+          "type": "array",
+          "items": "object",
+          "description": "Arcs over the chain: `{from, to, label?, side?: \"above\"|\"below\"}` — random pointers, child links."
+        },
+        "showNull": {
+          "type": "boolean",
+          "description": "Draw a null terminator. Default true.",
+          "steppable": false
+        },
+        "nodeWidth": {
+          "type": "number",
+          "description": "Node width, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "map",
+      "aliases": [
+        "kiwi-map",
+        "widget:map",
+        "hashmap",
+        "hashtable",
+        "kiwi-hashmap"
+      ],
+      "strictAliases": [
+        "kiwi-map",
+        "widget:map",
+        "kiwi-hashmap"
+      ],
+      "description": "Hash slots, chains and probe paths: hash tables, caches, symbol tables, routing tables, or a plain unordered dictionary.",
+      "required": [
+        "slots",
+        "entries"
+      ],
+      "example": "```map id=probe caption=\"Linear probing into a full-ish table\"\nmode: open\ncapacity: 8\nhashOf: {apple: 3, mango: 3}\nslots:\n  - null\n  - null\n  - null\n  - {key: apple, value: 1}\n  - null\n  - null\n  - null\n  - null\nsteps:\n  - note: \"h(mango) = 3, but slot 3 is taken by apple\"\n    activeKey: mango\n    activeSlots: [3]\n    probePath: [3]\n  - note: \"Probe forward: slot 4 is free\"\n    activeKey: mango\n    activeSlots: [4]\n    probePath: [3, 4]\n  - note: \"Inserted. α = 2/8 — plenty of headroom\"\n    slots:\n      - null\n      - null\n      - null\n      - {key: apple, value: 1}\n      - {key: mango, value: 2}\n      - null\n      - null\n      - null\n```",
+      "attributes": {
+        "mode": {
+          "type": "string",
+          "matches": [
+            "chain",
+            "open",
+            "map"
+          ],
+          "description": "How to draw it: \"chain\" for buckets, \"open\" for open addressing with tombstones, \"map\" for an unordered dictionary. Inferred from `slots` / `entries`.",
+          "steppable": false
+        },
+        "capacity": {
+          "type": "number",
+          "description": "Slot count, 0–1024. Defaults to `slots.length`."
+        },
+        "slots": {
+          "type": "array",
+          "description": "One entry per slot: `null` empty, `\"DEL\"` a tombstone, `{key, value?}` or a bare key, or a list of those for a chain."
+        },
+        "entries": {
+          "type": "array|object",
+          "description": "`[{key, value?}]` for `mode: \"map\"` — a frequency map, a seen-set. A plain `{key: value}` object works too."
+        },
+        "hashOf": {
+          "type": "object",
+          "description": "Key → slot, shown as an `h(k)=i` badge beside the key in every mode."
+        },
+        "activeSlots": {
+          "type": "array|number|string",
+          "description": "Slots being written this step."
+        },
+        "highlightSlots": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted slots."
+        },
+        "dimSlots": {
+          "type": "array|number|string",
+          "description": "Dimmed slots."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Slot indices drawn as selected; keys in `mode: \"map\"`."
+        },
+        "activeKey": {
+          "type": "string|number",
+          "description": "The key being inserted or looked up this step."
+        },
+        "probePath": {
+          "type": "array",
+          "items": "number",
+          "description": "Slots visited in order, numbered above the row and joined by arrows."
+        },
+        "tombstones": {
+          "type": "array|number|string",
+          "description": "Slots holding a tombstone, if not already `\"DEL\"`."
+        },
+        "showLoadFactor": {
+          "type": "boolean",
+          "description": "Show α = n/m: entries per slot for chaining, occupied slots for open addressing. Default true.",
+          "steppable": false
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Index captions under the slots. Default true.",
+          "steppable": false
+        },
+        "slotWidth": {
+          "type": "number",
+          "description": "Slot width, px. Default 54.",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Slot index (key in `mode: \"map\"`) → explanation, revealed on select."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus, for cross-widget linking.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "matrix",
+      "aliases": [
+        "kiwi-matrix",
+        "widget:matrix",
+        "grid",
+        "kiwi-grid",
+        "dp"
+      ],
+      "strictAliases": [
+        "kiwi-matrix",
+        "widget:matrix",
+        "kiwi-grid"
+      ],
+      "description": "An index-addressed table: DP tables, grids, adjacency matrices, confusion matrices. Cells take `[r, c]` or `\"r,c\"`.",
+      "required": [
+        "values",
+        "layers"
+      ],
+      "example": "```matrix id=lcs caption=\"Longest common subsequence of ABC and AC\"\nrowHeaders: [\"\", A, B, C]\ncolHeaders: [\"\", A, C]\nvalues:\n  - [0, 0, 0]\n  - [0, 1, 1]\n  - [0, 1, 1]\n  - [0, 1, 2]\nsteps:\n  - note: \"Characters match: take the diagonal and add one\"\n    activeCells: [[1, 1]]\n    readCells: [[0, 0]]\n    line: 4\n  - note: \"No match: carry the better of above and left\"\n    activeCells: [[2, 2]]\n    readCells: [[1, 2], [2, 1]]\n    line: 6\n  - note: \"Match again — the answer is 2\"\n    activeCells: [[3, 2]]\n    readCells: [[2, 1]]\n    path: [[3, 2], [2, 1], [1, 1]]\ncode: |\n  for i in range(1, n + 1):\n      for j in range(1, m + 1):\n          if a[i-1] == b[j-1]:\n              dp[i][j] = dp[i-1][j-1] + 1\n          else:\n              dp[i][j] = max(dp[i-1][j], dp[i][j-1])\nlang: python\n```",
+      "attributes": {
+        "values": {
+          "type": "array",
+          "items": "array|string",
+          "description": "Rows of cell values. Rows may differ in length (ragged / triangular). `null` is unfilled, ±Infinity shows ∞, booleans show T/F."
+        },
+        "activeCell": {
+          "type": "array|string|object",
+          "description": "The cell being written this step."
+        },
+        "activeCells": {
+          "type": "array|string|object",
+          "description": "Cells being written this step."
+        },
+        "readCells": {
+          "type": "array|string|object",
+          "description": "Cells the active cell reads from — diagonal, above, left."
+        },
+        "highlightCells": {
+          "type": "array|string|object",
+          "description": "Secondary highlight."
+        },
+        "dimCells": {
+          "type": "array|string|object",
+          "description": "Dimmed cells."
+        },
+        "mask": {
+          "type": "string|array",
+          "description": "`\"lower\"` or `\"upper\"` to grey out the unused triangle, or an explicit cell list."
+        },
+        "cellColors": {
+          "type": "array",
+          "items": "array",
+          "description": "Base color per cell."
+        },
+        "heatmap": {
+          "type": "boolean|object",
+          "description": "Shade numeric cells by value. `true` uses the table's own min/max."
+        },
+        "sublabels": {
+          "type": "array",
+          "items": "array",
+          "description": "Small caption under each value — a choice arrow, a parent pointer."
+        },
+        "tooltips": {
+          "type": "array",
+          "items": "array",
+          "description": "Hover text per cell."
+        },
+        "empty": {
+          "type": "array",
+          "items": "string",
+          "description": "Strings that render as unfilled slots, e.g. `[\".\"]`."
+        },
+        "arrows": {
+          "type": "array",
+          "items": "object",
+          "description": "Dependency arrows between cells: `{from, to, label?, dashed?}`."
+        },
+        "path": {
+          "type": "array",
+          "description": "A traceback path drawn as a line over the cells."
+        },
+        "pathColor": {
+          "type": "string",
+          "description": "Color of the traceback path.",
+          "steppable": false
+        },
+        "rowPointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Row labels right of the table: `{row, label, color?}`."
+        },
+        "colPointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Column labels above the table: `{col, label, color?}`."
+        },
+        "colHeaders": {
+          "type": "array",
+          "description": "Captions per column — the characters of a string, item weights, bit place values."
+        },
+        "rowHeaders": {
+          "type": "array",
+          "description": "Captions per row."
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Show row and column indices. Default true.",
+          "steppable": false
+        },
+        "centerRows": {
+          "type": "boolean|string",
+          "description": "Ragged mode: `\"start\"` for a staircase, `\"center\"` for a pyramid.",
+          "steppable": false
+        },
+        "roundCells": {
+          "type": "boolean",
+          "description": "Circular cells instead of squares, for coin and token grids.",
+          "steppable": false
+        },
+        "layers": {
+          "type": "array",
+          "items": "object",
+          "description": "Slices of a 3-D table as tabs: `{label, values}`. The shown slice replaces `values`."
+        },
+        "layer": {
+          "type": "number",
+          "description": "Index of the slice to show. Readers can still click the tabs."
+        },
+        "flash": {
+          "type": "boolean",
+          "description": "Pulse cells whose value changed since the previous step. Default true."
+        },
+        "readColor": {
+          "type": "string",
+          "description": "Color of cells read by the active cell.",
+          "steppable": false
+        },
+        "cellSize": {
+          "type": "number",
+          "description": "Cell size in px. Defaults to 44, shrinking for wide tables.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "memory",
+      "aliases": [
+        "kiwi-memory",
+        "widget:memory",
+        "heap",
+        "stack-heap"
+      ],
+      "strictAliases": [
+        "kiwi-memory",
+        "widget:memory"
+      ],
+      "description": "Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in.",
+      "required": [
+        "frames",
+        "heap"
+      ],
+      "reclaims": [
+        "frames"
+      ],
+      "example": "```memory id=alias caption=\"Why mutating b changed a\"\nframes:\n  - name: \"<module>\"\n    vars: {a: [REF, 1], b: [REF, 1]}\nheap:\n  1: [LIST, 1, 2, 3]\nsteps:\n  - note: \"a = [1, 2, 3] allocates one list\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b = a copies the pointer, not the list — both names are the one object\"\n    frames:\n      - {name: \"<module>\", vars: {a: [REF, 1], b: [REF, 1]}}\n    activeIds: [1]\n  - note: \"b.append(4) mutates that object, so a sees it too\"\n    heap:\n      1: [LIST, 1, 2, 3, 4]\n    activeIds: [1]\n    breakpoint: true\n```",
+      "attributes": {
+        "frames": {
+          "type": "array",
+          "items": "object",
+          "description": "Call stack, outermost first: `{name, id?, vars: {k: value}, order?, returned?, active?}`. A value of `[REF, id]` points into the heap."
+        },
+        "heap": {
+          "type": "object",
+          "description": "Objects by id, tagged: `[\"LIST\", 1, 2]`, `[\"DICT\", [\"k\", 1]]`, `[\"INSTANCE\", \"Node\", [\"val\", 1]]`, `[\"TUPLE\", …]`, `[\"SET\", …]`. An untagged `{field: value}` draws as an object's fields."
+        },
+        "activeFrame": {
+          "type": "string|number",
+          "description": "Which frame is executing: a frame `id`, or a number for its index in `frames`. Defaults to the innermost."
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Heap ids to emphasise this step."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted heap ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed heap ids — garbage, or a frame about to return."
+        },
+        "inlinePrimitives": {
+          "type": "boolean",
+          "description": "Draw a frame variable's primitive inside its slot. Default true; `false` boxes each one on the heap with an arrow, Python Tutor's \"render all objects on the heap\".",
+          "steppable": false
+        },
+        "framesLabel": {
+          "type": "string",
+          "description": "Caption above the frames column. Default \"Frames\".",
+          "steppable": false
+        },
+        "heapLabel": {
+          "type": "string",
+          "description": "Caption above the heap column. Default \"Objects\".",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Heap id → explanation, revealed on select."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "numberline",
+      "aliases": [
+        "kiwi-numberline",
+        "widget:numberline",
+        "number-line",
+        "kiwi-number-line"
+      ],
+      "strictAliases": [
+        "kiwi-numberline",
+        "widget:numberline",
+        "kiwi-number-line"
+      ],
+      "description": "A single value axis: inequalities, interval arithmetic, binary-search-on-answer buckets, SLO thresholds. Closed endpoints are filled, open ones hollow.",
+      "required": [
+        "min",
+        "max",
+        "xRange"
+      ],
+      "requireOneOf": [
+        "max",
+        "xRange"
+      ],
+      "example": "```numberline id=bsearch caption=\"Binary search on the answer: narrowing [1, 32]\"\nmin: 0\nmax: 32\nstep: 4\nlabel: capacity\nsteps:\n  - note: \"The whole range is still feasible\"\n    intervals: [{from: 1, to: 32, label: \"candidates\"}]\n    pointers: [{at: 1, label: lo}, {at: 32, label: hi}, {at: 16, label: mid}]\n  - note: \"16 works — discard everything above it\"\n    intervals: [{from: 1, to: 16, label: \"candidates\", toOpen: false}]\n    pointers: [{at: 1, label: lo}, {at: 16, label: hi}, {at: 8, label: mid}]\n  - note: \"8 is too small — the answer is in (8, 16]\"\n    intervals: [{from: 8, to: 16, fromOpen: true, label: \"candidates\"}]\n    pointers: [{at: 9, label: lo}, {at: 16, label: hi}]\n```",
+      "attributes": {
+        "min": {
+          "type": "number",
+          "description": "Left end of the axis. Default 0.",
+          "steppable": false
+        },
+        "max": {
+          "type": "number",
+          "description": "Right end of the axis. A reversed or empty range is repaired rather than rejected.",
+          "steppable": false
+        },
+        "xRange": {
+          "type": "array",
+          "items": "number",
+          "description": "`[min, max]` or `[min, max, step]`, an alias for the three keys."
+        },
+        "step": {
+          "type": "number",
+          "description": "Tick spacing. Omit for automatic nice ticks; a step giving more than 200 ticks falls back to them.",
+          "steppable": false
+        },
+        "ticks": {
+          "type": "array",
+          "items": "number",
+          "description": "Explicit tick values, overriding `step`."
+        },
+        "includeNumbers": {
+          "type": "boolean",
+          "description": "Print the number under each tick. Default true.",
+          "steppable": false
+        },
+        "scale": {
+          "type": "string",
+          "matches": [
+            "linear",
+            "log"
+          ],
+          "description": "Axis scale. `\"log\"` needs a positive `min`, ticks at powers of ten, and drops values ≤ 0.",
+          "steppable": false
+        },
+        "points": {
+          "type": "array",
+          "items": "object",
+          "description": "`{x, label?, style?: \"closed\"|\"open\"|\"cross\", color?, id?}`."
+        },
+        "intervals": {
+          "type": "array",
+          "items": "object",
+          "description": "`{from, to, fromOpen?, toOpen?, label?, color?, row?, id?}`. Overlapping intervals stack."
+        },
+        "rays": {
+          "type": "array",
+          "items": "object",
+          "description": "`{at, dir: \"left\"|\"right\", open?, label?}` — an inequality with no far end."
+        },
+        "marks": {
+          "type": "array",
+          "items": "object",
+          "description": "Dashed reference lines: `{at, label?, color?}`."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Named pointers above the axis: `{at, label, color?}` — `lo`, `hi`, `mid`."
+        },
+        "sweep": {
+          "type": "number",
+          "description": "Position of a sweep cursor."
+        },
+        "sweepLabel": {
+          "type": "string",
+          "description": "Caption beside the sweep cursor."
+        },
+        "predicate": {
+          "type": "string",
+          "description": "Shade the axis wherever this formula in `x` is true, e.g. `\"x^2 < 9\"`. Sampled at 400 points."
+        },
+        "predicateLabel": {
+          "type": "string",
+          "description": "Caption over the shaded run."
+        },
+        "predicateColor": {
+          "type": "string",
+          "description": "Color of the shading.",
+          "steppable": false
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Ids drawn in the active color."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed ids."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Point or interval ids drawn as selected."
+        },
+        "why": {
+          "type": "any",
+          "description": "Point or interval id → explanation, revealed when the reader selects it."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
+        },
+        "label": {
+          "type": "string",
+          "description": "Axis caption.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Canvas width, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "plane",
+      "aliases": [
+        "kiwi-plane",
+        "widget:plane",
+        "geometry"
+      ],
+      "strictAliases": [
+        "kiwi-plane",
+        "widget:plane"
+      ],
+      "description": "A coordinate plane in data units: geometry, sweep lines, hulls, vectors, tile maps. Draws what it is given — the algorithm stays in the steps.",
+      "required": [
+        "points",
+        "segments",
+        "polygons",
+        "circles",
+        "vectors",
+        "regions"
+      ],
+      "example": "```plane id=hull caption=\"Andrew's monotone chain, lower hull\"\nxMin: 0\nxMax: 10\nyMin: 0\nyMax: 8\npoints:\n  - {id: a, x: 1, y: 1, label: a}\n  - {id: b, x: 3, y: 4, label: b}\n  - {id: c, x: 5, y: 2, label: c}\n  - {id: d, x: 8, y: 6, label: d}\n  - {id: e, x: 9, y: 2, label: e}\nsteps:\n  - note: \"Sort by x, start the lower hull with a and b\"\n    polygons: [{points: [a, b], open: true, id: hull}]\n    activeIds: [a, b]\n  - note: \"a→b→c turns clockwise, so b is not on the hull — pop it\"\n    polygons: [{points: [a, b, c], open: true, id: hull}]\n    activeIds: [b]\n  - note: \"Lower hull is a, c, e\"\n    polygons: [{points: [a, c, e], open: true, id: hull}]\n    highlightIds: [hull]\n    dimIds: [b, d]\n```",
+      "attributes": {
+        "xMin": {
+          "type": "number",
+          "description": "Left edge. Default 0.",
+          "steppable": false
+        },
+        "xMax": {
+          "type": "number",
+          "description": "Right edge. Default 10.",
+          "steppable": false
+        },
+        "yMin": {
+          "type": "number",
+          "description": "Bottom edge. Default 0.",
+          "steppable": false
+        },
+        "yMax": {
+          "type": "number",
+          "description": "Top edge. Default 10.",
+          "steppable": false
+        },
+        "xRange": {
+          "type": "array",
+          "items": "number",
+          "description": "`[min, max]`, an alias for xMin/xMax."
+        },
+        "yRange": {
+          "type": "array",
+          "items": "number",
+          "description": "`[min, max]`, an alias for yMin/yMax."
+        },
+        "grid": {
+          "type": "boolean",
+          "description": "Draw the unit grid. Default true.",
+          "steppable": false
+        },
+        "axes": {
+          "type": "boolean",
+          "description": "Draw the axes through the origin. Default true.",
+          "steppable": false
+        },
+        "aspect": {
+          "type": "string",
+          "matches": [
+            "equal",
+            "auto"
+          ],
+          "description": "\"equal\" (default) keeps circles round and right angles right.",
+          "steppable": false
+        },
+        "points": {
+          "type": "array",
+          "items": "object",
+          "description": "`{x, y, id?, label?, style?: \"dot\"|\"open\"|\"cross\"|\"square\", color?}`. `id` defaults to `pt0`, `pt1`, …"
+        },
+        "segments": {
+          "type": "array",
+          "items": "object",
+          "description": "`{from, to, label?, arrow?, dashed?, color?}`. Each end is a point id, a point index, or a literal `[x, y]`."
+        },
+        "polygons": {
+          "type": "array",
+          "items": "object",
+          "description": "`{points: [...], label?, open?, fill?}` — a triangle, a hull being built."
+        },
+        "circles": {
+          "type": "array",
+          "items": "object",
+          "description": "`{at, r, label?, dashed?}`."
+        },
+        "vectors": {
+          "type": "array",
+          "items": "object",
+          "description": "`{to, from?, label?}`. `from` defaults to the origin."
+        },
+        "labels": {
+          "type": "array",
+          "items": "object",
+          "description": "Free text at a position: `{at, text, dx?, dy?}`."
+        },
+        "regions": {
+          "type": "array",
+          "items": "object",
+          "description": "Shaded where a formula holds: `{when: \"x + y <= 6\", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope; sampled on a grid of at most 60×60."
+        },
+        "sweep": {
+          "type": "object",
+          "description": "`{axis: \"x\"|\"y\"|\"angle\", at, origin?, label?}`."
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Ids drawn in the active color."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed ids."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Point ids drawn as selected."
+        },
+        "why": {
+          "type": "any",
+          "description": "Point id → explanation, revealed when the reader selects it."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
+        },
+        "xLabel": {
+          "type": "string",
+          "description": "Caption under the x axis.",
+          "steppable": false
+        },
+        "yLabel": {
+          "type": "string",
+          "description": "Caption beside the y axis.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Canvas width, px.",
+          "steppable": false
+        },
+        "height": {
+          "type": "number",
+          "description": "Canvas height, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "plot",
+      "aliases": [
+        "kiwi-plot",
+        "widget:plot",
+        "chart-xy"
+      ],
+      "strictAliases": [
+        "kiwi-plot",
+        "widget:plot"
+      ],
+      "description": "An x–y plot: complexity curves, predicate curves for binary search on the answer, latency against load, convergence.",
+      "required": [
+        "series"
+      ],
+      "example": "```plot id=predicate caption=\"Binary search on the answer: the predicate flips once\"\nxLabel: capacity\nyLabel: days needed\nseries:\n  - label: days(capacity)\n    points: [{x: 10, y: 15}, {x: 15, y: 10}, {x: 20, y: 7}, {x: 25, y: 6}, {x: 30, y: 5}]\nguides:\n  - {y: 7, label: \"budget\"}\nsteps:\n  - note: \"Too slow: 15 days exceeds the 7-day budget\"\n    marks: [{x: 10, y: 15, label: \"lo\"}]\n  - note: \"Fast enough — search left for a smaller capacity\"\n    marks: [{x: 20, y: 7, label: \"mid\"}]\n  - note: \"The smallest capacity that fits the budget is 20\"\n    marks: [{x: 20, y: 7, label: \"answer\"}]\n    breakpoint: true\n```",
+      "attributes": {
+        "series": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{id?, label?, points: [{x, y}, …], kind?: \"line\"|\"area\"|\"scatter\", color?, baseline?}`, or `{expr: \"sin(x) + a\", samples?, domain?}` for a curve from a formula."
+        },
+        "regions": {
+          "type": "array",
+          "items": "object",
+          "description": "Shaded areas from a predicate: `{when: \"y < x^2\", label?, color?, opacity?, resolution?}`. `x` and `y` are in scope."
+        },
+        "bind": {
+          "type": "object",
+          "description": "Values for the free names in an `expr` or a `when`, e.g. `{a: 2}`. Steppable, so a walkthrough can sweep a parameter."
+        },
+        "shades": {
+          "type": "array",
+          "items": "object",
+          "description": "Shaded bands: `{from, to, series?, fromY?, toY?, color?, label?}`."
+        },
+        "guides": {
+          "type": "array",
+          "items": "object",
+          "description": "Reference lines: `{x?, y?, label?, color?}` — an SLO, a threshold, a crossover."
+        },
+        "marks": {
+          "type": "array",
+          "items": "object",
+          "description": "Single annotated points: `{x, y?, label?, color?}`."
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Series ids drawn in the active color."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted series ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed series ids."
+        },
+        "xMin": {
+          "type": "number",
+          "description": "Left edge of the x axis. Defaults to the data extent."
+        },
+        "xMax": {
+          "type": "number",
+          "description": "Right edge of the x axis."
+        },
+        "yMin": {
+          "type": "number",
+          "description": "Bottom of the y axis."
+        },
+        "yMax": {
+          "type": "number",
+          "description": "Top of the y axis."
+        },
+        "xTicks": {
+          "type": "array",
+          "items": "number",
+          "description": "Explicit x tick values."
+        },
+        "yTicks": {
+          "type": "array",
+          "items": "number",
+          "description": "Explicit y tick values."
+        },
+        "xLabel": {
+          "type": "string",
+          "description": "Caption under the x axis.",
+          "steppable": false
+        },
+        "yLabel": {
+          "type": "string",
+          "description": "Caption beside the y axis.",
+          "steppable": false
+        },
+        "showAxes": {
+          "type": "boolean",
+          "description": "Draw the axes and frame. Default true.",
+          "steppable": false
+        },
+        "showLegend": {
+          "type": "boolean",
+          "description": "Draw the legend. Default true.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Canvas width, px.",
+          "steppable": false
+        },
+        "height": {
+          "type": "number",
+          "description": "Canvas height, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "queue",
+      "aliases": [
+        "kiwi-queue",
+        "widget:queue",
+        "ringbuffer",
+        "ring-buffer"
+      ],
+      "strictAliases": [
+        "kiwi-queue",
+        "widget:queue"
+      ],
+      "description": "FIFO: BFS frontiers, work queues, sliding windows. `layout: ring` shows a circular buffer, where front and back crossing the end is the point.",
+      "required": [
+        "values"
+      ],
+      "example": "```queue id=ring layout=ring caption=\"A ring buffer wrapping past the end\"\ncapacity: 6\nvalues: [null, null, null, null, null, null]\nfront: 0\nback: 0\nsteps:\n  - note: \"Empty: front and back coincide\"\n    size: 0\n  - note: \"Enqueue three; back advances\"\n    values: [a, b, c, null, null, null]\n    back: 3\n    size: 3\n    activeIndices: [2]\n  - note: \"Dequeue two; front advances, the slots are not cleared\"\n    values: [a, b, c, null, null, null]\n    front: 2\n    back: 3\n    size: 1\n    dimIndices: [0, 1]\n  - note: \"Enqueue four more — back wraps past the end to slot 1\"\n    values: [g, h, c, d, e, f]\n    front: 2\n    back: 2\n    size: 6\n    activeIndices: [0, 1]\n```",
+      "attributes": {
+        "values": {
+          "type": "array",
+          "required": true,
+          "description": "Slot contents. In `ring` layout this is the whole buffer, with `null` for an empty slot."
+        },
+        "front": {
+          "type": "number",
+          "description": "Index of the head, wrapped into the buffer. Defaults to 0, where the front marker is drawn."
+        },
+        "back": {
+          "type": "number",
+          "description": "Index one past the tail — where the next enqueue lands."
+        },
+        "capacity": {
+          "type": "number",
+          "description": "Buffer size, at most 1024. Defaults to `values.length`.",
+          "steppable": false
+        },
+        "layout": {
+          "type": "string",
+          "matches": [
+            "horizontal",
+            "ring"
+          ],
+          "description": "Default horizontal.",
+          "steppable": false
+        },
+        "size": {
+          "type": "number",
+          "description": "How many slots hold data, counted from `front`. Tells a full ring from an empty one when front and back coincide; slots outside the window draw as stale."
+        },
+        "activeIndices": {
+          "type": "array|number|string",
+          "description": "Slots active this step."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted slots."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Dimmed slots."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Slot indices drawn as selected."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Extra markers beside slots: `{index, label, color?}`. In a ring the index wraps."
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Show slot indices. Default true.",
+          "steppable": false
+        },
+        "frontLabel": {
+          "type": "string",
+          "description": "Label on the head end. Default \"front\".",
+          "steppable": false
+        },
+        "backLabel": {
+          "type": "string",
+          "description": "Label on the tail end. Default \"back\".",
+          "steppable": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Caption above the queue.",
+          "steppable": false
+        },
+        "empty": {
+          "type": "string",
+          "description": "Text shown when every slot is empty.",
+          "steppable": false
+        },
+        "slotSize": {
+          "type": "number",
+          "description": "Slot size, px. Default 44.",
+          "steppable": false
+        },
+        "radius": {
+          "type": "number",
+          "description": "Ring radius, px. Defaults to whatever fits the slots, at least 86.",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Slot index → explanation, revealed on select."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "sequence",
+      "aliases": [
+        "kiwi-sequence",
+        "widget:sequence",
+        "seq"
+      ],
+      "strictAliases": [
+        "kiwi-sequence",
+        "widget:sequence"
+      ],
+      "description": "A message sequence between participants: API flows, consensus rounds, handshakes, retries. Steps reveal one message at a time.",
+      "required": [
+        "participants"
+      ],
+      "reclaims": [
+        "frames"
+      ],
+      "example": "```sequence id=cache caption=\"Read-through cache on a miss\"\nparticipants:\n  - {id: C, label: Client, shape: person}\n  - {id: A, label: API}\n  - {id: R, label: Redis, shape: cylinder}\n  - {id: D, label: Postgres, shape: cylinder}\nitems:\n  - {from: C, to: A, label: \"GET /page/42\"}\n  - {from: A, to: R, label: \"GET page:42\"}\n  - {from: R, to: A, label: \"(nil)\", kind: reply}\n  - {from: A, to: D, label: \"SELECT …\"}\n  - {from: D, to: A, label: row, kind: reply}\n  - {from: A, to: R, label: \"SETEX page:42 60\", kind: async}\n  - {from: A, to: C, label: \"200 OK\", kind: reply}\nframes:\n  - {kind: alt, label: \"[cache miss]\", from: 3, to: 5}\nsteps:\n  - note: \"The client asks for a page\"\n  - note: \"The API checks Redis first\"\n  - note: \"Miss — nothing cached\"\n  - note: \"Fall through to Postgres\"\n  - note: \"Row comes back\"\n  - note: \"Populate the cache, without blocking the response\"\n  - note: \"Respond. The next read is a hit.\"\n```",
+      "attributes": {
+        "participants": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{id, label?, shape?, color?}` in left-to-right order.",
+          "steppable": false
+        },
+        "items": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{from, to, label?, kind?: \"sync\"|\"async\"|\"reply\"}`, or `{note, over}`, or `{divider}`.",
+          "steppable": false
+        },
+        "step": {
+          "type": "number",
+          "description": "Items revealed so far; item `step - 1` is active. Defaults to one more per playback step."
+        },
+        "future": {
+          "type": "string",
+          "matches": [
+            "ghost",
+            "hide"
+          ],
+          "description": "How to draw items after the active one. Default ghost.",
+          "steppable": false
+        },
+        "frames": {
+          "type": "array",
+          "items": "object",
+          "description": "Grouping boxes: `{kind?, label?, from, to, color?}` — \"alt [cache miss]\", \"loop\"."
+        },
+        "numbered": {
+          "type": "boolean",
+          "description": "Prefix each message with its number.",
+          "steppable": false
+        },
+        "packet": {
+          "type": "boolean",
+          "description": "Move a dot along the active message. Default true.",
+          "steppable": false
+        },
+        "zoomable": {
+          "type": "boolean",
+          "description": "Wrap in a zoom / pan viewport.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Maximum display width, px.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "stack",
+      "aliases": [
+        "kiwi-stack",
+        "widget:stack"
+      ],
+      "strictAliases": [
+        "kiwi-stack",
+        "widget:stack"
+      ],
+      "description": "A LIFO stack: monotonic stacks, bracket matching, call stacks, undo histories.",
+      "required": [
+        "values"
+      ],
+      "example": "```stack id=monotonic title=stack caption=\"Next greater element\"\nvalues: []\nsteps:\n  - note: \"Push 2\"\n    values: [2]\n  - note: \"1 is smaller — push it too\"\n    values: [2, 1]\n  - note: \"5 pops everything smaller: 1 and 2 both get their answer\"\n    values: [2, 1]\n    activeIndex: 1\n  - note: \"Stack holds only 5\"\n    values: [5]\n```",
+      "attributes": {
+        "values": {
+          "type": "array|string",
+          "required": true,
+          "description": "Items from the bottom of the stack to the top."
+        },
+        "activeIndex": {
+          "type": "number",
+          "description": "Index of the active item. Defaults to the top."
+        },
+        "highlightIndices": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted indices."
+        },
+        "dimIndices": {
+          "type": "array|number|string",
+          "description": "Dimmed indices."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Markers beside items: `{index, label, color?}`."
+        },
+        "growth": {
+          "type": "string",
+          "matches": [
+            "top",
+            "bottom"
+          ],
+          "description": "Which end the top of the stack is drawn at. Default top.",
+          "steppable": false
+        },
+        "topLabel": {
+          "type": "string",
+          "description": "Caption on the open end. Default \"top\".",
+          "steppable": false
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Show the index of each item. Default true.",
+          "steppable": false
+        },
+        "maxHeight": {
+          "type": "number",
+          "description": "Scroll past this height, px. Default 300.",
+          "steppable": false
+        },
+        "itemWidth": {
+          "type": "number",
+          "description": "Item width, px.",
+          "steppable": false
+        },
+        "itemHeight": {
+          "type": "number",
+          "description": "Item height, px.",
+          "steppable": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Caption above the stack.",
+          "steppable": false
+        },
+        "empty": {
+          "type": "string",
+          "description": "Text shown when there are no items. Default \"(empty)\".",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "steps",
+      "aliases": [
+        "kiwi-steps",
+        "widget:steps",
+        "mermaid-steps"
+      ],
+      "strictAliases": [
+        "kiwi-steps",
+        "widget:steps"
+      ],
+      "description": "A mermaid diagram walked one step at a time: focus and dim nodes, reveal sequence messages, highlight code in lockstep. Each step stands alone rather than patching the one before.",
+      "required": [
+        "diagram"
+      ],
+      "independentSteps": true,
+      "requireSteps": true,
+      "example": "```kiwi-steps id=write-path caption=\"A write through the pipeline\"\ndiagram: |\n  flowchart LR\n    A[Client] --> B[Storage]\n    B --> C[Git commit]\n    C --> D[Index update]\n    D --> E[SSE broadcast]\nsteps:\n  - note: \"The client PUTs a page\"\n    focus: [A]\n    dim: [C, D, E]\n  - note: \"Bytes land on disk — files are the source of truth\"\n    focus: [B]\n    dim: [D, E]\n  - note: \"The commit makes the version addressable\"\n    focus: [C]\n    dim: [E]\n  - note: \"Indexes are derivative, so they come last\"\n    focus: [D, E]\n```",
+      "attributes": {
+        "diagram": {
+          "type": "string",
+          "required": true,
+          "description": "Mermaid source. Unchanged across steps.",
+          "steppable": false
+        },
+        "kind": {
+          "type": "string",
+          "matches": [
+            "flowchart",
+            "sequence"
+          ],
+          "description": "Detected from the diagram's first line; set it only to override.",
+          "steppable": false
+        },
+        "focus": {
+          "type": "array|string",
+          "items": "string",
+          "description": "Node ids to emphasise this step: a list, or `A, B`."
+        },
+        "dim": {
+          "type": "array|string",
+          "items": "string",
+          "description": "Node ids to fade this step: a list, or `A, B`."
+        },
+        "messages": {
+          "type": "number",
+          "description": "Sequence diagrams: show the first N messages. Defaults to the step's position."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Caption under the diagram.",
+          "steppable": false
+        }
+      }
+    },
+    {
+      "lang": "table",
+      "aliases": [
+        "kiwi-table",
+        "widget:table",
+        "relation"
+      ],
+      "strictAliases": [
+        "kiwi-table",
+        "widget:table"
+      ],
+      "description": "A named-column table: relations, schemas, lock tables, Bayes 2×2, MVCC row versions. Cells are addressed `\"rowKey.colKey\"`.",
+      "required": [
+        "columns",
+        "rows",
+        "fromData"
+      ],
+      "requireOneOf": [
+        "rows",
+        "fromData"
+      ],
+      "example": "```table id=orders caption=\"A write skew: both transactions read, then both write\"\ncolumns:\n  - {key: id, label: id, pk: true, type: int}\n  - {key: user, label: user_id, fk: {table: users, column: id}}\n  - {key: total, label: total, align: right, type: numeric}\nrows:\n  - {id: 1, user: 7, total: 42.00}\n  - {id: 2, user: 7, total: 19.50}\n  - {id: 3, user: 9, total: 8.25}\nsteps:\n  - note: \"T1 scans user 7's orders\"\n    highlightCols: [user]\n    highlightRows: [\"1\", \"2\"]\n  - note: \"T2 inserts another order for the same user\"\n    insertedRows: [\"4\"]\n    rows:\n      - {id: 1, user: 7, total: 42.00}\n      - {id: 2, user: 7, total: 19.50}\n      - {id: 3, user: 9, total: 8.25}\n      - {id: 4, user: 7, total: 30.00}\n  - note: \"T1's invariant no longer holds — this is why it needs SERIALIZABLE\"\n    activeCells: [\"4.total\"]\n```",
+      "attributes": {
+        "columns": {
+          "type": "array",
+          "items": "object|string",
+          "description": "`{key, label?, pk?, fk?: {table, column} | \"table.column\", align?, width?, type?}`, or a bare key string. Omit to infer one column per key seen in the rows, in first-seen order.",
+          "steppable": false
+        },
+        "rows": {
+          "type": "array",
+          "items": "object",
+          "description": "One object per row, keyed by column `key`."
+        },
+        "fromData": {
+          "type": "string",
+          "description": "Render the records of a `kiwi-data` block on the same page, by its kind. The dataset and the walkthrough that animates it then share one source.",
+          "steppable": false
+        },
+        "rowKey": {
+          "type": "string",
+          "description": "Column whose value identifies a row. Defaults to the `pk` column.",
+          "steppable": false
+        },
+        "activeCells": {
+          "type": "array|number|string",
+          "description": "Cells written this step, as `\"rowKey.colKey\"` or `[rowKey, colKey]`."
+        },
+        "highlightCells": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted cells."
+        },
+        "dimCells": {
+          "type": "array|number|string",
+          "description": "Dimmed cells."
+        },
+        "selected": {
+          "type": "array|number|string",
+          "description": "Cells drawn as selected."
+        },
+        "activeRows": {
+          "type": "array|number|string",
+          "description": "Row keys active this step."
+        },
+        "highlightRows": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted row keys."
+        },
+        "dimRows": {
+          "type": "array|number|string",
+          "description": "Dimmed row keys."
+        },
+        "highlightCols": {
+          "type": "array|number|string",
+          "description": "Highlighted column keys — the join key, the column being scanned."
+        },
+        "insertedRows": {
+          "type": "array|number|string",
+          "description": "Rows added this step, drawn green with a `+` gutter."
+        },
+        "deletedRows": {
+          "type": "array|number|string",
+          "description": "Rows removed this step, struck through."
+        },
+        "arrows": {
+          "type": "array",
+          "items": "object",
+          "description": "Cell-to-cell references: `{from: \"r.c\", to: \"r.c\", label?, color?}`. Drawn as a ↳ glyph in the source cell, with the target in its tooltip — not a line."
+        },
+        "sort": {
+          "type": "object|string",
+          "description": "Sort indicator only: `{key, dir}` or a column key. Rows render in the order given."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Caption under the table.",
+          "steppable": false
+        },
+        "maxRows": {
+          "type": "number",
+          "description": "Render at most this many rows, then a \"…n more\" line. Ignored unless a non-negative number.",
+          "steppable": false
+        },
+        "maxHeight": {
+          "type": "number",
+          "description": "Scroll past this height, px. Default 420.",
+          "steppable": false
+        },
+        "why": {
+          "type": "any",
+          "description": "Cell key → explanation, revealed when the reader selects it."
+        },
+        "widgetId": {
+          "type": "string",
+          "description": "Name for the inspect bus, for cross-widget linking.",
+          "steppable": false
+        },
+        "showIndices": {
+          "type": "boolean",
+          "description": "Unused; accepted so `table` and `matrix` bodies are interchangeable.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "timeline",
+      "aliases": [
+        "kiwi-timeline",
+        "widget:timeline",
+        "gantt",
+        "schedule"
+      ],
+      "strictAliases": [
+        "kiwi-timeline",
+        "widget:timeline"
+      ],
+      "description": "Spans on a shared axis with named lanes and causal arrows: scheduling, lock handoffs, happens-before, isolation anomalies, log spans.",
+      "required": [
+        "intervals"
+      ],
+      "example": "```timeline id=lock caption=\"T2 blocks on the row lock T1 holds\"\nlanes: [T1, T2]\nhoverPredecessors: true\nintervals:\n  - {id: t1run, lane: T1, start: 0, end: 4, label: \"UPDATE\", state: holding}\n  - {id: t1commit, lane: T1, start: 4, end: 5, label: COMMIT, state: running}\n  - {id: t2wait, lane: T2, start: 2, end: 5, label: \"waiting for lock\", state: blocked}\n  - {id: t2run, lane: T2, start: 5, end: 8, label: \"UPDATE\", state: holding}\nlinks:\n  - {from: t1commit, to: t2run, label: \"lock released\"}\nsteps:\n  - note: \"T1 takes the row lock\"\n    activeIds: [t1run]\n  - note: \"T2's UPDATE blocks — hatched, because it is doing no work\"\n    activeIds: [t2wait]\n  - note: \"T1 commits and T2 is woken\"\n    activeIds: [t1commit, t2run]\n```",
+      "attributes": {
+        "intervals": {
+          "type": "array",
+          "required": true,
+          "items": "object",
+          "description": "`{start, end, id?, label?, lane?, state?, color?}`. `start === end` draws a point event. `state` of \"blocked\" or \"waiting\" draws hatched."
+        },
+        "lanes": {
+          "type": "array",
+          "items": "string",
+          "description": "Named lanes in draw order, labelled in the gutter — `thread A` above `thread B`."
+        },
+        "links": {
+          "type": "array",
+          "items": "object",
+          "description": "Causal arrows between spans: `{from, to, label?, dashed?}` — happens-before, woken by, lock handoff."
+        },
+        "hoverPredecessors": {
+          "type": "boolean",
+          "description": "Hovering a span lights the happens-before cone behind it.",
+          "steppable": false
+        },
+        "showLegend": {
+          "type": "boolean",
+          "description": "Draw a legend for the `state` values in use.",
+          "steppable": false
+        },
+        "sweep": {
+          "type": "number",
+          "description": "Position of the sweep cursor."
+        },
+        "sweepLabel": {
+          "type": "string",
+          "description": "Caption beside the sweep cursor — usually the running counter."
+        },
+        "marks": {
+          "type": "array",
+          "items": "object",
+          "description": "Extra vertical marks: query points, event coordinates. `{at, label?, color?}`."
+        },
+        "activeIds": {
+          "type": "array|number|string",
+          "description": "Span ids active this step."
+        },
+        "highlightIds": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted span ids."
+        },
+        "dimIds": {
+          "type": "array|number|string",
+          "description": "Dimmed span ids."
+        },
+        "min": {
+          "type": "number",
+          "description": "Left end of the axis. Defaults to the data extent."
+        },
+        "max": {
+          "type": "number",
+          "description": "Right end of the axis."
+        },
+        "ticks": {
+          "type": "array",
+          "items": "number",
+          "description": "Values to label on the axis."
+        },
+        "showAxis": {
+          "type": "boolean",
+          "description": "Draw the axis. Default true.",
+          "steppable": false
+        },
+        "width": {
+          "type": "number",
+          "description": "Canvas width, px.",
+          "steppable": false
+        },
+        "laneHeight": {
+          "type": "number",
+          "description": "Row height, px. Default 26.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    },
+    {
+      "lang": "tree",
+      "aliases": [
+        "kiwi-tree",
+        "widget:tree"
+      ],
+      "strictAliases": [
+        "kiwi-tree",
+        "widget:tree"
+      ],
+      "description": "Binary, n-ary and keyed trees: BSTs, tries, recursion trees, heaps (`fromArray`), union-find forests (`parents`), B-tree pages (`keys`).",
+      "required": [
+        "root",
+        "roots",
+        "parents",
+        "fromArray"
+      ],
+      "example": "```tree id=heap caption=\"Sift-down after popping the root\"\nfromArray: [1, 3, 2, 7, 5, 9]\nsteps:\n  - note: \"Pop the root; move the last element up\"\n    activeNodes: [0]\n  - note: \"9 is bigger than both children — swap with the smaller, 2\"\n    activeNodes: [0, 2]\n    highlightNodes: [1]\n  - note: \"Heap property restored\"\n    dimNodes: [0, 1, 2]\n```",
+      "attributes": {
+        "root": {
+          "type": "object",
+          "description": "Nested node: `{value, id?, badge?, edgeLabel?, keys?, leaf?, left?, right?, children?}`."
+        },
+        "roots": {
+          "type": "array",
+          "items": "object",
+          "description": "Several trees side by side — a disjoint-set forest, a trie split per letter."
+        },
+        "parents": {
+          "type": "array|object",
+          "description": "Parent pointers instead of nesting: `parents[i]` is the parent of `i`. Self, `null` or `-1` marks a root. Node keys are the indices or object keys."
+        },
+        "fromArray": {
+          "type": "array",
+          "description": "Build a complete heap from an array: ids are indices, children of `i` are `2i+1`/`2i+2`. Pair with an `array` fence and `link:` for the two-representation view."
+        },
+        "arity": {
+          "type": "number",
+          "description": "`fromArray` children per node. 2 (default) for a binary heap.",
+          "steppable": false
+        },
+        "withArray": {
+          "type": "boolean",
+          "description": "With `fromArray`: also draw the backing array beside the tree, highlights kept in step. Default true.",
+          "steppable": false
+        },
+        "badges": {
+          "type": "object",
+          "description": "Badge per node key — subtree size, the range a segment-tree node covers."
+        },
+        "nodeColors": {
+          "type": "object",
+          "description": "Base color per node key, e.g. one per connected component."
+        },
+        "activeNodes": {
+          "type": "array|number|string",
+          "description": "Node keys active this step."
+        },
+        "highlightNodes": {
+          "type": "array|number|string",
+          "description": "Secondary-highlighted node keys."
+        },
+        "dimNodes": {
+          "type": "array|number|string",
+          "description": "Dimmed (already processed) node keys."
+        },
+        "prunedNodes": {
+          "type": "array|number|string",
+          "description": "Node keys the search abandoned — drawn dashed and struck through."
+        },
+        "highlightEdges": {
+          "type": "array|number|string",
+          "description": "Child keys, or `\"parent->child\"`, whose edge lights up."
+        },
+        "activeKeys": {
+          "type": "object",
+          "description": "Which key cells light inside a keyed page: `{nodeId: [keyIndex, …]}`."
+        },
+        "ghostEdges": {
+          "type": "array",
+          "items": "object",
+          "description": "Edges that no longer exist, drawn dashed: `{from, to, label?}` — the old link after a rotation."
+        },
+        "edgeDirection": {
+          "type": "string",
+          "matches": [
+            "none",
+            "down",
+            "up"
+          ],
+          "description": "Arrowheads on edges. \"up\" for parent pointers and union-find.",
+          "steppable": false
+        },
+        "nextLinks": {
+          "type": "array",
+          "items": "object",
+          "description": "Same-level arrows: `{from, to}` — next-right pointers, the B+-tree leaf chain."
+        },
+        "pointers": {
+          "type": "array",
+          "items": "object",
+          "description": "Labels next to nodes: `{value?|id?, label, color?}`."
+        },
+        "showEdgeLabels": {
+          "type": "boolean",
+          "description": "Show each node's `edgeLabel`. Default true.",
+          "steppable": false
+        },
+        "showNulls": {
+          "type": "boolean",
+          "description": "Dashed empty slot on the missing side of a one-child binary node. Default true.",
+          "steppable": false
+        },
+        "animate": {
+          "type": "boolean",
+          "description": "Glide nodes to new positions when the tree changes. Default true.",
+          "steppable": false
+        },
+        "hGap": {
+          "type": "number",
+          "description": "Horizontal gap between sibling subtrees, px.",
+          "steppable": false
+        },
+        "vGap": {
+          "type": "number",
+          "description": "Vertical gap between levels, px.",
+          "steppable": false
+        },
+        "nodeSize": {
+          "type": "number",
+          "description": "Node diameter, px.",
+          "steppable": false
+        },
+        "keyCell": {
+          "type": "number",
+          "description": "Width of one key cell in a keyed page, px. Default 30.",
+          "steppable": false
+        },
+        "activeColor": {
+          "type": "string",
+          "description": "Primary highlight color.",
+          "steppable": false
+        },
+        "highlightColor": {
+          "type": "string",
+          "description": "Secondary highlight color.",
+          "steppable": false
+        },
+        "ariaLabel": {
+          "type": "string",
+          "description": "Accessible name. Defaults to a summary derived from the data.",
+          "steppable": false
+        },
+        "props": {
+          "type": "any",
+          "description": "Escape hatch for a widget prop whose name collides with a reserved key."
+        }
+      }
+    }
+  ]
+}

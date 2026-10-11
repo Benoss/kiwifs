@@ -12,6 +12,9 @@ import {
   type CellValue,
   type OverlayShape,
 } from "./cellOverlay";
+import { canvasAria, summarizeMatrix } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { cellEditHandlers } from "./ArrayView";
 
 export interface MatrixArrow {
   /** Cell read from, as `[r, c]` or `"r,c"`. */
@@ -88,6 +91,27 @@ export interface MatrixViewProps {
   readColor?: string;
   /** Cell size in px. Defaults to 44, shrinking for wide tables. */
   cellSize?: number;
+  /** Accessible name. Defaults to a summary of the table's shape and highlights. */
+  ariaLabel?: string;
+  /** Reported when the reader clicks or Enters a cell. */
+  onSelect?: (ref: InspectRef) => void;
+  /** `"r,c"` → explanation. Selecting such a cell reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the cells the hovered one reads from (`arrows[].from`). */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this table. */
+  widgetId?: string;
+  /**
+   * Let the reader type a new value into a cell. Filling in a DP table by
+   * hand, with the dependencies lit, is the difference between reading the
+   * recurrence and knowing it.
+   */
+  editable?: boolean;
+  /**
+   * Called with `(r, c, value)` when an edit commits with a changed value — on
+   * Enter or blur, not after Escape. Note ArrayView's order is `(index, value, row)`.
+   */
+  onCellEdit?: (r: number, c: number, value: string) => void;
 }
 
 const DEFAULTS = {
@@ -150,6 +174,13 @@ export function MatrixView({
   highlightColor = DEFAULTS.highlightColor,
   readColor,
   cellSize,
+  ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "matrix",
+  editable = false,
+  onCellEdit,
 }: MatrixViewProps) {
   const [layerSel, setLayerSel] = useState(layer ?? 0);
   useEffect(() => {
@@ -167,6 +198,7 @@ export function MatrixView({
   const entries: [string, string][] = [];
   values.forEach((row, r) => row.forEach((v, c) => entries.push([`${r},${c}`, formatCell(v, empty).text])));
   const { flash: flashSet, versions } = useChangedCells(entries, flash);
+  const bus = useInspect();
 
   if (values.length === 0) {
     return (
@@ -259,8 +291,34 @@ export function MatrixView({
     onLayerChange?.(i);
   };
 
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = bus.linkedKeys(widgetId);
+  const selectable = (cell: string) =>
+    onSelect !== undefined || whyFor(mergedWhy, { widget: widgetId, kind: "cell", key: cell }) !== undefined;
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    for (const a of arrows ?? []) {
+      if (cellKey(a.to) === bus.hovered.key) predecessors.add(cellKey(a.from));
+    }
+  }
+
+  const firstSelectable = (() => {
+    for (let r = 0; r < values.length; r++) {
+      for (let c = 0; c < values[r]!.length; c++) {
+        const k = `${r},${c}`;
+        if (selectable(k)) return k;
+      }
+    }
+    return undefined;
+  })();
+
+  const aria = canvasAria(
+    ariaLabel ?? summarizeMatrix({ values, activeCells: active, highlightCells: highlight, path }),
+    Boolean(layers?.length) || onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+  );
+
   return (
-    <div style={{ overflowX: "auto", padding: "0.5rem 0" }}>
+    <div {...aria} style={{ overflowX: "auto", padding: "0.5rem 0" }}>
       <div style={{ width: "max-content", margin: "0 auto", display: "flex", flexDirection: "column", gap: 0 }}>
         {layers && layers.length > 0 && (
           <div role="tablist" style={{ display: "flex", gap: 4, flexWrap: "wrap", marginLeft: leftGutter, marginBottom: 8 }}>
@@ -446,14 +504,24 @@ export function MatrixView({
                       data-cell={key}
                       title={tooltips?.[r]?.[c] ?? undefined}
                       className={flashSet.has(key) ? "kw-cell-flash" : undefined}
+                      {...(selectable(key)
+                        ? partHandlers(widgetId, "cell", key, bus, {
+                            onSelect,
+                            why: mergedWhy,
+                            tabbable: key === firstSelectable,
+                          })
+                        : {})}
                       style={{
                         width: size,
                         minHeight: size,
-                        border: `1.5px ${borderStyle} ${border}`,
+                        border: `1.5px ${borderStyle} ${
+                          predecessors.has(key) || linked.has(key) ? highlightColor : border
+                        }`,
                         borderRadius: roundCells ? "50%" : 0,
                         background: bg,
+                        opacity: predecessors.has(key) || linked.has(key) ? 1 : opacity,
+                        cursor: selectable(key) ? "pointer" : undefined,
                         color,
-                        opacity,
                         display: "flex",
                         flexDirection: "column",
                         alignItems: "center",
@@ -469,7 +537,21 @@ export function MatrixView({
                         zIndex: isActive || isRead || onPath ? 1 : undefined,
                       }}
                     >
-                      {!isMask && <WidgetText text={cell.text} />}
+                      {!isMask &&
+                        (editable && onCellEdit ? (
+                          <span
+                            contentEditable
+                            suppressContentEditableWarning
+                            role="textbox"
+                            aria-label={`Cell ${r}, ${c}`}
+                            {...cellEditHandlers(cell.text, (value) => onCellEdit(r, c, value))}
+                            style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
+                          >
+                            {cell.text}
+                          </span>
+                        ) : (
+                          <WidgetText text={cell.text} />
+                        ))}
                       {!isMask && hasSub && (
                         <span style={{ fontSize: "0.55rem", fontWeight: 500, opacity: 0.65, lineHeight: 1 }}>
                           <WidgetText text={sub} />

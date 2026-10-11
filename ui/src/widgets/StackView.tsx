@@ -2,6 +2,8 @@ import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { hasMath } from "./widgetLabel";
 import { WidgetText } from "./WidgetText";
+import { canvasAria, summarizeStack } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 export interface StackPointer {
   index: number;
@@ -32,6 +34,14 @@ export interface StackViewProps {
   empty?: string;
   activeColor?: string;
   highlightColor?: string;
+  /** Accessible name. Defaults to a summary of the items, bottom to top. */
+  ariaLabel?: string;
+  /** Reported when the reader clicks or Enters an item. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Index → explanation. Selecting such an item reveals it. */
+  why?: Record<string, string>;
+  /** Name for the inspect bus, so a `link:` can address this stack. */
+  widgetId?: string;
 }
 
 const DEFAULTS = {
@@ -67,10 +77,21 @@ export function StackView({
   empty = "(empty)",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
+  ariaLabel,
+  onSelect,
+  why,
+  widgetId = "stack",
 }: StackViewProps) {
   const highlightIndices = toSet(highlightIndicesIn);
   const dimIndices = toSet(dimIndicesIn);
   const active = activeIndex ?? values.length - 1;
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = bus.linkedKeys(widgetId);
+  const selectable = (i: number) =>
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "slot", key: String(i) }) !== undefined;
+  const firstSelectable = values.findIndex((_, i) => selectable(i));
 
   const ptrMap = new Map<number, StackPointer[]>();
   for (const p of pointers) {
@@ -102,7 +123,13 @@ export function StackView({
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
+    <div
+      {...canvasAria(
+        ariaLabel ?? summarizeStack({ values, growth, title }),
+        onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+      )}
+      style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}
+    >
       {title && (
         <div style={{ fontSize: "0.7rem", fontWeight: 700, color: DEFAULTS.dimColor, letterSpacing: "0.04em", marginBottom: 4 }}>
           {hasMath(title) ? <WidgetText text={title} /> : title.toUpperCase()}
@@ -168,12 +195,20 @@ export function StackView({
                   </span>
                 )}
                 <div
+                  {...(selectable(index)
+                    ? partHandlers(widgetId, "slot", String(index), bus, {
+                        onSelect,
+                        why: mergedWhy,
+                        tabbable: firstSelectable === index,
+                      })
+                    : {})}
                   style={{
                     width: itemWidth,
                     height: itemHeight,
-                    border: `2px solid ${border}`,
+                    border: `2px solid ${linked.has(String(index)) ? highlightColor : border}`,
                     borderRadius: 6,
                     background: bg,
+                    cursor: selectable(index) ? "pointer" : undefined,
                     color,
                     opacity,
                     display: "flex",

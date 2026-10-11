@@ -60,6 +60,14 @@ jobs:
         if: ${{ needs.changes.outputs.infra == 'true' }}
         run: node --test .github/scripts/*.test.mjs
 
+      # internal/markdown/fenceschemas/fences.json and docs/WIDGETS.md are
+      # generated from ui/src/fences/specs. A spec edited without regenerating
+      # leaves the Go linter disagreeing with the UI about what is valid.
+      - name: check generated fence files
+        if: ${{ needs.changes.outputs.ui == 'true' || needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true' }}
+        run: npm run check-schemas
+        working-directory: ui
+
       - name: run UI tests
         if: ${{ needs.changes.outputs.ui == 'true' || needs.changes.outputs.go == 'true' || needs.changes.outputs.infra == 'true' }}
         run: npm test

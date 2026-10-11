@@ -3,8 +3,10 @@ import { type Extension } from "@codemirror/state";
 import { type EditorView } from "@codemirror/view";
 import type { EditorSlashCommandConfig } from "@kw/lib/editorSlashCommands";
 import { filterSlashCommands, templateLoadErrorMessage } from "@kw/lib/editorSlashCommands";
+import { allFences } from "@kw/fences";
 
-export type MarkdownSlashCommandName = "table" | "todo" | "code" | "quote" | "frontmatter" | "quiz";
+/** Built-in names; widget fences add one entry each, generated below. */
+export type MarkdownSlashCommandName = string;
 
 export type MarkdownSlashCommand = {
   name: MarkdownSlashCommandName;
@@ -24,7 +26,48 @@ export type CustomSlashCommandLoader = (templatePath: string) => Promise<string>
 
 const frontmatterFieldInsert = "key: \n";
 
-export const markdownSlashCommands: MarkdownSlashCommand[] = [
+/**
+ * One entry per widget fence, generated from the registry rather than listed
+ * by hand: a spec added without a menu entry would be undiscoverable, and a
+ * menu entry that drifts from the schema teaches an invalid fence.
+ */
+export function widgetSlashCommands(): MarkdownSlashCommand[] {
+  const builtinNames = new Set(builtinSlashCommands.map((c) => c.name));
+  return allFences()
+    .filter((spec) => !spec.legacy)
+    .map((spec) => {
+      // The example opens with ```<lang> …; put the cursor on the first body
+      // line so the author is editing data, not retyping the tag.
+      const insert = `${spec.example.replace(/\n?$/, "\n")}`;
+      const firstBodyLine = insert.indexOf("\n") + 1;
+      // `/table` already means a GFM table; the widget gets `/table-widget`.
+      const clash = builtinNames.has(spec.lang);
+      return {
+        name: clash ? `${spec.lang}-widget` : spec.lang,
+        icon: "🧩",
+        label: clash ? `${spec.lang} widget` : spec.lang,
+        detail: spec.description,
+        insert,
+        cursorOffset: firstBodyLine,
+      };
+    });
+}
+
+/**
+ * A fence example (```` ```lang\nbody\n``` ````) as a code block's language
+ * and body, for editors that hold a fence as one block rather than lines.
+ */
+export function splitFenceExample(example: string, lang: string): { language: string; body: string } {
+  const lines = example.replace(/\n+$/, "").split("\n");
+  const open = /^(`{3,}|~{3,})\s*(\S*)/.exec(lines[0] ?? "");
+  if (!open) return { language: lang, body: lines.join("\n") };
+  const marker = open[1]!;
+  const last = lines.length > 1 ? lines[lines.length - 1]!.trim() : "";
+  const end = last.startsWith(marker[0]!.repeat(3)) && /^(`+|~+)$/.test(last) ? lines.length - 1 : lines.length;
+  return { language: open[2] || lang, body: lines.slice(1, end).join("\n") };
+}
+
+const builtinSlashCommands: MarkdownSlashCommand[] = [
   {
     name: "table",
     icon: "📊",
@@ -73,6 +116,12 @@ export const markdownSlashCommands: MarkdownSlashCommand[] = [
     insert: "---\ntitle: \ntags: []\n---\n\n",
     cursorOffset: "---\ntitle: ".length,
   },
+];
+
+/** Built-ins first, then the widget fences in registry order. */
+export const markdownSlashCommands: MarkdownSlashCommand[] = [
+  ...builtinSlashCommands,
+  ...widgetSlashCommands(),
 ];
 
 export function hasYamlFrontmatter(doc: string): boolean {

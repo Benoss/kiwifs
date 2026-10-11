@@ -3,6 +3,8 @@ import {
   getAvailableMarkdownSlashCommands,
   markdownSlashCommands,
   replaceSlashCommandTrigger,
+  splitFenceExample,
+  widgetSlashCommands,
 } from "./markdownSlashCommands";
 
 function command(name: string) {
@@ -45,5 +47,39 @@ describe("markdown slash commands", () => {
     expect(command("quote").icon).toBe("💬");
     expect(command("frontmatter").icon).toBe("🧾");
     expect(command("quiz").icon).toBe("❓");
+  });
+});
+
+describe("widget slash entries", () => {
+  it("gives every command a distinct name, so /table stays the GFM table", () => {
+    const names = markdownSlashCommands.map((c) => c.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(command("table").detail).toBe("Insert a GFM table");
+  });
+
+  it("renames a widget whose language a built-in already uses", () => {
+    const widgets = widgetSlashCommands();
+    for (const w of widgets) expect(w.name).not.toBe("table");
+    if (widgets.some((w) => w.name === "table-widget")) {
+      expect(command("table-widget").insert.startsWith("```table")).toBe(true);
+    }
+  });
+});
+
+describe("splitFenceExample", () => {
+  it("separates the language and body from the delimiter lines", () => {
+    expect(splitFenceExample("```array\nvalues: [1, 2]\nactive: 0\n```\n", "array")).toEqual({
+      language: "array",
+      body: "values: [1, 2]\nactive: 0",
+    });
+  });
+
+  it("handles a longer marker and a missing close", () => {
+    expect(splitFenceExample("````tree\nroot: 1\n````", "tree")).toEqual({ language: "tree", body: "root: 1" });
+    expect(splitFenceExample("```graph\nnodes: []", "graph")).toEqual({ language: "graph", body: "nodes: []" });
+  });
+
+  it("falls back to the spec's language for a bare body", () => {
+    expect(splitFenceExample("values: [1]", "array")).toEqual({ language: "array", body: "values: [1]" });
   });
 });

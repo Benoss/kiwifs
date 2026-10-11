@@ -1,4 +1,5 @@
 import { useId, useMemo } from "react";
+import yaml from "js-yaml";
 import { toSet, type Many } from "./sets";
 
 import { alpha, lookupKeyed, type KeyedValues } from "./colors";
@@ -19,6 +20,9 @@ import { arrivalOpacity, useFlowProgress } from "./useFlowProgress";
 import { useTweenedPositions, type Point } from "./useTweenedPositions";
 import { SvgLabel } from "./WidgetText";
 import { ZoomPanel } from "./ZoomPanel";
+import { canvasAria, summarizeGraph } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { inspectLinked } from "./inspectLinked";
 
 export interface GraphNode {
   id: string | number;
@@ -138,7 +142,16 @@ export interface GraphViewProps {
   animate?: boolean;
   /** Wrap in a zoom / pan viewport for large diagrams. */
   zoomable?: boolean;
+  /** @deprecated Kept as an alias; prefer `onSelect`, which reports a ref. */
   onNodeClick?: (id: string | number) => void;
+  /** Reported when the reader clicks or Enters a node. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Node id → explanation. Selecting such a node reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the nodes with an edge into the hovered one. */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this graph. */
+  widgetId?: string;
   activeColor?: string;
   highlightColor?: string;
   nodeSize?: number;
@@ -149,6 +162,27 @@ export interface GraphViewProps {
   width?: number;
   /** Canvas height. Default 300 (ignored by "dagre", which sizes itself). */
   height?: number;
+  /** Accessible name. Defaults to a summary of the nodes, edges and groups. */
+  ariaLabel?: string;
+  /**
+   * Draw the circular backdrop a hash ring needs: a circle with tick marks,
+   * with `layout: "circular"` placing nodes on it. Consistent hashing is a
+   * graph on a ring, not a widget of its own.
+   */
+  ring?: boolean | { ticks?: number; labels?: (string | number)[] };
+  /**
+   * Dots at fixed angles on the ring — virtual nodes, key positions. `at` is
+   * a fraction of the circumference (0 at the top, clockwise) or a degree
+   * when `degrees` is set.
+   */
+  tokens?: { at: number; label?: string; color?: string; degrees?: boolean; node?: string | number }[];
+  /**
+   * Let the reader rearrange the graph. `onChange` receives the whole node and
+   * edge list, and the "copy as YAML" button turns a drawn graph into a fence
+   * body — which is the point: sketching is faster than typing coordinates.
+   */
+  editable?: boolean;
+  onChange?: (nodes: GraphNode[], edges: GraphEdge[]) => void;
 }
 
 const DEFAULTS = {
@@ -212,11 +246,20 @@ export function GraphView({
   animate = true,
   zoomable = false,
   onNodeClick,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "graph",
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   nodeSize = DEFAULTS.nodeSize,
   width,
   height,
+  ariaLabel,
+  ring,
+  tokens,
+  editable = false,
+  onChange,
 }: GraphViewProps) {
   const activeNodes = toSet(activeNodesIn);
   const highlightNodes = toSet(highlightNodesIn);
@@ -224,6 +267,22 @@ export function GraphView({
   const activeEdges = toSet(activeEdgesIn);
   const highlightEdges = toSet(highlightEdgesIn);
   const dimEdges = toSet(dimEdgesIn);
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linkedNodes = inspectLinked(bus, widgetId, hoverPredecessors || why !== undefined);
+  const clickable = (id: Id) =>
+    Boolean(onNodeClick) ||
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(id) }) !== undefined;
+  const firstClickable = String(nodes.find((n) => clickable(n.id))?.id ?? "");
+  // Incoming edges are the predecessors; walking them on hover is how a
+  // reader sees "what feeds this" without the author listing it again.
+  const incoming = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    for (const e of edges) {
+      if (String(e.to) === bus.hovered.key) incoming.add(String(e.from));
+    }
+  }
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const canvasW = width ?? DEFAULTS.width;
   const canvasH = height ?? DEFAULTS.height;
@@ -493,13 +552,55 @@ export function GraphView({
   const displayW = dagre && width !== undefined ? Math.min(width, vbW) : vbW;
   const displayH = (displayW * vbH) / vbW;
 
+  // A ring is drawn through the node positions, not at a fixed radius, so it
+  // encloses whatever the layout produced.
+  const ringGeometry = (() => {
+    if (!ring) return null;
+    const cx = (bounds.x0 + bounds.x1) / 2;
+    const cy = (bounds.y0 + bounds.y1) / 2;
+    const r = Math.max(
+      20,
+      ...[...geom.values()].map((g) => Math.hypot(g.x - cx, g.y - cy)),
+    );
+    const opts = typeof ring === "object" ? ring : {};
+    const tickCount = Math.max(0, Math.min(64, opts.ticks ?? 0));
+    /** Fraction of the circumference, 0 at the top, clockwise. */
+    const angleOf = (at: number, degrees?: boolean) =>
+      (degrees ? (at * Math.PI) / 180 : at * Math.PI * 2) - Math.PI / 2;
+    const at = (value: number, degrees?: boolean) => {
+      const a = angleOf(value, degrees);
+      return {
+        x: cx + Math.cos(a) * r,
+        y: cy + Math.sin(a) * r,
+        lx: cx + Math.cos(a) * (r + 16),
+        ly: cy + Math.sin(a) * (r + 16),
+      };
+    };
+    const ticks = Array.from({ length: tickCount }, (_, i) => {
+      const a = angleOf(i / tickCount);
+      return {
+        x1: cx + Math.cos(a) * (r - 5),
+        y1: cy + Math.sin(a) * (r - 5),
+        x2: cx + Math.cos(a) * (r + 5),
+        y2: cy + Math.sin(a) * (r + 5),
+        lx: cx + Math.cos(a) * (r + 17),
+        ly: cy + Math.sin(a) * (r + 17),
+        label: opts.labels?.[i],
+      };
+    });
+    return { cx, cy, r, ticks, at };
+  })();
+
   const svg = (
     <svg
       width={Math.round(displayW)}
       height={Math.round(displayH)}
       viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
       style={{ display: "block", maxWidth: "100%", height: "auto" }}
-      role="img"
+      {...canvasAria(
+        ariaLabel ?? summarizeGraph({ nodes, edges, directed, groups }),
+        Boolean(onNodeClick) || onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+      )}
     >
       <defs>
         {[...markerColors].map(([color, id]) => (
@@ -520,6 +621,73 @@ export function GraphView({
           `}</style>
         )}
       </defs>
+
+      {/* The hash ring, behind everything: a circle through the laid-out
+          nodes, with ticks, so a position on the ring reads as a position. */}
+      {ringGeometry && (
+        <g>
+          <circle
+            cx={ringGeometry.cx}
+            cy={ringGeometry.cy}
+            r={ringGeometry.r}
+            fill="none"
+            stroke={DEFAULTS.border}
+            strokeWidth={1.5}
+            strokeDasharray="2 5"
+            opacity={0.65}
+          />
+          {ringGeometry.ticks.map((tick, i) => (
+            <g key={`tick${i}`}>
+              <line
+                x1={tick.x1}
+                y1={tick.y1}
+                x2={tick.x2}
+                y2={tick.y2}
+                stroke={DEFAULTS.border}
+                strokeWidth={1}
+                opacity={0.8}
+              />
+              {tick.label != null && (
+                <SvgLabel
+                  x={tick.lx}
+                  y={tick.ly}
+                  text={tick.label}
+                  anchor="middle"
+                  dominantBaseline="central"
+                  fill={DEFAULTS.dimColor}
+                  fontSize={9}
+                  fontFamily={MONO}
+                />
+              )}
+            </g>
+          ))}
+        </g>
+      )}
+
+      {/* Tokens: virtual nodes and key positions on the ring */}
+      {ringGeometry &&
+        (tokens ?? []).map((token, i) => {
+          const point = ringGeometry.at(token.at, token.degrees);
+          return (
+            <g key={`token${i}`}>
+              <circle cx={point.x} cy={point.y} r={4} fill={token.color ?? activeColor} />
+              {token.label && (
+                <SvgLabel
+                  x={point.lx}
+                  y={point.ly}
+                  text={token.label}
+                  anchor="middle"
+                  dominantBaseline="central"
+                  fill={token.color ?? activeColor}
+                  fontSize={10}
+                  fontWeight={700}
+                  fontFamily={MONO}
+                  halo={DEFAULTS.surface}
+                />
+              )}
+            </g>
+          );
+        })}
 
       {[...allGroups]
         .sort((a, b) => depthOf(a) - depthOf(b))
@@ -625,6 +793,11 @@ export function GraphView({
           }
         }
 
+        // A hovered node's feeders, and whatever a linked widget is pointing
+        // at, get a ring even when the author highlighted nothing. The ring is
+        // drawn outside the node so the author's active/dim styling survives.
+        const isLinked = incoming.has(String(n.id)) || linkedNodes.has(String(n.id));
+
         const lineH = box.lineHeight;
         const subH = box.subFontSize + 3;
         const blockH = box.lines.length * lineH + box.sublines.length * subH;
@@ -639,9 +812,25 @@ export function GraphView({
         return (
           <g
             key={n.id}
-            style={{ transition: "opacity 0.25s ease", opacity, cursor: onNodeClick ? "pointer" : undefined }}
-            onClick={onNodeClick ? () => onNodeClick(n.id) : undefined}
+            {...(clickable(n.id)
+              ? partHandlers(widgetId, "node", String(n.id), bus, {
+                  why: mergedWhy,
+                  tabbable: String(n.id) === firstClickable,
+                  onSelect: (ref) => {
+                    onSelect?.(ref);
+                    onNodeClick?.(n.id);
+                  },
+                })
+              : {})}
+            style={{
+              transition: "opacity 0.25s ease",
+              opacity,
+              cursor: clickable(n.id) ? "pointer" : undefined,
+            }}
           >
+            {isLinked && (
+              <ShapeOutline shape={g.shape} x={g.x} y={g.y} w={g.w + 8} h={g.h + 8} fill="none" stroke={highlightColor} />
+            )}
             <ShapeOutline shape={g.shape} x={g.x} y={g.y} w={g.w} h={g.h} fill={fill} stroke={stroke} />
             {box.lines.map((line, j) => (
               <SvgLabel
@@ -740,8 +929,70 @@ export function GraphView({
   );
 
   return (
-    <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem 0" }}>
       {zoomable ? <div style={{ width: "100%" }}><ZoomPanel>{svg}</ZoomPanel></div> : svg}
+      {editable && (
+        // Sketching a graph beats typing coordinates, and this is what turns
+        // the sketch into a fence body the author can paste back into the page.
+        <button
+          type="button"
+          onClick={() => {
+            const laidOut = nodes.map((n) => {
+              const g = geom.get(n.id);
+              return g ? { ...n, x: Math.round(g.x), y: Math.round(g.y) } : n;
+            });
+            void navigator.clipboard?.writeText(graphToYAML(laidOut, edges, directed));
+            onChange?.(laidOut, [...edges]);
+          }}
+          style={{
+            marginTop: 6,
+            fontSize: "0.68rem",
+            fontWeight: 600,
+            padding: "2px 8px",
+            borderRadius: 4,
+            border: `1px solid ${DEFAULTS.border}`,
+            background: "transparent",
+            color: DEFAULTS.dimColor,
+            cursor: "pointer",
+          }}
+          title="Copy these nodes and edges as a ```graph fence body"
+        >
+          Copy as YAML
+        </button>
+      )}
     </div>
   );
+}
+
+/** The current graph as a `graph` fence body, with positions baked in. */
+export function graphToYAML(nodes: GraphNode[], edges: GraphEdge[], directed: boolean): string {
+  const pick = (entries: [string, unknown][]) =>
+    Object.fromEntries(entries.filter(([, v]) => v !== undefined));
+  const doc: Record<string, unknown> = {};
+  if (directed) doc.directed = true;
+  doc.nodes = nodes.map((n) =>
+    pick([
+      ["id", n.id],
+      ["label", n.label],
+      ["sublabel", n.sublabel],
+      ["shape", n.shape],
+      ["x", n.x === undefined ? undefined : Math.round(n.x)],
+      ["y", n.y === undefined ? undefined : Math.round(n.y)],
+      ["group", n.group],
+    ]),
+  );
+  if (edges.length > 0) {
+    doc.edges = edges.map((e) =>
+      pick([
+        ["from", e.from],
+        ["to", e.to],
+        ["label", e.label],
+        ["weight", e.weight],
+        ["style", e.style],
+      ]),
+    );
+  }
+  // js-yaml quotes whatever YAML would otherwise retype (`007`, `true`, `no`,
+  // `~`, `a: b`), so the pasted body reads back as the same strings.
+  return yaml.dump(doc, { flowLevel: 2, lineWidth: -1 });
 }

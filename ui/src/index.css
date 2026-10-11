@@ -423,6 +423,114 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+/* ─── Inline page controls ─── */
+/* A number a reader can drag, inside a sentence. Baseline-aligned so the line
+   of prose does not jump when one appears. */
+.kiwi-control-range {
+  @apply inline-flex items-baseline gap-1.5 align-baseline;
+}
+.kiwi-control-range input[type="range"] {
+  @apply align-middle;
+  width: 5rem;
+  height: 5px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 999px;
+  outline: none;
+  background: linear-gradient(
+    to right,
+    var(--primary) 0%,
+    var(--primary) var(--kw-range-progress, 0%),
+    var(--border) var(--kw-range-progress, 0%),
+    var(--border) 100%
+  );
+}
+.kiwi-control-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  cursor: ew-resize;
+}
+.kiwi-control-range input[type="range"]::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  cursor: ew-resize;
+}
+.kiwi-control-readout,
+.kiwi-control-value {
+  @apply font-mono tabular-nums font-semibold;
+  color: var(--primary);
+}
+.kiwi-control-toggle,
+.kiwi-control-select {
+  @apply inline-flex items-center rounded px-1.5 text-sm font-medium border border-border bg-transparent align-baseline;
+  color: var(--primary);
+  cursor: pointer;
+}
+.kiwi-control-error {
+  @apply text-destructive;
+}
+
+/* ─── Code notation comments ─── */
+/* `// [!code focus]` dims everything else, so the eye lands on the two lines
+   that matter; the markers themselves are stripped before highlighting. */
+.kiwi-shiki .kiwi-line-blur {
+  @apply block opacity-40 blur-[0.4px] transition-all;
+}
+.kiwi-shiki:hover .kiwi-line-blur {
+  @apply opacity-100 blur-none;
+}
+.kiwi-shiki .kiwi-line-error {
+  @apply block -mx-4 px-4 border-l-2;
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  border-left-color: var(--destructive);
+}
+.kiwi-shiki .kiwi-line-warning {
+  @apply block -mx-4 px-4 border-l-2;
+  background: color-mix(in srgb, #eab308 14%, transparent);
+  border-left-color: #eab308;
+}
+
+/* ─── Stepped code colours ─── */
+/* Python Tutor's convention: the line that just ran is a calm green, the one
+   about to run is an alert red. Tokens, so a theme can override them. */
+:root {
+  --kw-widget-code-ran: #3f9a4a;
+  --kw-widget-code-next: #d13b2f;
+}
+.dark {
+  --kw-widget-code-ran: #c9e6ca;
+  --kw-widget-code-next: #e93f34;
+}
+
+/* ─── Deep-linked widget flash ─── */
+/* A reader arriving on `#?step=7` lands mid-page; a one-second ring says
+   which widget the link was about. */
+.kiwi-widget-flash {
+  animation: kiwi-widget-flash 1.2s ease-out;
+}
+@keyframes kiwi-widget-flash {
+  0%, 60% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kiwi-widget-flash {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+}
+
 /* ─── Widget range scrubber ─── */
 /* Native range tracks follow the UA palette rather than the app theme, which
    leaves a dark bar sitting on a light page. Paint the whole control instead:

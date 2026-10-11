@@ -71,7 +71,7 @@ export function parseSpaceLocation(pathname: string, hash = ""): SpaceLocation {
     return { space: null, path: decodePath(pathname.slice(PAGE_PREFIX.length)) };
   }
 
-  const legacyHash = hash.replace(/^#\/?/, "");
+  const legacyHash = hash.replace(/^#\/?/, "").split("?")[0]!;
   if (legacyHash) return { space: null, path: decodePath(legacyHash) };
 
   return { space: null, path: null };
@@ -93,7 +93,8 @@ export function buildSpaceLocation(
 
 /**
  * Query and fragment belong to whoever put them there — deep-linked playback
- * steps (`#?step=4`), heading anchors, theme overrides — not to routing. Keep
+ * steps (`#?step=4`, or `#?step.a=4&step.b=2` once a page has several named
+ * clocks), heading anchors, theme overrides — not to routing. Keep
  * them when rewriting a URL so normalising the path does not silently discard
  * state that another part of the app has not read yet.
  *

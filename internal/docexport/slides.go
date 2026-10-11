@@ -41,6 +41,7 @@ func (e *SlidesExporter) Export(ctx context.Context, opts ExportOpts) (*ExportRe
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", opts.InputPath, err)
 	}
+	content = RewriteWidgetFences(content)
 
 	// Ensure marp: true is in the frontmatter if not already present.
 	content = ensureMarpFrontmatter(content)

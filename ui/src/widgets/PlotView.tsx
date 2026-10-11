@@ -1,11 +1,15 @@
+import { useMemo } from "react";
 import { alpha } from "./colors";
 import {
   niceTicks,
   plotDomain,
   slicePoints,
   type PlotPoint,
+  sampleRegion,
+  sampleSeries,
 } from "./plotLayout";
 import { SvgLabel, WidgetText } from "./WidgetText";
+import { summarizePlot } from "./widgetA11y";
 
 export type { PlotPoint } from "./plotLayout";
 
@@ -17,6 +21,17 @@ export interface PlotSeries {
   /** Caption in the legend. */
   label?: string;
   points?: PlotPoint[];
+  /**
+   * The curve as a formula instead of a point list: `"sin(x) + a"`. Sampled
+   * across the x domain, with free names bound from `bind` (or an InputPanel
+   * driving the same scope), so a complexity curve or a predicate does not
+   * have to be precomputed into two hundred coordinates.
+   */
+  expr?: string;
+  /** Points to sample an `expr` at. Default 160. */
+  samples?: number;
+  /** Sample only over `[from, to]` rather than the whole x axis. */
+  domain?: [number, number];
   /** "line" (default), "area" (fill down to baseline), or "scatter". */
   kind?: PlotSeriesKind;
   color?: string;
@@ -53,8 +68,27 @@ export interface PlotMark {
   color?: string;
 }
 
+/** A shaded region defined by a predicate rather than by endpoints. */
+export interface PlotRegion {
+  id?: string | number;
+  /** `"y < x^2"`, sampled on a grid. `x` and `y` are in scope. */
+  when: string;
+  label?: string;
+  color?: string;
+  opacity?: number;
+  /** Grid resolution per axis. Default 48. */
+  resolution?: number;
+}
+
 export interface PlotViewProps {
   series: PlotSeries[];
+  /** Shaded areas from a predicate — the half-plane where a bound holds. */
+  regions?: PlotRegion[];
+  /**
+   * Values bound to the free names in an `expr` or a `when`. Steppable, so a
+   * walkthrough can sweep a parameter.
+   */
+  bind?: Record<string, number>;
   shades?: PlotShade[];
   guides?: PlotGuide[];
   marks?: PlotMark[];
@@ -75,6 +109,8 @@ export interface PlotViewProps {
   height?: number;
   activeColor?: string;
   highlightColor?: string;
+  /** Accessible name. Defaults to a summary of the series and axes. */
+  ariaLabel?: string;
 }
 
 const DEFAULTS = {
@@ -125,13 +161,30 @@ function areaPath(
   ].join(" ");
 }
 
+/** Formula series that `sampleSeries` dropped — it keeps order and only drops. */
+function droppedFormulas(input: readonly PlotSeries[], sampled: readonly PlotSeries[]): PlotSeries[] {
+  const dropped: PlotSeries[] = [];
+  let j = 0;
+  for (const s of input) {
+    const out = sampled[j];
+    const kept =
+      out !== undefined &&
+      (out === s || (s.expr !== undefined && out.expr === s.expr && out.label === s.label && out.id === s.id));
+    if (kept) j++;
+    else if (s.expr) dropped.push(s);
+  }
+  return dropped;
+}
+
 /**
  * A 2D plot: lines, area fills, and scatter, with optional shaded intervals,
  * axis guides, and labeled marks. Generic — densities, payoff diagrams,
  * scatter clouds, any y = f(x).
  */
 export function PlotView({
-  series,
+  series: seriesIn,
+  regions = [],
+  bind,
   shades = [],
   guides = [],
   marks = [],
@@ -152,17 +205,60 @@ export function PlotView({
   height = DEFAULTS.height,
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
+  ariaLabel,
 }: PlotViewProps) {
+  // Formula series are sampled before anything else looks at the data, so the
+  // domain, the ticks and the legend all see ordinary points.
+  const { series, exprErrors } = useMemo(
+    () => sampleSeries(seriesIn, bind, { xMin, xMax }),
+    [seriesIn, bind, xMin, xMax],
+  );
+  const domain = plotDomain(series, { shades, guides, marks, xMin, xMax, yMin, yMax });
+  const { xMin: dx0, xMax: dx1, yMin: dy0, yMax: dy1 } = domain;
+
+  // Keyed on the domain's numbers, not the object: plotDomain builds a new one
+  // every render, which would resample every region on every hover.
+  const regionCells = useMemo(
+    () =>
+      regions.map((region) => {
+        const { cells, error } = sampleRegion(
+          region.when,
+          { xMin: dx0, xMax: dx1, yMin: dy0, yMax: dy1 },
+          bind,
+          region.resolution,
+        );
+        return { region, cells, error };
+      }),
+    [regions, dx0, dx1, dy0, dy1, bind],
+  );
+
   const hasPoints = series.some((s) => (s.points?.length ?? 0) > 0);
-  if (!hasPoints && shades.length === 0 && guides.length === 0 && marks.length === 0) {
+  const hasRegions = regionCells.some((r) => r.cells.length > 0);
+  const nanErrors = droppedFormulas(seriesIn, series)
+    .map((s) => `${s.label ?? s.id ?? s.expr}`)
+    .filter((name) => !exprErrors.some((e) => e.startsWith(`${name}:`)))
+    .map((name) => `${name}: no finite values over the x range`);
+  // A broken formula says so under the chart rather than silently drawing
+  // nothing: an author sweeping a parameter needs to know which one failed.
+  const problems = [
+    ...exprErrors,
+    ...nanErrors,
+    ...regionCells.map((r) => r.error).filter((e): e is string => Boolean(e)),
+  ];
+
+  if (!hasPoints && !hasRegions && shades.length === 0 && guides.length === 0 && marks.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: 16, color: DEFAULTS.dimColor, fontSize: "0.8rem" }}>
         (no data)
+        {problems.map((message, i) => (
+          <div key={i} style={{ color: "var(--kw-widget-accent-rose, #f43f5e)", fontSize: 11 }}>
+            {message}
+          </div>
+        ))}
       </div>
     );
   }
 
-  const domain = plotDomain(series, { shades, guides, marks, xMin, xMax, yMin, yMax });
   const plotW = Math.max(40, width - PAD.left - PAD.right);
   const plotH = Math.max(40, height - PAD.top - PAD.bottom);
   const sx = (x: number) => PAD.left + ((x - domain.xMin) / (domain.xMax - domain.xMin)) * plotW;
@@ -184,6 +280,7 @@ export function PlotView({
         viewBox={`0 0 ${width} ${height}`}
         style={{ fontVariantNumeric: "tabular-nums", maxWidth: "100%" }}
         role="img"
+        aria-label={ariaLabel ?? summarizePlot({ series, xLabel, yLabel })}
       >
         {/* Plot frame */}
         <rect
@@ -272,6 +369,39 @@ export function PlotView({
             />
           </g>
         )}
+
+        {/* Predicate regions — the furthest back, since they are a backdrop */}
+        {regionCells.map(({ region, cells }, i) => {
+          const tone = region.color ?? highlightColor;
+          const id = region.id ?? `region${i}`;
+          const dim = dimIds?.has(id);
+          return (
+            <g key={`rg${i}`} opacity={dim ? 0.3 : 1}>
+              {cells.map((cell, j) => (
+                <rect
+                  key={j}
+                  x={sx(cell.x0)}
+                  y={sy(cell.y1)}
+                  width={Math.max(0.5, sx(cell.x1) - sx(cell.x0))}
+                  height={Math.max(0.5, sy(cell.y0) - sy(cell.y1))}
+                  fill={tone}
+                  opacity={region.opacity ?? 0.16}
+                />
+              ))}
+              {region.label && cells[0] && (
+                <SvgLabel
+                  x={sx(cells[Math.floor(cells.length / 2)]!.x0)}
+                  y={sy(cells[Math.floor(cells.length / 2)]!.y1) + 12}
+                  text={region.label}
+                  fill={tone}
+                  fontSize={10}
+                  fontWeight={600}
+                  halo={DEFAULTS.surface}
+                />
+              )}
+            </g>
+          );
+        })}
 
         {/* Shaded regions — behind series */}
         {shades.map((sh, i) => {
@@ -463,6 +593,21 @@ export function PlotView({
               </span>
             );
           })}
+        </div>
+      )}
+
+      {problems.length > 0 && (
+        <div
+          style={{
+            fontSize: 11,
+            padding: "2px 8px 6px",
+            color: "var(--kw-widget-accent-rose, #f43f5e)",
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          }}
+        >
+          {problems.map((message, i) => (
+            <div key={i}>{message}</div>
+          ))}
         </div>
       )}
     </div>

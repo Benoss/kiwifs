@@ -167,7 +167,7 @@ func (e *SiteExporter) copyDocsTree(ctx context.Context, inputDir, docsDir strin
 
 		// Strip frontmatter type/order fields that MkDocs doesn't understand,
 		// but keep title for MkDocs's use.
-		if err := os.WriteFile(destPath, content, 0644); err != nil {
+		if err := os.WriteFile(destPath, RewriteWidgetFences(content), 0644); err != nil {
 			return fmt.Errorf("write %s: %w", destPath, err)
 		}
 

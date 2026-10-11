@@ -5,6 +5,8 @@
  * stepping animation can precompute frames without the SVG layer.
  */
 
+import { compile } from "@kw/lib/expr";
+
 export interface PlotPoint {
   x: number;
   y: number;
@@ -71,7 +73,10 @@ export function niceNum(span: number, round: boolean): number {
 
 function roundTo(step: number, value: number): number {
   const decimals = Math.max(0, -Math.floor(Math.log10(step)) + 1);
-  const factor = 10 ** Math.min(decimals, 8);
+  // Past 8 decimals a fixed factor would round every tick of a 1e-10 range to
+  // the same value; significant digits still strip the float noise.
+  if (decimals > 8) return Number(value.toPrecision(15));
+  const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
 }
 
@@ -85,7 +90,8 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   const ticks: number[] = [];
   const limit = end + step * 0.5;
   for (let v = start, i = 0; v <= limit && i < 24; v += step, i++) {
-    ticks.push(roundTo(step, v));
+    const t = roundTo(step, v);
+    if (ticks[ticks.length - 1] !== t) ticks.push(t);
   }
   return ticks;
 }
@@ -187,4 +193,125 @@ export function plotDomain(
   }
 
   return { xMin, xMax, yMin, yMax };
+}
+
+// ── Formula series and predicate regions ────────────────────────────────────
+
+export interface SampledSeries<T> {
+  series: T[];
+  /** One message per series whose `expr` could not be parsed. */
+  exprErrors: string[];
+}
+
+export interface SampleBounds {
+  xMin?: number;
+  xMax?: number;
+}
+
+/**
+ * Turn `expr` series into point series.
+ *
+ * Done here rather than in the component so the domain, ticks and legend all
+ * see ordinary points, and so this stays unit-testable. A series whose formula
+ * is broken is dropped with a message rather than taking the chart down.
+ */
+export function sampleSeries<T extends { points?: PlotPoint[]; expr?: string; samples?: number; domain?: [number, number]; label?: string; id?: string | number }>(
+  series: readonly T[],
+  scope: Record<string, number> | undefined,
+  bounds: SampleBounds = {},
+): SampledSeries<T> {
+  const exprErrors: string[] = [];
+  // A formula needs an x range. Prefer the author's, else the extent of any
+  // point series on the chart, else a conventional 0..10.
+  const explicit = series.flatMap((s) => s.points ?? []).map((p) => p.x);
+  const lo = bounds.xMin ?? (explicit.length ? Math.min(...explicit) : 0);
+  const hi = bounds.xMax ?? (explicit.length ? Math.max(...explicit) : 10);
+
+  const out: T[] = [];
+  for (const s of series) {
+    if (!s.expr) {
+      out.push(s);
+      continue;
+    }
+    const [from, to] = s.domain ?? [lo, hi];
+    const n = Math.max(2, Math.min(2000, s.samples ?? 160));
+    let f: (vars?: Record<string, number | boolean>) => number;
+    try {
+      f = compile(s.expr);
+    } catch (err) {
+      exprErrors.push(`${s.label ?? s.id ?? s.expr}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const points: PlotPoint[] = [];
+    for (let i = 0; i < n; i++) {
+      const x = from + ((to - from) * i) / (n - 1);
+      let y: number;
+      try {
+        y = f({ ...scope, x });
+      } catch (err) {
+        exprErrors.push(`${s.label ?? s.id ?? s.expr}: ${err instanceof Error ? err.message : String(err)}`);
+        points.length = 0;
+        break;
+      }
+      // A pole (tan, 1/x) breaks the line rather than spiking it off-canvas.
+      if (Number.isFinite(y)) points.push({ x, y });
+    }
+    if (points.length > 0) out.push({ ...s, points });
+  }
+  return { series: out, exprErrors };
+}
+
+export interface RegionCell {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+/**
+ * Grid cells where a predicate holds, as rectangles in data space.
+ *
+ * Marching squares would give a smooth boundary; a grid is honest about being
+ * a sample, cheap, and good enough to say "this is the feasible half".
+ */
+export function sampleRegion(
+  when: string,
+  domain: PlotDomain,
+  scope: Record<string, number> | undefined,
+  resolution = 48,
+): { cells: RegionCell[]; error?: string } {
+  let f: (vars?: Record<string, number | boolean>) => number;
+  try {
+    f = compile(when);
+  } catch (err) {
+    return { cells: [], error: err instanceof Error ? err.message : String(err) };
+  }
+  const n = Math.max(4, Math.min(200, resolution));
+  const dx = (domain.xMax - domain.xMin) / n;
+  const dy = (domain.yMax - domain.yMin) / n;
+  const cells: RegionCell[] = [];
+  for (let i = 0; i < n; i++) {
+    const x0 = domain.xMin + i * dx;
+    // Merge horizontally adjacent cells into one rect per run, so a half-plane
+    // is a handful of rectangles instead of 2304 of them.
+    let runStart: number | null = null;
+    for (let j = 0; j <= n; j++) {
+      const y0 = domain.yMin + j * dy;
+      let on = false;
+      if (j < n) {
+        try {
+          const v = f({ ...scope, x: x0 + dx / 2, y: y0 + dy / 2 });
+          on = v !== 0 && !Number.isNaN(v);
+        } catch (err) {
+          return { cells: [], error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (on && runStart === null) runStart = y0;
+      if (!on && runStart !== null) {
+        cells.push({ x0, x1: x0 + dx, y0: runStart, y1: y0 });
+        runStart = null;
+      }
+    }
+  }
+  return { cells };
 }

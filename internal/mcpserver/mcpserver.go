@@ -67,6 +67,7 @@ func New(opts Options) (*server.MCPServer, Backend, error) {
 
 	registerTools(s, backend, opts)
 	registerMemoryTools(s, backend)
+	s.AddTools(widgetReferenceTool())
 	registerResources(s, backend, opts)
 
 	return s, backend, nil
@@ -702,7 +703,7 @@ func registerTools(s *server.MCPServer, b Backend, opts Options) {
 		},
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_lint",
-				mcp.WithDescription("Validate markdown content or a file for structural issues (tables, fences, frontmatter, headings, mermaid). Returns a list of issues with line numbers. Call after kiwi_write to verify quality, or pass raw content to check before writing."),
+				mcp.WithDescription("Validate markdown content or a file for structural issues (tables, fences, frontmatter, headings, mermaid, widget fences). Returns a list of issues with line numbers. Call after kiwi_write to verify quality, or pass raw content to check before writing. Widget fences are checked against their schema: unknown or misspelled keys, wrong types, and missing required keys are reported with a line number — see kiwi_widget_reference."),
 				mcp.WithString("path", mcp.Description("Path to an existing file to lint")),
 				mcp.WithString("content", mcp.Description("Raw markdown content to lint (alternative to path)")),
 				mcp.WithReadOnlyHintAnnotation(true),

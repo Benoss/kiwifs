@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -20,34 +20,18 @@ import { KiwiBreadcrumb } from "./KiwiBreadcrumb";
 import { KiwiToC } from "./KiwiToC";
 import { KiwiBacklinks } from "./KiwiBacklinks";
 import { KiwiComments } from "./KiwiComments";
-import { KiwiQuery } from "./KiwiQuery";
 import { PageActions } from "./PageActions";
 import { PublishButton } from "./PublishButton";
-import { ShikiCode } from "./ShikiCode";
-import { MermaidDiagram } from "./MermaidDiagram";
-import { parseMermaidMeta } from "@kw/lib/mermaidTheme";
-import { KiwiSteps } from "./KiwiSteps";
-import { KiwiCalc } from "./KiwiCalc";
+import { FenceBlock } from "./FenceBlock";
 import { KiwiFigure } from "./KiwiFigure";
 import { KiwiEmbed } from "./KiwiEmbed";
 import { KiwiPageNav } from "./KiwiPageNav";
-import { KiwiChart } from "./KiwiChart";
-import { KiwiApp } from "./KiwiApp";
-import { KiwiDiff } from "./KiwiDiff";
-import { KiwiKanbanBlock } from "./KiwiKanbanBlock";
-import { KiwiDataBlock } from "./KiwiDataBlock";
-import { KiwiColor } from "./KiwiColor";
-import { KiwiProgress } from "./KiwiProgress";
-import { KiwiPlayground } from "./KiwiPlayground";
 import { KiwiTabs } from "./KiwiTabs";
 import { KiwiColumns } from "./KiwiColumns";
 import { KiwiClaim } from "./KiwiClaim";
 import { KiwiQuiz, KiwiQuizProvider, KiwiQuizScore } from "./KiwiQuiz";
 import { ExcalidrawMarkdownPreview, isExcalidrawMarkdown } from "./ExcalidrawMarkdownPreview";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { KiwiWidget } from "./KiwiWidget";
-import { CodeRunner } from "@kw/widgets/CodeRunner";
-import { PageTracker } from "@kw/widgets/PageTracker";
 import { useUIConfigStore } from "@kw/lib/uiConfigStore";
 import { bannerChips, labeledCount, parseFlowList, parseLabeledCounts, propertyHiddenKeys, type FrontmatterChip } from "@kw/lib/frontmatterTags";
 import { assignTagTones, hslTone, resolveTagTone, type TagTone } from "@kw/lib/tagStyle";
@@ -61,6 +45,7 @@ import remarkEmoji from "remark-emoji";
 import remarkSupersub from "remark-supersub";
 import remarkDefinitionList from "remark-definition-list";
 import { buildResolver, remarkWikiLinks } from "@kw/lib/wikiLinks";
+import { KiwiControl } from "./KiwiControl";
 import {
   applyPageMeta,
   applyTitles,
@@ -72,11 +57,14 @@ import {
   type BookOrder,
 } from "@kw/lib/bookOrder";
 import type { FigureWidth } from "@kw/lib/figureLayout";
-import { remarkMark, stripObsidianComments, remarkInlineTags, rehypeCodeMeta } from "@kw/lib/remarkPlugins";
+import { remarkMark, stripObsidianComments, remarkInlineTags, remarkPageControls, rehypeCodeMeta } from "@kw/lib/remarkPlugins";
 import remarkDirective from "remark-directive";
 import { CLAIM_DATA_ATTRIBUTES, remarkKiwiDirectives } from "@kw/lib/remarkDirectives";
 import { remarkKiwiQuiz } from "@kw/lib/remarkQuiz";
 import { withDataAttributeAliasesForSchema, withUnrestrictedClassName } from "@kw/lib/sanitizeAttributes";
+import { resetClocks } from "@kw/widgets/playbackClock";
+import { resetPageVars } from "@kw/lib/pageVars";
+import { resetPageData } from "@kw/lib/pageData";
 type Props = {
   /** Page path in the KiwiFS tree. Used for API fetching in connected mode. */
   path?: string;
@@ -154,6 +142,7 @@ const sanitizeSchema = {
       "data-footnotes", "data-footnote-ref", "data-footnote-backref",
       "data-tag", "metastring",
       "data-kiwi-directive", "data-quiz", "data-label", "data-ratio", "data-cols",
+      "data-control", "data-control-attrs", "data-var",
       "data-width", "data-pin", "data-caption",
       "data-kiwi-embed", "data-kiwi-target", "data-kiwi-width", "data-kiwi-pin",
       // This schema is a copy of kiwiSanitizeSchema in lib/kiwiMarkdown.ts.
@@ -509,11 +498,28 @@ function KiwiMedia({ src, alt, width, height, rest }: {
   }
 }
 
+/**
+ * Playback clocks, `{% range %}` variables and `kiwi-data` records belong to
+ * the page they were declared on. Module-level so remounting the same page
+ * (closing the editor) keeps them, while arriving at another page clears them.
+ */
+let scopedPagePath: string | null = null;
+
+function enterPageScope(path: string) {
+  if (path === scopedPagePath) return;
+  scopedPagePath = path;
+  resetClocks();
+  resetPageVars();
+  resetPageData();
+}
+
 export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, onEdit, onHistory, onRevealInTree, onToggleStar, isStarred, onTogglePin, isPinned, onDeleted, onDuplicated, onMoved, onTagClick, refreshKey, onPublishedChanged, onWikiLinkClick, onHeadingVisible: _onHeadingVisible, className }: Props) {
   const isHeadless = contentProp != null;
   const nav = onNavigate ?? (() => {});
   const features = useUIConfigStore((s) => s.features);
   const tagConfig = useUIConfigStore((s) => s.tags);
+  const typedFences = useUIConfigStore((s) => s.typedFences);
+  const typedFenceTags = useUIConfigStore((s) => s.typedFenceTags);
 
   const treeEntry = useMemo(() => findEntry(tree ?? null, path), [tree, path]);
   const isDir = !isHeadless && (treeEntry?.isDir ?? false);
@@ -530,6 +536,14 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
   const [localNote, setLocalNote] = useState<string | null>(null);
   const [bookOrder, setBookOrder] = useState<BookOrder | null>(null);
   const proseRef = useRef<HTMLDivElement>(null);
+
+  // A layout effect on the path, not on the content: the outgoing page's
+  // content is still rendered in this commit and the next page's widgets
+  // mount only once its file has loaded, so nothing of the new page can have
+  // joined a clock yet. Headless hosts own their content's lifecycle.
+  useLayoutEffect(() => {
+    if (!isHeadless) enterPageScope(path);
+  }, [path, isHeadless]);
 
   // In headless mode, sync content from prop
   useEffect(() => {
@@ -936,6 +950,7 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                     remarkMath,
                     remarkMark,
                     remarkInlineTags,
+                    remarkPageControls,
                     remarkEmoji,
                     remarkSupersub,
                     remarkDefinitionList,
@@ -1062,73 +1077,15 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                         </a>
                       );
                     },
-                    code: ({ className, children, node, ...rest }: any) => {
-                      const match = /language-([A-Za-z0-9_:.-]+)/.exec(className || "");
-                      const lang = match ? match[1] : undefined;
-                      const raw = String(children).replace(/\n$/, "");
-                      if (lang === "widget:code") {
-                        const codeMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                        const codeLangMatch = codeMeta.match(/lang=(\w+)/);
-                        const codeLang = codeLangMatch ? codeLangMatch[1] : "python";
-                        return <CodeRunner source={raw} lang={codeLang} />;
-                      }
-                      if (lang === "widget:tracker") {
-                        return <PageTracker onNavigate={nav} source={raw} />;
-                      }
-                      if (lang?.startsWith("widget:")) {
-                        return <KiwiWidget name={lang.slice("widget:".length)} source={raw} />;
-                      }
-                      if (lang === "kiwi-query") {
-                        return <KiwiQuery source={raw} onNavigate={nav} isComputedView={parsed.meta?.["kiwi-view"] === true} />;
-                      }
-                      if (lang === "mermaid") {
-                        const { focus, dim } = parseMermaidMeta(node?.data?.meta || node?.properties?.metastring);
-                        return <MermaidDiagram chart={raw} onNavigate={nav} focus={focus} dim={dim} />;
-                      }
-                      if (lang === "kiwi-steps") {
-                        return <KiwiSteps source={raw} onNavigate={nav} />;
-                      }
-                      if (lang === "kiwi-calc") {
-                        return <KiwiCalc source={raw} />;
-                      }
-                      if (lang === "kiwi-chart") {
-                        return <KiwiChart source={raw} />;
-                      }
-                      if (lang === "kiwi-color") {
-                        return <KiwiColor source={raw} />;
-                      }
-                      if (lang === "kiwi-progress") {
-                        return <KiwiProgress source={raw} />;
-                      }
-                      if (lang === "kiwi-playground") {
-                        return <KiwiPlayground source={raw} />;
-                      }
-                      if (lang === "kiwi-kanban") {
-                        return <KiwiKanbanBlock source={raw} />;
-                      }
-                      if (lang === "kiwi-data") {
-                        // Dispatched before the single-line guard below: a
-                        // one-record block is still data, not inline code.
-                        const dataMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                        return <KiwiDataBlock source={raw} meta={dataMeta} />;
-                      }
-                      if (!lang || !raw.includes("\n")) {
-                        return <code className={className} {...rest}>{children}</code>;
-                      }
-                      // Extract meta string from the code fence (node.data.meta)
-                      const meta: string = node?.data?.meta || node?.properties?.metastring || "";
-                      if (lang === "kiwi-app") {
-                        return <KiwiApp source={raw} meta={meta} />;
-                      }
-                      if (lang === "kiwi-diff") {
-                        return <KiwiDiff source={raw} meta={meta} />;
-                      }
-                      const titleMatch = meta.match(/title="([^"]+)"/);
-                      const title = titleMatch ? titleMatch[1] : undefined;
-                      const hlMatch = meta.match(/\{([\d,\s-]+)\}/);
-                      const highlightLines = hlMatch ? parseLineRanges(hlMatch[1]) : undefined;
-                      return <ShikiCode code={raw} lang={lang} title={title} highlightLines={highlightLines} />;
-                    },
+                    code: (props: any) => (
+                      <FenceBlock
+                        {...props}
+                        onNavigate={nav}
+                        isComputedView={parsed.meta?.["kiwi-view"] === true}
+                        typedFences={typedFences}
+                        typedFenceTags={typedFenceTags}
+                      />
+                    ),
                     pre: ({ children }) => <>{children}</>,
                     span: ({ children, node: _node, ...rest }: any) => {
                       const props = rest as Record<string, unknown>;
@@ -1142,6 +1099,14 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                           >
                             {children}
                           </KiwiClaim>
+                        );
+                      }
+                      if (props["data-kiwi-directive"] === "control") {
+                        return (
+                          <KiwiControl
+                            kind={String(props["data-control"] ?? "value")}
+                            attrs={parseControlAttrs(props["data-control-attrs"])}
+                          />
                         );
                       }
                       return <span {...(rest as any)}>{children}</span>;
@@ -1341,6 +1306,7 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             remarkMath,
                             remarkMark,
                             remarkInlineTags,
+                            remarkPageControls,
                             remarkEmoji,
                             remarkSupersub,
                             remarkDefinitionList,
@@ -1356,26 +1322,28 @@ export function KiwiPage({ path = "", content: contentProp, tree, onNavigate, on
                             rehypeSlug,
                           ]}
                           components={{
-                            code: ({ className, children, node, ...rest }: any) => {
-                              const match = /language-([A-Za-z0-9_:.-]+)/.exec(className || "");
-                              const lang = match ? match[1] : undefined;
-                              const raw = String(children).replace(/\n$/, "");
-                              if (lang === "widget:code") {
-                                const codeMeta: string = node?.data?.meta || node?.properties?.metastring || "";
-                                const codeLangMatch = codeMeta.match(/lang=(\w+)/);
-                                const codeLang = codeLangMatch ? codeLangMatch[1] : "python";
-                                return <CodeRunner source={raw} lang={codeLang} />;
-                              }
-                              if (!lang || !raw.includes("\n")) {
-                                return <code className={className} {...rest}>{children}</code>;
-                              }
-                              const meta: string = node?.data?.meta || node?.properties?.metastring || "";
-                              const titleMatch = meta.match(/title="([^"]+)"/);
-                              const title = titleMatch ? titleMatch[1] : undefined;
-                              return <ShikiCode code={raw} lang={lang} title={title} />;
-                            },
+                            code: (props: any) => (
+                              <FenceBlock
+                                {...props}
+                                onNavigate={nav}
+                                typedFences={typedFences}
+                                typedFenceTags={typedFenceTags}
+                              />
+                            ),
                             pre: ({ children }) => <>{children}</>,
                             table: ScrollableTable,
+                            span: ({ children, node: _node, ...rest }: any) => {
+                              const props = rest as Record<string, unknown>;
+                              if (props["data-kiwi-directive"] === "control") {
+                                return (
+                                  <KiwiControl
+                                    kind={String(props["data-control"] ?? "value")}
+                                    attrs={parseControlAttrs(props["data-control-attrs"])}
+                                  />
+                                );
+                              }
+                              return <span {...(rest as any)}>{children}</span>;
+                            },
                             div: ({ children, node: _node, ...rest }: any) => {
                               const props = rest as Record<string, unknown>;
                               if (props["data-kiwi-directive"] === "quiz") {
@@ -1772,22 +1740,15 @@ function formatFrontmatterValue(value: unknown): string {
   return String(value);
 }
 
-/** Parse "{1,3-5,8}" into a Set of line numbers (1-indexed). */
-function parseLineRanges(spec: string): Set<number> {
-  const lines = new Set<number>();
-  for (const part of spec.split(",")) {
-    const trimmed = part.trim();
-    const range = trimmed.match(/^(\d+)-(\d+)$/);
-    if (range) {
-      const start = parseInt(range[1], 10);
-      const end = parseInt(range[2], 10);
-      for (let i = start; i <= end; i++) lines.add(i);
-    } else {
-      const n = parseInt(trimmed, 10);
-      if (!Number.isNaN(n)) lines.add(n);
-    }
+/** The attrs a `{% … /%}` tag carried, round-tripped through its data attribute. */
+function parseControlAttrs(raw: unknown): Record<string, string | number | boolean> {
+  if (typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
   }
-  return lines;
 }
 
 function frontmatterBadges(

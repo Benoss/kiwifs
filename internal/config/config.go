@@ -344,6 +344,19 @@ type UIConfig struct {
 	Toolbar   ToolbarConfig    `toml:"toolbar"`
 	Editor    UIEditorConfig   `toml:"editor"`
 	Tags      UITagsConfig     `toml:"tags"`
+	// TypedFences controls whether bare widget tags (```array, ```tree, …)
+	// render as widgets. A workspace importing a vault that already uses
+	// ```tree for directory listings can set it to false, or list only the
+	// tags it wants, and keep the explicit `kiwi-…` spellings either way.
+	TypedFences *bool    `toml:"typed_fences"`
+	FenceAllow  []string `toml:"typed_fence_tags"`
+}
+
+// TypedFencesEnabled reports whether bare widget tags should render.
+// Unset means on: the feature only ever upgrades a block that would otherwise
+// be an unreadable wall of YAML.
+func (u UIConfig) TypedFencesEnabled() bool {
+	return u.TypedFences == nil || *u.TypedFences
 }
 
 // UITagsConfig controls which frontmatter keys render as header chips and

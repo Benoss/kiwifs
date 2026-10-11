@@ -104,3 +104,15 @@ describe("forestFromParents", () => {
     expect(flattenTree(layoutTree(roots[0], 0, OPTS)!)).toHaveLength(2);
   });
 });
+
+describe("keyed page keys", () => {
+  it("names a keyed page without an id by its keys", () => {
+    const root = layoutTree({ keys: [20, 60], children: [{ keys: [5] }, { keys: [25, 30] }] }, 0, OPTS)!;
+    expect(root.key).toBe("20,60");
+    expect(root.children.map((c) => c.key)).toEqual(["5", "25,30"]);
+  });
+
+  it("still prefers an explicit id", () => {
+    expect(layoutTree({ id: "p", keys: [1, 2] }, 0, OPTS)!.key).toBe("p");
+  });
+});

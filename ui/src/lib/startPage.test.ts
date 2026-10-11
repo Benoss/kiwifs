@@ -79,4 +79,14 @@ describe("hasDeepLinkPath", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("does not take a query-only fragment for a page path", () => {
+    vi.stubGlobal("window", { location: { pathname: "/", hash: "#?step=4" } });
+    expect(hasDeepLinkPath()).toBe(false);
+    vi.stubGlobal("window", { location: { pathname: "/", hash: "#/?step.a=2" } });
+    expect(hasDeepLinkPath()).toBe(false);
+    vi.stubGlobal("window", { location: { pathname: "/", hash: "#/notes/a.md?step=2" } });
+    expect(hasDeepLinkPath()).toBe(true);
+    vi.unstubAllGlobals();
+  });
 });

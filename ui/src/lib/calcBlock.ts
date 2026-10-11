@@ -7,6 +7,8 @@
  * people actually write back-of-envelope math.
  */
 
+import { ExprError, evaluate } from "./expr";
+
 export type CalcBinding = {
   name: string;
   raw: string;
@@ -95,7 +97,46 @@ const TIME: Record<string, number> = {
   years: 86400 * 365,
 };
 
-const BUILTINS: Record<string, number> = { ...TIME, pi: Math.PI, e: Math.E };
+/**
+ * Magnitude words that may stand alone in a derivation (`dau / million`).
+ *
+ * The one- and two-letter forms (`k`, `m`, `b`, `Mi`) only count as a suffix
+ * straight after a number — `dau * 2 k` is two thousand — because as bare names
+ * they would silently answer `b * 2` or `m * x` with a billion or a million
+ * when the author meant an undefined variable.
+ */
+const MAGNITUDE_WORDS: Record<string, number> = {
+  thousand: 1e3,
+  million: 1e6,
+  billion: 1e9,
+  trillion: 1e12,
+};
+
+const BINARY_PREFIX: Record<string, number> = {
+  ki: 1024,
+  mi: 1024 ** 2,
+  gi: 1024 ** 3,
+  ti: 1024 ** 4,
+};
+
+const BUILTINS: Record<string, number> = { ...TIME, ...MAGNITUDE_WORDS, pi: Math.PI, e: Math.E };
+
+/** Same precedence as `parseQuantity`: `5 b` is five billion, not five bytes. */
+const SUFFIX: Record<string, number> = { ...TIME, ...DATA, ...BINARY_PREFIX, ...SCALE };
+
+const SUFFIX_RE = new RegExp(
+  String.raw`(?<![A-Za-z0-9_.])(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)\s*(` +
+    Object.keys(SUFFIX)
+      .sort((a, b) => b.length - a.length)
+      .join("|") +
+    String.raw`)(?![A-Za-z0-9_(])`,
+  "gi",
+);
+
+/** `2 k` → `(2 * 1000)`, `3 MB` → `(3 * 1048576)`: a unit only after a number. */
+function expandNumberUnits(expr: string): string {
+  return expr.replace(SUFFIX_RE, (_, num: string, unit: string) => `(${num} * ${SUFFIX[unit.toLowerCase()]})`);
+}
 
 function splitComment(line: string): { body: string; comment?: string } {
   const hash = line.indexOf("#");
@@ -221,46 +262,25 @@ export function formatQuantity(value: number): string {
   return value.toExponential(2);
 }
 
-const SAFE_EXPR = /^[A-Za-z_][A-Za-z0-9_]*|[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?|[+\-*/().,\s]+$/;
-
-function tokenizeExpr(expr: string): string[] {
-  return expr.match(/[A-Za-z_][A-Za-z0-9_]*|[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?|[+\-*/()]|\S/g) ?? [];
-}
-
+/**
+ * Arithmetic for a derivation line.
+ *
+ * This used to substitute the author's names into a string and hand it to
+ * `Function()`, which made every shared page an execution surface. It now goes
+ * through `lib/expr.ts`, which also brings `^`, `%`, comparisons and the named
+ * functions a capacity model actually wants.
+ */
 export function evaluateExpression(expr: string, scope: Record<string, number>): number {
-  const tokens = tokenizeExpr(expr);
-  if (tokens.some((t) => /[^A-Za-z0-9_+\-*/().eE]/.test(t) && !/^[+\-*/()]$/.test(t) && !/^[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?$/.test(t))) {
-    // allow only identifiers, numbers, and + - * / ( )
-    for (const t of tokens) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) continue;
-      if (/^[0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?$/.test(t)) continue;
-      if (/^[+\-*/()]$/.test(t)) continue;
-      throw new CalcParseError(`unsafe token "${t}" in ${expr}`);
-    }
-  }
-  const replaced = tokens.map((t) => {
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) {
-      if (scope[t] != null) return String(scope[t]);
-      if (BUILTINS[t] != null) return String(BUILTINS[t]);
-      if (BUILTINS[t.toLowerCase()] != null) return String(BUILTINS[t.toLowerCase()]);
-      throw new CalcParseError(`unknown name "${t}"`);
-    }
-    return t;
-  }).join(" ");
-  if (!/^[\d+\-*/().eE\s]+$/.test(replaced)) {
-    throw new CalcParseError(`cannot evaluate "${expr}"`);
-  }
+  let result: number;
   try {
-    // Expression is digits and arithmetic only after substitution.
-    const result = Function(`"use strict"; return (${replaced});`)();
-    if (typeof result !== "number" || !Number.isFinite(result)) {
-      throw new CalcParseError(`"${expr}" did not produce a finite number`);
-    }
-    return result;
+    result = evaluate(expandNumberUnits(expr), { ...BUILTINS, ...scope });
   } catch (err) {
-    if (err instanceof CalcParseError) throw err;
-    throw new CalcParseError(`cannot evaluate "${expr}"`);
+    throw new CalcParseError(err instanceof ExprError ? err.message : `cannot evaluate "${expr}"`);
   }
+  if (!Number.isFinite(result)) {
+    throw new CalcParseError(`"${expr}" did not produce a finite number`);
+  }
+  return result;
 }
 
 export function evaluateCalc(doc: CalcDoc, overrides: Record<string, number> = {}): CalcResult {
@@ -320,4 +340,3 @@ export function evaluateCalc(doc: CalcDoc, overrides: Record<string, number> = {
   return { values, rows };
 }
 
-void SAFE_EXPR;

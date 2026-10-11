@@ -1,17 +1,24 @@
 import { useId } from "react";
 import { toSet, type Many } from "./sets";
+import { canvasAria, summarizeTree } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
+import { inspectLinked } from "./inspectLinked";
 import { alpha, lookupKeyed, type KeyedValues } from "./colors";
 import { SvgLabel } from "./WidgetText";
 import {
+  DEFAULT_KEY_CELL,
+  childAnchorX,
   flattenTree,
   forestFromParents,
+  heapTreeFromArray,
   layoutForest,
   type LayoutNode,
 } from "./treeLayout";
 import { useTweenedPositions, type Point } from "./useTweenedPositions";
 
 export interface TreeNode {
-  value: string | number;
+  /** Optional only because a keyed page carries `keys` instead. */
+  value?: string | number;
   /**
    * Stable identity for highlighting. Highlight sets and pointers match on
    * `id` when a node has one and on `value` otherwise, so trees with repeated
@@ -24,6 +31,15 @@ export interface TreeNode {
   badge?: string | number;
   /** Label drawn on the edge coming down from this node's parent. */
   edgeLabel?: string | number;
+  /**
+   * Several keys in one node: a B-tree or B+-tree page, a segment-tree summary
+   * row, a bucket. Wins over `value`, widens the node to fit, and gives it
+   * `keys.length + 1` child pointers — one in each gap, one at each end — so
+   * child `i` hangs off gap `i`. There is no BPlusTreeView; this is it.
+   */
+  keys?: (string | number)[];
+  /** Marks a B+-tree leaf, so `nextLinks` reads as the sibling chain. */
+  leaf?: boolean;
   left?: TreeNode | null;
   right?: TreeNode | null;
   children?: TreeNode[];
@@ -31,6 +47,15 @@ export interface TreeNode {
 
 export interface TreeViewProps {
   root?: TreeNode | null;
+  /**
+   * Build a complete binary heap from an array: node ids are array indices,
+   * children of `i` are `2i+1` and `2i+2`. Point a ` ```array ` fence at the
+   * same values with `link:` and the two pictures highlight together, which is
+   * why there is no HeapView.
+   */
+  fromArray?: (string | number | null | undefined)[];
+  /** `fromArray` arity. 2 (default) for a binary heap, 4 for a 4-ary one. */
+  arity?: number;
   /** Several trees side by side — disjoint-set forests, or a trie split per
    *  starting letter. Rendered after `root` if both are given. */
   roots?: (TreeNode | null | undefined)[];
@@ -50,6 +75,14 @@ export interface TreeViewProps {
   nodeColors?: KeyedValues<string>;
   /** Node keys that are currently active / highlighted. */
   activeNodes?: Many<string | number>;
+  /**
+   * Which key cells light up inside a keyed page: `{nodeId: [keyIndex, …]}`.
+   * Highlighting one separator in a B-tree page is what makes a search path
+   * legible; highlighting the whole page is not.
+   */
+  activeKeys?: Record<string, number | number[]>;
+  /** Width of one key cell in a keyed page, px. Default 30. */
+  keyCell?: number;
   /** Node keys that are secondary-highlighted. */
   highlightNodes?: Many<string | number>;
   /** Node keys that are dimmed (already processed). */
@@ -99,6 +132,16 @@ export interface TreeViewProps {
   /** Vertical gap between levels in px. */
   vGap?: number;
   nodeSize?: number;
+  /** Accessible name. Defaults to a summary of the tree's size and shape. */
+  ariaLabel?: string;
+  /** Reported when the reader clicks or Enters a node. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Node key → explanation. Selecting such a node reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the hovered node's parent and any `ghostEdges` into it. */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this tree. */
+  widgetId?: string;
 }
 
 const DEFAULTS = {
@@ -129,6 +172,10 @@ export function TreeView({
   root,
   roots,
   parents,
+  fromArray,
+  arity = 2,
+  activeKeys,
+  keyCell = DEFAULT_KEY_CELL,
   badges,
   nodeColors,
   activeNodes: activeNodesIn,
@@ -148,6 +195,11 @@ export function TreeView({
   hGap = DEFAULTS.hGap,
   vGap = DEFAULTS.vGap,
   nodeSize = DEFAULTS.nodeSize,
+  ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "tree",
 }: TreeViewProps) {
   const activeNodes = toSet(activeNodesIn);
   const highlightNodes = toSet(highlightNodesIn);
@@ -161,9 +213,10 @@ export function TreeView({
   const allRoots = [
     ...(root ? [root] : []),
     ...(roots ?? []),
+    ...(fromArray ? [heapTreeFromArray(fromArray, { arity })] : []),
     ...(parents ? forestFromParents(parents) : []),
   ];
-  const layouts = layoutForest(allRoots, { hGap, vGap, nodeSize, showNulls });
+  const layouts = layoutForest(allRoots, { hGap, vGap, nodeSize, keyCell, showNulls });
   const nodes = layouts.flatMap(flattenTree);
 
   // Keys repeat when values repeat without ids; suffix later twins so each
@@ -179,19 +232,20 @@ export function TreeView({
     renderKey.set(n, rk);
     if (!firstByKey.has(base)) firstByKey.set(base, rk);
   }
-  const edges: { parent: LayoutNode; child: LayoutNode }[] = [];
+  const edges: { parent: LayoutNode; child: LayoutNode; index: number }[] = [];
   const walk = (n: LayoutNode) => {
-    for (const c of n.children) {
-      edges.push({ parent: n, child: c });
+    n.children.forEach((c, index) => {
+      edges.push({ parent: n, child: c, index });
       walk(c);
-    }
+    });
   };
   layouts.forEach(walk);
 
   const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
   for (const n of nodes) {
-    if (n.x < bounds.minX) bounds.minX = n.x;
-    if (n.x > bounds.maxX) bounds.maxX = n.x;
+    const half = n.width / 2;
+    if (n.x - half < bounds.minX) bounds.minX = n.x - half;
+    if (n.x + half > bounds.maxX) bounds.maxX = n.x + half;
     if (n.y < bounds.minY) bounds.minY = n.y;
     if (n.y > bounds.maxY) bounds.maxY = n.y;
   }
@@ -199,7 +253,7 @@ export function TreeView({
   const pad = nodeSize + 20;
   const width = nodes.length ? bounds.maxX - bounds.minX + pad * 2 : 0;
   const height = nodes.length ? bounds.maxY - bounds.minY + pad * 2 : 0;
-  const ox = -bounds.minX + pad / 2 + nodeSize / 2;
+  const ox = -bounds.minX + pad / 2;
   const oy = -bounds.minY + pad / 2 + nodeSize / 2;
 
   const target = new Map<string, Point>();
@@ -210,6 +264,11 @@ export function TreeView({
     const rk = firstByKey.get(String(k));
     return rk === undefined ? undefined : tweened.get(rk);
   };
+  const nodeByKey = new Map<string, LayoutNode>();
+  for (const n of nodes) if (!nodeByKey.has(String(n.key))) nodeByKey.set(String(n.key), n);
+  /** Half-width, so a sibling arrow between two keyed pages clears both. */
+  const halfOf = (k: string | number) => (nodeByKey.get(String(k))?.width ?? nodeSize) / 2;
+  const bus = useInspect();
 
   if (nodes.length === 0) {
     return (
@@ -227,6 +286,24 @@ export function TreeView({
     list.push(p);
     pointerMap.set(key, list);
   }
+
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = inspectLinked(bus, widgetId, hoverPredecessors || why !== undefined);
+  const selectable = (key: string | number) =>
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(key) }) !== undefined;
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    const target = bus.hovered.key;
+    for (const { parent, child } of edges) {
+      if (String(child.key) === target) predecessors.add(String(parent.key));
+    }
+    for (const g of ghostEdges) {
+      if (String(g.to) === target) predecessors.add(String(g.from));
+    }
+  }
+
+  const firstSelectable = nodes.find((n) => !n.ghost && selectable(n.key))?.key;
 
   const r = nodeSize / 2;
   const ghostR = r * 0.72;
@@ -259,7 +336,15 @@ export function TreeView({
 
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0", overflow: "auto" }}>
-      <svg width={width} height={height} style={{ display: "block", overflow: "visible" }}>
+      <svg
+        width={width}
+        height={height}
+        {...canvasAria(
+          ariaLabel ?? summarizeTree({ root, roots, parents, activeNodes }),
+          onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+        )}
+        style={{ display: "block", overflow: "visible" }}
+      >
         <defs>
           <marker
             id={markerId}
@@ -314,11 +399,15 @@ export function TreeView({
             </g>
           );
         })}
-        {edges.map(({ parent, child }) => {
-          const a = posOf(parent);
+        {edges.map(({ parent, child, index }) => {
+          const centre = posOf(parent);
           const b = posOf(child);
-          if (!a || !b) return null;
-          const s = trim(a, b, radiusOf(parent), radiusOf(child));
+          if (!centre || !b) return null;
+          // A keyed page hangs child i off gap i, not off its own centre.
+          const a = parent.keys?.length
+            ? { x: childAnchorX({ ...parent, x: centre.x }, index), y: centre.y + nodeSize / 2 }
+            : centre;
+          const s = trim(a, b, parent.keys?.length ? 0 : radiusOf(parent), radiusOf(child));
           const e = { parentKey: parent.key, childKey: child.key, ghost: child.ghost, label: child.edgeLabel };
           const toPruned = prunedNodes?.has(e.childKey) ?? false;
           const lit = !e.ghost && edgeIsLit(e);
@@ -357,8 +446,9 @@ export function TreeView({
           const a = posByKey(link.from);
           const b = posByKey(link.to);
           if (!a || !b) return null;
-          const x1 = a.x + (b.x >= a.x ? r : -r);
-          const x2 = b.x + (b.x >= a.x ? -r : r);
+          const rightward = b.x >= a.x;
+          const x1 = a.x + (rightward ? halfOf(link.from) : -halfOf(link.from));
+          const x2 = b.x + (rightward ? -halfOf(link.to) : halfOf(link.to));
           const y = a.y;
           const lift = Math.min(18, Math.abs(x2 - x1) * 0.2);
           const mid = (x1 + x2) / 2;
@@ -424,30 +514,126 @@ export function TreeView({
           const hasBadge = badge != null && badge !== "";
           const radius = isGhost ? ghostR : r;
 
+          const pageKeys = n.keys;
+          const litKeys = pageKeys
+            ? new Set(toSet(activeKeys?.[String(n.key)] as Many<number>))
+            : null;
+
+          // A ring outside the node, so the author's active / dim styling stays.
+          const isLinked = !isGhost && (predecessors.has(String(n.key)) || linked.has(String(n.key)));
+
           return (
-            <g key={renderKey.get(n)} style={{ opacity, transition: "opacity 0.25s ease" }}>
-              <circle
-                cx={cx}
-                cy={cy}
-                r={radius}
-                fill={fill}
-                stroke={stroke}
-                strokeWidth={2}
-                strokeDasharray={dash}
-                style={{ transition: "fill 0.25s ease, stroke 0.25s ease" }}
-              />
-              <SvgLabel
-                x={cx}
-                y={cy}
-                text={isGhost ? "∅" : n.value}
-                anchor="middle"
-                dominantBaseline="central"
-                fill={textColor}
-                fontSize={isGhost ? 11 : nodeSize > 36 ? 14 : 12}
-                fontWeight={700}
-                fontFamily="ui-monospace, SFMono-Regular, monospace"
-                style={isPruned ? { textDecoration: "line-through" } : undefined}
-              />
+            <g
+              key={renderKey.get(n)}
+              {...(!isGhost && selectable(n.key)
+                ? partHandlers(widgetId, "node", String(n.key), bus, {
+                    onSelect,
+                    why: mergedWhy,
+                    tabbable: n.key === firstSelectable,
+                  })
+                : {})}
+              style={{
+                opacity,
+                transition: "opacity 0.25s ease",
+                cursor: !isGhost && selectable(n.key) ? "pointer" : undefined,
+              }}
+            >
+              {isLinked &&
+                (pageKeys?.length ? (
+                  <rect
+                    x={cx - n.width / 2 - 4}
+                    y={cy - nodeSize / 2 - 4}
+                    width={n.width + 8}
+                    height={nodeSize + 8}
+                    rx={6}
+                    fill="none"
+                    stroke={highlightColor}
+                    strokeWidth={2}
+                  />
+                ) : (
+                  <circle cx={cx} cy={cy} r={radius + 4} fill="none" stroke={highlightColor} strokeWidth={2} />
+                ))}
+              {pageKeys?.length ? (
+                <>
+                  <rect
+                    x={cx - n.width / 2}
+                    y={cy - nodeSize / 2}
+                    width={n.width}
+                    height={nodeSize}
+                    rx={4}
+                    fill={isActive ? fill : "var(--kw-widget-surface, #18181b)"}
+                    stroke={stroke}
+                    strokeWidth={2}
+                    strokeDasharray={dash}
+                    style={{ transition: "fill 0.25s ease, stroke 0.25s ease" }}
+                  />
+                  {pageKeys.map((kv, ki) => {
+                    const cell = n.width / pageKeys.length;
+                    const left = cx - n.width / 2 + ki * cell;
+                    const on = litKeys?.has(ki) ?? false;
+                    return (
+                      <g key={ki}>
+                        {on && (
+                          <rect
+                            x={left + 1}
+                            y={cy - nodeSize / 2 + 1}
+                            width={cell - 2}
+                            height={nodeSize - 2}
+                            rx={3}
+                            fill={activeColor}
+                          />
+                        )}
+                        {ki > 0 && (
+                          <line
+                            x1={left}
+                            y1={cy - nodeSize / 2 + 3}
+                            x2={left}
+                            y2={cy + nodeSize / 2 - 3}
+                            stroke={DEFAULTS.border}
+                            strokeWidth={1}
+                          />
+                        )}
+                        <SvgLabel
+                          x={left + cell / 2}
+                          y={cy}
+                          text={kv}
+                          anchor="middle"
+                          dominantBaseline="central"
+                          fill={on ? "var(--kw-widget-active-foreground, #111827)" : textColor}
+                          fontSize={11}
+                          fontWeight={700}
+                          fontFamily="ui-monospace, SFMono-Regular, monospace"
+                        />
+                      </g>
+                    );
+                  })}
+                </>
+              ) : (
+                <>
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={radius}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={2}
+                    strokeDasharray={dash}
+                    style={{ transition: "fill 0.25s ease, stroke 0.25s ease" }}
+                  />
+                  <SvgLabel
+                    x={cx}
+                    y={cy}
+                    text={isGhost ? "∅" : n.value}
+                    anchor="middle"
+                    dominantBaseline="central"
+                    fill={textColor}
+                    fontSize={isGhost ? 11 : nodeSize > 36 ? 14 : 12}
+                    fontWeight={700}
+                    fontFamily="ui-monospace, SFMono-Regular, monospace"
+                    style={isPruned ? { textDecoration: "line-through" } : undefined}
+                  />
+                </>
+              )}
               {hasBadge && (
                 <>
                   <circle

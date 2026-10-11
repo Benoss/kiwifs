@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { autocompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -14,6 +14,13 @@ import {
   wikiLinkCompletionSource,
   type WikiPage,
 } from "./wikiLinkCompletion";
+import {
+  fenceCompletion,
+  fenceLinter,
+  fencePreviewAt,
+  samePreviewTarget,
+  type FencePreviewTarget,
+} from "./fenceAssist";
 
 export type MarkdownSourceEditorProps = {
   value: string;
@@ -27,6 +34,11 @@ export type MarkdownSourceEditorProps = {
   customSlashCommands?: EditorSlashCommandConfig[];
   loadSlashTemplate?: (templatePath: string) => Promise<string>;
   onSlashTemplateError?: (message: string) => void;
+  /**
+   * Fires with the widget fence the caret is in, or null. A source-mode pane
+   * can render it live, so an author editing YAML can see the picture.
+   */
+  onFenceUnderCursor?: (fence: FencePreviewTarget | null) => void;
 };
 
 export function MarkdownSourceEditor({
@@ -41,7 +53,16 @@ export function MarkdownSourceEditor({
   customSlashCommands = [],
   loadSlashTemplate,
   onSlashTemplateError,
+  onFenceUnderCursor,
 }: MarkdownSourceEditorProps) {
+  // Through a ref, so a parent passing a fresh arrow each render doesn't
+  // rebuild every extension.
+  const fenceCallback = useRef(onFenceUnderCursor);
+  useEffect(() => {
+    fenceCallback.current = onFenceUnderCursor;
+  }, [onFenceUnderCursor]);
+  const wantsFence = onFenceUnderCursor !== undefined;
+
   const extensions = useMemo(() => {
     const saveKeymap = keymap.of([
       {
@@ -54,7 +75,9 @@ export function MarkdownSourceEditor({
       },
     ]);
 
-    const completionSources: CompletionSource[] = [slashCompletionSource];
+    // Fence keys come before the slash menu: inside a widget body an author
+    // wants `activeIndices`, not `/table`.
+    const completionSources: CompletionSource[] = [fenceCompletion, slashCompletionSource];
     if (customSlashCommands.length > 0 && loadSlashTemplate && onSlashTemplateError) {
       completionSources.push(
         customSlashCompletionSource(customSlashCommands, loadSlashTemplate, onSlashTemplateError),
@@ -79,9 +102,33 @@ export function MarkdownSourceEditor({
       }),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       saveKeymap,
+      fenceLinter(),
     ];
+
+    if (wantsFence) {
+      // Only report when the fence actually changed: moving the caret through
+      // prose, or within the same unchanged fence, would otherwise hand the
+      // preview a fresh object (and a re-render) on every keystroke.
+      let last: FencePreviewTarget | null = null;
+      exts.push(
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged && !update.selectionSet) return;
+          const next = fencePreviewAt(update.state, update.state.selection.main.head);
+          if (samePreviewTarget(last, next)) return;
+          last = next;
+          fenceCallback.current?.(next);
+        }),
+      );
+    }
     return exts;
-  }, [onSaveShortcut, pages, customSlashCommands, loadSlashTemplate, onSlashTemplateError]);
+  }, [
+    onSaveShortcut,
+    pages,
+    customSlashCommands,
+    loadSlashTemplate,
+    onSlashTemplateError,
+    wantsFence,
+  ]);
 
   const theme = useMemo(() => markdownEditorTheme({ dark }), [dark]);
 

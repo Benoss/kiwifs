@@ -13,6 +13,8 @@ import {
   type CellValue,
   type OverlayShape,
 } from "./cellOverlay";
+import { canvasAria, summarizeArray, summarizeArrayStack } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef, type InspectState } from "./inspect";
 
 interface CellStyle {
   border: string;
@@ -114,6 +116,73 @@ interface SharedProps {
   flash?: boolean;
   /** Width of the row-label gutter. Defaults to fit the longest label. */
   labelWidth?: number;
+  /** Accessible name. Defaults to a summary of the values and highlights. */
+  ariaLabel?: string;
+  /**
+   * Reported when the reader clicks or Enters a cell. Cells with a `why`
+   * entry are focusable and clickable without this.
+   */
+  onSelect?: (ref: InspectRef) => void;
+  /** Index → explanation. Selecting such a cell reveals it. */
+  why?: Record<string, string>;
+  /**
+   * On hover, light the cells the hovered one reads from — the incoming
+   * `arrows[].from`. Uses data the author already passed.
+   */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this row. */
+  widgetId?: string;
+  /**
+   * Let the reader type a new value into a cell.
+   *
+   * Two pointers over *their* array, not the author's, is the difference
+   * between watching a walkthrough and running one. Nothing is written to the
+   * page: the handler owns the new value.
+   */
+  editable?: boolean;
+  /**
+   * Called with `(index, value, row)` when an edit commits with a changed
+   * value — on Enter or blur, not after Escape. Note the order differs from
+   * MatrixView's `(r, c, value)`.
+   */
+  onCellEdit?: (index: number, value: string, row: number) => void;
+}
+
+interface EditableTarget {
+  textContent: string | null;
+  dataset: DOMStringMap;
+  blur: () => void;
+}
+
+/**
+ * Blur / key handlers for a contentEditable cell. Commits only a changed
+ * value; Escape restores the original and commits nothing.
+ */
+export function cellEditHandlers(original: string, commit: (value: string) => void) {
+  return {
+    onBlur: (e: { currentTarget: EditableTarget }) => {
+      const el = e.currentTarget;
+      if (el.dataset.kwCancel) {
+        delete el.dataset.kwCancel;
+        return;
+      }
+      const value = el.textContent ?? "";
+      if (value !== original) commit(value);
+    },
+    onKeyDown: (e: { key: string; currentTarget: EditableTarget; preventDefault: () => void; stopPropagation: () => void }) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.currentTarget.blur();
+      }
+      if (e.key === "Escape") {
+        e.currentTarget.textContent = original;
+        e.currentTarget.dataset.kwCancel = "1";
+        e.currentTarget.blur();
+      }
+      // Arrows inside a cell move the caret, not the clock.
+      e.stopPropagation();
+    },
+  };
 }
 
 export interface ArrayViewProps extends ArrayRowProps, SharedProps {}
@@ -316,8 +385,18 @@ function ArrayRow({
   colors,
   flash,
   versions,
+  bus,
+  why,
+  widgetId,
+  onSelect,
+  linked,
+  predecessors,
+  editable,
+  onCellEdit,
+  multiRow,
 }: {
   rowIdx: number;
+  multiRow: boolean;
   row: ArrayRowProps;
   lanes: Lanes;
   cellSize: number;
@@ -328,6 +407,14 @@ function ArrayRow({
   colors: { active: string; read: string; highlight: string };
   flash: Set<string>;
   versions: Map<string, number>;
+  bus: InspectState;
+  why: Record<string, string>;
+  widgetId: string;
+  onSelect?: (ref: InspectRef) => void;
+  linked: Set<string>;
+  predecessors: Set<string>;
+  editable: boolean;
+  onCellEdit?: (index: number, value: string, row: number) => void;
 }) {
   const sets = {
     active: activeSet(row),
@@ -335,6 +422,20 @@ function ArrayRow({
     highlight: toSet(row.highlightIndices),
     dim: toSet(row.dimIndices),
   };
+  // A lone row keeps plain index keys, which is what `link: { map: index }`
+  // and `why: { "3": … }` address; in a stack, two rows' cell 3 must differ or
+  // selecting one lights every row.
+  const partKey = (i: number) => (multiRow ? `${rowIdx}:${i}` : String(i));
+  /** A cell is clickable when it has an explanation, or the author asked. */
+  const selectable = (i: number) =>
+    onSelect !== undefined ||
+    whyFor(why, { widget: widgetId, kind: "cell", key: partKey(i) }) !== undefined;
+  /** Lit by a linked widget, or by the predecessor hover. */
+  const lit = (key: string, i: number) => predecessors.has(key) || linked.has(partKey(i));
+  // Roving tabindex: only the first selectable cell of the first row is a tab
+  // stop; the arrows walk the rest.
+  const firstSelectable =
+    rowIdx === 0 ? row.values.findIndex((_, i) => selectable(i)) : -1;
   const top = new Map<number, ArrayPointer[]>();
   const bottom = new Map<number, ArrayPointer[]>();
   for (const p of row.pointers ?? []) {
@@ -405,6 +506,13 @@ function ArrayRow({
                 data-active={sets.active.has(i) ? "" : undefined}
                 title={row.tooltips?.[i] ?? undefined}
                 className={flash.has(key) ? "kw-cell-flash" : undefined}
+                {...(selectable(i)
+                  ? partHandlers(widgetId, "cell", partKey(i), bus, {
+                      onSelect,
+                      why,
+                      tabbable: firstSelectable === i,
+                    })
+                  : {})}
                 style={{
                   width: cellSize,
                   height: cellSize,
@@ -412,7 +520,10 @@ function ArrayRow({
                   border: `2px ${style.borderStyle ?? "solid"} ${style.border}`,
                   background: style.background,
                   color: style.color,
-                  opacity: style.opacity ?? 1,
+                  opacity: lit(key, i) ? 1 : style.opacity ?? 1,
+                  outline: lit(key, i) ? `2px solid ${colors.highlight}` : undefined,
+                  outlineOffset: 1,
+                  cursor: selectable(i) ? "pointer" : undefined,
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
@@ -424,7 +535,22 @@ function ArrayRow({
                   boxSizing: "border-box",
                 }}
               >
-                <span><WidgetText text={cell.text} /></span>
+                {editable && onCellEdit ? (
+                  // contentEditable rather than an <input>: the cell keeps its
+                  // own geometry, and a grid of inputs is a grid of focus rings.
+                  <span
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-label={`Cell ${i}`}
+                    {...cellEditHandlers(cell.text, (value) => onCellEdit(i, value, rowIdx))}
+                    style={{ outline: "none", minWidth: "1ch", cursor: "text" }}
+                  >
+                    {cell.text}
+                  </span>
+                ) : (
+                  <span><WidgetText text={cell.text} /></span>
+                )}
                 {hasSub && (
                   <span style={{ fontSize: "0.55rem", fontWeight: 500, opacity: 0.6, lineHeight: 1 }}>
                     <WidgetText text={sub} />
@@ -461,6 +587,13 @@ export function ArrayStack({
   flash = true,
   labelWidth,
   rowGap,
+  ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "array",
+  editable = false,
+  onCellEdit,
 }: ArrayStackProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -512,8 +645,38 @@ export function ArrayStack({
     else if (r.right > o.right - 8) outer.scrollLeft += r.right - o.right + 24;
   }, [activeSig, wrap]);
 
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const interactive = onSelect !== undefined || Object.keys(mergedWhy).length > 0;
+  const linked = bus.linkedKeys(widgetId);
+  // Hovering a cell lights what it reads from, using the arrows already drawn.
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    const target = bus.hovered.key;
+    for (const a of arrows ?? []) {
+      if (`${a.to[0]}:${a.to[1]}` === target || String(a.to[1]) === target) {
+        predecessors.add(`${a.from[0]}:${a.from[1]}`);
+      }
+    }
+    rows.forEach((r, ri) => {
+      for (const a of r.arrows ?? []) {
+        if (String(a.to) === target || `${ri}:${a.to}` === target) predecessors.add(`${ri}:${a.from}`);
+      }
+    });
+  }
+
+  const label =
+    ariaLabel ??
+    (rows.length === 1
+      ? summarizeArray({ ...rows[0]!, values: rows[0]!.values })
+      : summarizeArrayStack(rows));
+
   return (
-    <div ref={outerRef} style={{ overflowX: wrap ? "visible" : "auto", padding: "0.75rem 0" }}>
+    <div
+      ref={outerRef}
+      {...canvasAria(label, interactive)}
+      style={{ overflowX: wrap ? "visible" : "auto", padding: "0.75rem 0" }}
+    >
       <div
         ref={innerRef}
         style={{
@@ -530,6 +693,7 @@ export function ArrayStack({
           <ArrayRow
             key={ri}
             rowIdx={ri}
+            multiRow={rows.length > 1}
             row={r}
             lanes={lanes[ri]!}
             cellSize={size}
@@ -540,6 +704,14 @@ export function ArrayStack({
             colors={colors}
             flash={flashSet}
             versions={versions}
+            bus={bus}
+            why={mergedWhy}
+            widgetId={widgetId}
+            onSelect={onSelect}
+            linked={linked}
+            predecessors={predecessors}
+            editable={editable}
+            onCellEdit={onCellEdit}
           />
         ))}
         {needsOverlay && (
@@ -551,6 +723,13 @@ export function ArrayStack({
 }
 
 export function ArrayView({
+  ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors,
+  widgetId,
+  editable,
+  onCellEdit,
   activeColor,
   highlightColor,
   readColor,
@@ -565,6 +744,13 @@ export function ArrayView({
   return (
     <ArrayStack
       rows={[{ ...row, showIndices }]}
+      ariaLabel={ariaLabel}
+      onSelect={onSelect}
+      why={why}
+      hoverPredecessors={hoverPredecessors}
+      widgetId={widgetId}
+      editable={editable}
+      onCellEdit={onCellEdit}
       activeColor={activeColor}
       highlightColor={highlightColor}
       readColor={readColor}

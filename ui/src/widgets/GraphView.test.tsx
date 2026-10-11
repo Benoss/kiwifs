@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GraphView } from "./GraphView";
+import yaml from "js-yaml";
+import { GraphView, graphToYAML } from "./GraphView";
 import { SequenceView } from "./SequenceView";
 
 describe("GraphView", () => {
@@ -97,5 +98,34 @@ describe("SequenceView", () => {
     expect(html).toContain(">2. INSERT<");
     expect(html).not.toContain("201 Created");
     expect(html).toContain(">alt<");
+  });
+});
+
+describe("graphToYAML", () => {
+  it("quotes strings YAML would retype, so the body round-trips", () => {
+    const nodes = [
+      { id: "007", label: "true" },
+      { id: "n", label: "no" },
+      { id: "t", label: "~" },
+      { id: "d", label: "- dash" },
+      { id: "c", label: "key: value" },
+      { id: "h", label: "a #comment" },
+      { id: "e", label: "" },
+      { id: "q", label: "? why" },
+      { id: 5, label: "Mobile app", x: 10.4, y: 20.6 },
+    ];
+    const edges = [{ from: "007", to: "n", label: "null" }];
+    const text = graphToYAML(nodes, edges, true);
+    const back = yaml.load(text) as { directed: boolean; nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] };
+    expect(back.directed).toBe(true);
+    expect(back.nodes.map((n) => n.label)).toEqual(nodes.map((n) => n.label));
+    expect(back.nodes[0]!.id).toBe("007");
+    expect(back.nodes[8]).toEqual({ id: 5, label: "Mobile app", x: 10, y: 21 });
+    expect(back.edges[0]).toEqual({ from: "007", to: "n", label: "null" });
+  });
+
+  it("keeps one compact line per node", () => {
+    const text = graphToYAML([{ id: "a", label: "A" }], [], false);
+    expect(text).toBe("nodes:\n  - {id: a, label: A}\n");
   });
 });

@@ -1,6 +1,8 @@
 import { alpha } from "./colors";
 import { toSet, type Many } from "./sets";
 import { SvgLabel } from "./WidgetText";
+import { canvasAria, summarizeLinkedList } from "./widgetA11y";
+import { partHandlers, useInspect, whyFor, type InspectRef } from "./inspect";
 
 export interface LLNode {
   value: string | number;
@@ -47,6 +49,16 @@ export interface LinkedListViewProps {
   activeColor?: string;
   highlightColor?: string;
   nodeWidth?: number;
+  /** Accessible name. Defaults to a summary of the nodes and pointers. */
+  ariaLabel?: string;
+  /** Reported when the reader clicks or Enters a node. */
+  onSelect?: (ref: InspectRef) => void;
+  /** Index → explanation. Selecting such a node reveals it. */
+  why?: Record<string, string>;
+  /** On hover, light the node whose `next` points at the hovered one. */
+  hoverPredecessors?: boolean;
+  /** Name for the inspect bus, so a `link:` can address this list. */
+  widgetId?: string;
 }
 
 const DEFAULTS = {
@@ -93,9 +105,31 @@ export function LinkedListView({
   activeColor = DEFAULTS.activeColor,
   highlightColor = DEFAULTS.highlightColor,
   nodeWidth = DEFAULTS.nodeWidth,
+  ariaLabel,
+  onSelect,
+  why,
+  hoverPredecessors = false,
+  widgetId = "list",
 }: LinkedListViewProps) {
   const highlightIndices = toSet(highlightIndicesIn);
   const dimIndices = toSet(dimIndicesIn);
+  const bus = useInspect();
+  const mergedWhy = { ...bus.why, ...(why ?? {}) };
+  const linked = bus.linkedKeys(widgetId);
+  const selectable = (i: number) =>
+    onSelect !== undefined ||
+    whyFor(mergedWhy, { widget: widgetId, kind: "node", key: String(i) }) !== undefined;
+  // The predecessor of a node is whoever's `next` lands on it — the chain
+  // itself, plus any explicit `next: <index>` that closes a cycle.
+  const predecessors = new Set<string>();
+  if (hoverPredecessors && bus.hovered?.widget === widgetId) {
+    const target = Number(bus.hovered.key);
+    nodes.forEach((n, i) => {
+      const next = typeof n.next === "number" ? n.next : n.next === false || n.next === null ? -1 : i + 1;
+      if (next === target) predecessors.add(String(i));
+    });
+  }
+  const firstSelectable = nodes.findIndex((_, i) => selectable(i));
   if (nodes.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: 16, color: DEFAULTS.dimColor, fontSize: "0.8rem" }}>
@@ -163,7 +197,15 @@ export function LinkedListView({
 
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "0.5rem 0", overflow: "auto" }}>
-      <svg width={width} height={height} style={{ display: "block" }}>
+      <svg
+        width={width}
+        height={height}
+        {...canvasAria(
+          ariaLabel ?? summarizeLinkedList({ nodes, doubly, pointers }),
+          onSelect !== undefined || Object.keys(mergedWhy).length > 0,
+        )}
+        style={{ display: "block" }}
+      >
         <defs>
           <marker id={ARROW} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
             <polygon points="0 0, 8 3, 0 6" fill={DEFAULTS.border} />
@@ -240,10 +282,26 @@ export function LinkedListView({
           const terminates = node.next === false || node.next === null;
 
           return (
-            <g key={`b${i}`} style={{ transition: "all 0.2s ease", opacity: s.opacity }}>
+            <g
+              key={`b${i}`}
+              {...(selectable(i)
+                ? partHandlers(widgetId, "node", String(i), bus, {
+                    onSelect,
+                    why: mergedWhy,
+                    tabbable: firstSelectable === i,
+                  })
+                : {})}
+              style={{
+                transition: "all 0.2s ease",
+                opacity: s.opacity,
+                cursor: selectable(i) ? "pointer" : undefined,
+              }}
+            >
               <rect
                 x={x} y={boxTop} width={boxW} height={BOX_H} rx={6}
-                fill={s.bg} stroke={s.border} strokeWidth={2}
+                fill={s.bg}
+                stroke={predecessors.has(String(i)) || linked.has(String(i)) ? highlightColor : s.border}
+                strokeWidth={predecessors.has(String(i)) || linked.has(String(i)) ? 3 : 2}
               />
               <line
                 x1={nextCellX} y1={boxTop} x2={nextCellX} y2={boxTop + BOX_H}

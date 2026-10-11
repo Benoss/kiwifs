@@ -785,7 +785,7 @@ func (s *SQLite) PageViews(ctx context.Context, limit int, path string, since in
 }
 
 func generateSnippet(content []byte, queryTerms []string, maxLen int) string {
-	lines := strings.Split(markdown.RedactQuiz(string(content)), "\n")
+	lines := strings.Split(searchableText(string(content)), "\n")
 
 	// Score each line by number of distinct query terms it contains,
 	// skipping frontmatter, headings, and very short lines.
@@ -888,6 +888,16 @@ func generateSnippet(content []byte, queryTerms []string, maxLen int) string {
 	return result
 }
 
+// searchableText is what FTS stores for a page.
+//
+// Quiz answers are redacted so they never surface in a snippet, and widget
+// fences are reduced to their captions and step notes: a body of
+// `activeIndices` and `cellColors` keys is coordinates, and leaving it in
+// skewed BM25 against every page that draws a picture.
+func searchableText(content string) string {
+	return markdown.RedactQuiz(markdown.IndexableContent(content))
+}
+
 func (s *SQLite) Index(ctx context.Context, path string, content []byte) error {
 	if !storage.IsKnowledgeFile(path) {
 		return nil
@@ -905,7 +915,7 @@ func (s *SQLite) Index(ctx context.Context, path string, content []byte) error {
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO docs(rowid, path, content) VALUES (?, ?, ?)`,
-		rowid, path, markdown.RedactQuiz(string(content))); err != nil {
+		rowid, path, searchableText(string(content))); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -939,7 +949,7 @@ func (s *SQLite) IndexBatch(ctx context.Context, files []IndexEntry) error {
 		if _, err := pathStmt.ExecContext(ctx, rid, f.Path); err != nil {
 			return fmt.Errorf("index batch doc_path %s: %w", f.Path, err)
 		}
-		if _, err := docStmt.ExecContext(ctx, rid, f.Path, markdown.RedactQuiz(string(f.Content))); err != nil {
+		if _, err := docStmt.ExecContext(ctx, rid, f.Path, searchableText(string(f.Content))); err != nil {
 			return fmt.Errorf("index batch doc %s: %w", f.Path, err)
 		}
 	}
@@ -2257,7 +2267,7 @@ func (s *SQLite) reindexLocked(ctx context.Context) (int, error) {
 			return nil
 		}
 		rid := pathRowID(e.Path)
-		if _, err := docStmt.ExecContext(ctx, rid, e.Path, markdown.RedactQuiz(string(content))); err != nil {
+		if _, err := docStmt.ExecContext(ctx, rid, e.Path, searchableText(string(content))); err != nil {
 			return fmt.Errorf("insert doc %s: %w", e.Path, err)
 		}
 		if _, err := pathStmt.ExecContext(ctx, rid, e.Path); err != nil {

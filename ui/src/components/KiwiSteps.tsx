@@ -66,7 +66,8 @@ export function KiwiSteps({ source, onNavigate }: Props) {
         <CodeHighlight
           code={config.code}
           lang={config.lang || "text"}
-          activeLine={current.line != null ? current.line - 1 : undefined}
+          indexBase={1}
+          activeLine={current.line}
         />
       )}
       <PlaybackControls
