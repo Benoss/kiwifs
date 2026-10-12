@@ -57,6 +57,7 @@ export const arraySpec: FenceSpec = {
     "One or more arrays on a shared index axis, with pointers, dependency arrows and span brackets.",
   component: ArrayAny,
   required: ["values", "rows"],
+  requireOneOf: ["values", "rows"],
   schema: {
     attributes: {
       ...ARRAY_ROW_ATTRS,

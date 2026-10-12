@@ -14,6 +14,7 @@ export const matrixSpec: FenceSpec = {
     "An index-addressed table: DP tables, grids, adjacency matrices, confusion matrices. Cells take `[r, c]` or `\"r,c\"`.",
   component: MatrixView,
   required: ["values", "layers"],
+  requireOneOf: ["values", "layers"],
   schema: {
     attributes: {
       values: {
