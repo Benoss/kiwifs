@@ -18,6 +18,7 @@ export const treeSpec: FenceSpec = {
   // A bare ```tree holding a directory listing has none of these and falls
   // through to a plain code block, which is the whole point of sniffing.
   required: ["root", "roots", "parents", "fromArray"],
+  requireOneOf: ["root", "roots", "parents", "fromArray"],
   schema: {
     attributes: {
       root: {

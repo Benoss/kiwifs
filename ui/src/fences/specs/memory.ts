@@ -13,6 +13,7 @@ export const memorySpec: FenceSpec = {
     "Frames on the left, heap on the right, pointers between: aliasing, mutation, closures, recursion. Props are the Python Tutor trace format, so a recorded trace drops straight in.",
   component: MemoryView,
   required: ["frames", "heap"],
+  requireOneOf: ["frames", "heap"],
   // `frames` here means stack frames, not "one prop set per step". It is the
   // second spec to need this, which is the cost of `frames` as a reserved
   // name; `steps:` is what authors actually write.

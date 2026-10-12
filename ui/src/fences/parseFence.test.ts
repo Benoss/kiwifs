@@ -132,6 +132,14 @@ props:
     expect(issue?.message).toContain('needs one of "rows", "fromData"');
   });
 
+  it("errors on an array or tree with nothing to draw", () => {
+    expect(parseFence(arraySpec, `label: dp\n`).issues.map((i) => i.message)).toContain(
+      'needs one of "values", "rows"',
+    );
+    expect(parseFence(treeSpec, `layout: compact\n`).issues.some((i) => i.message.startsWith("needs one of"))).toBe(true);
+    expect(parseFence(arraySpec, `steps:\n  - values: [1]\n`).issues).toEqual([]);
+  });
+
   it("accepts either member of a one-of group", () => {
     expect(parseFence(tableSpec, `columns: [{key: a}]\nrows: []\n`).issues).toEqual([]);
     expect(parseFence(tableSpec, `fromData: latency\n`).issues).toEqual([]);

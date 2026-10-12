@@ -118,6 +118,29 @@ func TestLintWidgetFenceRequireOneOf(t *testing.T) {
 	}
 }
 
+func TestStrictFenceWithoutDataKeyErrors(t *testing.T) {
+	for tag, want := range map[string]string{
+		"kiwi-array":  `needs one of "values", "rows"`,
+		"kiwi-matrix": `needs one of "values", "layers"`,
+		"kiwi-tree":   `needs one of "root", "roots", "parents", "fromArray"`,
+		"kiwi-memory": `needs one of "frames", "heap"`,
+	} {
+		issues := lintFenceSource(t, page("```"+tag+"\ntitle: nothing to draw\n```"))
+		found := false
+		for _, issue := range issues {
+			if issue.Severity == "error" && strings.Contains(issue.Message, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected %q, got %+v", tag, want, issues)
+		}
+	}
+	if got := lintFenceSource(t, page("```kiwi-array\nsteps:\n  - values: [1, 2]\n```")); len(got) != 0 {
+		t.Errorf("values introduced in step one should satisfy the group, got %+v", got)
+	}
+}
+
 func TestLintWidgetFenceRequiredMayArriveInAStep(t *testing.T) {
 	// `bits` needs a `value`, and a walkthrough naturally introduces it in
 	// step one rather than repeating it at the top.
