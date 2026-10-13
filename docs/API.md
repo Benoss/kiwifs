@@ -65,6 +65,7 @@ POST   /api/kiwi/refactor/approve          → a person approves a plan for an a
 GET    /api/kiwi/refactor/pending          → plans agents are waiting to have approved
 GET    /api/kiwi/refactor/raw-moves        → moves made without relinking, and the relinks manifest that repairs them
 POST   /api/kiwi/refactor/from-workspace-edit → an editor's LSP WorkspaceEdit renames as a manifest + plan
+POST   /api/kiwi/refactor/script           → run a read-only Starlark script that returns a manifest; answers manifest + plan
 POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
 ```
 
@@ -112,6 +113,14 @@ LSP `WorkspaceEdit` (renames, minimal text edits, a `needsConfirmation`
 annotation); `kiwifs lsp` is a language server that answers
 `workspace/willRenameFiles`, so renaming a page in VS Code, Zed or Neovim
 relinks it through the same planner.
+
+When selection needs real logic, `POST /refactor/script` (MCP
+`kiwi_refactor_script`) runs a [Starlark](https://github.com/google/starlark-go)
+program in a separate, sandboxed process. It can only read — `query(dql)`,
+`files(glob)`, `read(path)`, `frontmatter(path)`, `links(path)`, `slug()`,
+`json` — and returns a manifest from `main()`; steps, memory, time and reads
+are bounded. Nothing is written: the manifest is planned, and applied like any
+other.
 
 Moves that bypass the engine — WebDAV/NFS renames, `update_links=false`, files
 moved on disk while the watcher runs — are logged when anything referenced the

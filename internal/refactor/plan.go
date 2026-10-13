@@ -1151,3 +1151,36 @@ func (p *planner) digest() string {
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
+
+// LinkResolver resolves pages' links against one snapshot of the
+// workspace's file list, the way plans do.
+type LinkResolver struct {
+	idx   *links.PathIndex
+	typed []string
+}
+
+// NewLinkResolver lists the workspace once.
+func NewLinkResolver(ctx context.Context, ws Workspace) (*LinkResolver, error) {
+	files, err := listFiles(ctx, ws.Store)
+	if err != nil {
+		return nil, err
+	}
+	return &LinkResolver{idx: links.BuildPathIndex(files), typed: ws.typedFields()}, nil
+}
+
+// OutLinks lists the paths the page at path (with content) links to, each
+// once, in order; links that point nowhere are left out.
+func (r *LinkResolver) OutLinks(path string, content []byte) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, ref := range scanAll(content, r.typed) {
+		if ref.Unsplicable {
+			continue
+		}
+		if t := resolve(r.idx, ref.Kind, ref.Path, path); t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}

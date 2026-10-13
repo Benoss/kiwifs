@@ -1063,6 +1063,26 @@ func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest,
 	return r.refactorCall(ctx, "/refactor/apply", map[string]any{"manifest": m, "digest": digest, "approved": approved}, actor, false)
 }
 
+func (r *RemoteBackend) RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error) {
+	body, err := json.Marshal(map[string]string{"script": src})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/script", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor, "X-Kiwi-Client", clientName(ctx))
+	if err != nil {
+		return nil, err
+	}
+	data, err := r.readBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	var out ScriptResult
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (r *RemoteBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
 	var out struct {
 		Moves    []pipeline.RawMove `json:"moves"`

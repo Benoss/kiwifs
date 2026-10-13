@@ -613,6 +613,7 @@ func (s *Server) setupRoutes() {
 	api.GET("/refactor/raw-moves", h.RefactorRawMoves)
 	api.GET("/refactor/pending", h.RefactorPending)
 	api.POST("/refactor/from-workspace-edit", h.RefactorFromWorkspaceEdit)
+	api.POST("/refactor/script", h.RefactorScript)
 	api.GET("/health-check", h.HealthCheck)
 	api.GET("/context", h.Context)
 	api.GET("/rules", h.Rules)

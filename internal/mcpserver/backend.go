@@ -70,6 +70,14 @@ type BulkFile struct {
 	IfMatch string `json:"if_match,omitempty"`
 }
 
+// ScriptResult is a refactor script's manifest, what it printed, and the
+// plan of that manifest.
+type ScriptResult struct {
+	Manifest json.RawMessage `json:"manifest"`
+	Output   string          `json:"output,omitempty"`
+	Plan     *refactor.Plan  `json:"plan"`
+}
+
 // RefactorApplyResult is what applying a restructuring did, with the plan
 // that was applied (or, on ErrDigestMismatch, the fresh plan to review).
 type RefactorApplyResult struct {
@@ -185,6 +193,9 @@ type Backend interface {
 	// unless approved (the user said yes through elicitation) or a human
 	// approved the digest.
 	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error)
+	// RefactorScript runs a read-only Starlark script that returns a
+	// manifest, and plans it. Nothing is written.
+	RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error)
 	// RawMoves lists moves that left references behind, with the relinks
 	// manifest that repairs them (nil when nothing needs repair).
 	RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error)

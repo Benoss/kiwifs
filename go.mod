@@ -55,6 +55,7 @@ require (
 	github.com/yuin/goldmark v1.8.5
 	github.com/yuin/goldmark-meta v1.1.0
 	go.mongodb.org/mongo-driver/v2 v2.5.1
+	go.starlark.net v0.0.0-20260908191801-89a6a09411d5
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0

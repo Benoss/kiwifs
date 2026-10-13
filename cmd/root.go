@@ -31,7 +31,9 @@ func Execute() {
 func init() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Async version check on every invocation (non-blocking, cached 24h)
-		if cmd.Name() != "update" {
+		// The script worker runs sandboxed per script; it must not reach
+		// the network.
+		if cmd.Name() != "update" && cmd.Name() != "__refactor-script" {
 			CheckVersionAsync()
 		}
 	}

@@ -320,6 +320,17 @@ func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, a
 	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor, Client: clientName(ctx)})
 }
 
+func (b *LocalBackend) RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	res, plan, err := b.stack.Pipeline.RunRefactorScript(ctx, src, refactor.Options{Actor: actor, Client: clientName(ctx)})
+	if err != nil {
+		return nil, err
+	}
+	return &ScriptResult{Manifest: res.Raw, Output: res.Output, Plan: plan}, nil
+}
+
 func (b *LocalBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
 	if err := b.init(); err != nil {
 		return nil, nil, err

@@ -146,6 +146,20 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 			Handler: handleRefactorApply(b),
 		},
 		server.ServerTool{
+			Tool: mcp.NewTool("kiwi_refactor_script",
+				mcp.WithDescription("Compute a restructuring manifest with a Starlark (Python-like) program when globs, DQL and when:/move_to expressions are not enough. "+
+					"The program runs out of process and can only read: query(dql) → paths, files(glob) → paths, read(path) → text, frontmatter(path) → dict, links(path) → paths, slug(text), json, print. "+
+					"It returns the manifest from main() (or sets a global manifest). Nothing is written: the result is planned like kiwi_refactor_plan, and you apply it with kiwi_refactor_apply using the returned manifest and digest. "+
+					"No while loops or recursion; steps, memory and time are bounded."),
+				mcp.WithString("script", mcp.Required(), mcp.Description("Starlark source, e.g.\ndef main():\n    return {\"moves\": [{\"from\": p, \"to\": \"archive/\"} for p in query('status = \"done\"')]}"), mcp.MaxLength(256*1024)),
+				mcp.WithString("actor", mcp.Description("Who will apply it — defaults to mcp-agent")),
+				mcp.WithReadOnlyHintAnnotation(true),
+				mcp.WithDestructiveHintAnnotation(false),
+				mcp.WithOpenWorldHintAnnotation(false),
+			),
+			Handler: handleRefactorScript(b, plans),
+		},
+		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_refactor_revert",
 				mcp.WithDescription("Undo a commit (usually a kiwi_refactor_apply, whose result names it) as a new commit: pages go back to their previous bytes, comments and personal state to where they were. "+
 					"Without digest it only previews; pass the preview's digest to apply. Refused if any affected page changed since — it never discards later work."),
@@ -458,6 +472,34 @@ func approvedContent(content any) bool {
 	}
 	v, _ := m["approve"].(bool)
 	return v
+}
+
+func handleRefactorScript(b Backend, plans *planCache) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		src, _ := args["script"].(string)
+		if strings.TrimSpace(src) == "" {
+			return mcp.NewToolResultError("script is required"), nil
+		}
+		actor, _ := args["actor"].(string)
+		if actor == "" {
+			actor = "mcp-agent"
+		}
+		res, err := b.RefactorScript(ctx, src, actor)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("The script failed: %v", err)), nil
+		}
+		view := viewPlan(res.Plan, false, 0, 25)
+		if plans != nil && res.Plan != nil && res.Plan.Digest != "" {
+			plans.put(res.Plan)
+			view.Resource = planURI(res.Plan.Digest)
+		}
+		return structured(map[string]any{
+			"manifest": res.Manifest,
+			"output":   res.Output,
+			"plan":     view,
+		}), nil
+	}
 }
 
 func handleRefactorRevert(b Backend) server.ToolHandlerFunc {

@@ -293,3 +293,32 @@ func (h *Handlers) RefactorFromWorkspaceEdit(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]any{"manifest": m, "plan": plan, "ignored": ignored})
 }
+
+// RefactorScript godoc
+//
+//	@Summary		Compute a manifest with a script
+//	@Description	Runs a Starlark script, out of process and read-only (query, files, read, frontmatter, links), that returns a restructuring manifest, and answers with the manifest, what the script printed, and its plan. Nothing is written; apply the manifest with /refactor/apply and the plan's digest.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		map[string]string	true	"{\"script\": \"def main(): ...\"}"
+//	@Success		200		{object}	map[string]any
+//	@Failure		422		{object}	map[string]string
+//	@Router			/api/kiwi/refactor/script [post]
+func (h *Handlers) RefactorScript(c echo.Context) error {
+	var req struct {
+		Script string `json:"script"`
+	}
+	if err := bindJSON(c, &req); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Script) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "script is required")
+	}
+	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
+	res, plan, err := h.pipe.RunRefactorScript(c.Request().Context(), req.Script, refactor.Options{Actor: actor, Client: requestClient(c)})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{"manifest": res.Raw, "output": res.Output, "plan": plan})
+}

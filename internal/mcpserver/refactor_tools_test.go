@@ -462,3 +462,49 @@ func TestRefactorPlanIsReadableAsAResource(t *testing.T) {
 		t.Fatalf("resource = %s", body)
 	}
 }
+
+func TestRefactorScriptToolPlansWhatTheScriptReturns(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{
+		"notes/2024-a.md": "---\nstatus: done\n---\n# A\n",
+		"notes/2025-b.md": "---\nstatus: open\n---\n# B\n",
+		"index.md":        "[a](notes/2024-a.md)\n",
+	})
+	src := `
+def main():
+    moves = []
+    for p in files("notes/*.md"):
+        if frontmatter(p).get("status") == "done":
+            moves.append({"from": p, "to": "archive/" + p.split("/")[-1][:4] + "/"})
+    print(len(moves), "to archive")
+    return {"moves": moves}
+`
+	res := callTool(t, handleRefactorScript(b, nil), "kiwi_refactor_script", map[string]any{"script": src})
+	if res.IsError {
+		t.Fatalf("script: %s", resultText(res))
+	}
+	var out struct {
+		Manifest json.RawMessage `json:"manifest"`
+		Output   string          `json:"output"`
+		Plan     planView        `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Output != "1 to archive\n" || out.Plan.Counts.Moves != 1 || out.Plan.Moves[0].To != "archive/2024/2024-a.md" {
+		t.Fatalf("result = %s", resultText(res))
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes/2024-a.md")); err != nil {
+		t.Fatal("a script must not change anything")
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out.Manifest, &m)
+	apply := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": m, "digest": out.Plan.Digest})
+	if apply.IsError {
+		t.Fatalf("apply: %s", resultText(apply))
+	}
+	if readTree(t, root, "index.md") != "[a](archive/2024/2024-a.md)\n" {
+		t.Fatalf("index.md = %q", readTree(t, root, "index.md"))
+	}
+}
