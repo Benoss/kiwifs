@@ -155,6 +155,8 @@ export function apiErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const D2_GET_LIMIT = 6000;
+
 let _baseOverride: string | null = null;
 let _extraHeaders: Record<string, string> = {};
 
@@ -613,6 +615,21 @@ export const api = {
     if (opts?.offset != null) qs.set("offset", String(opts.offset));
     if (opts?.format) qs.set("format", opts.format);
     return request(`${kiwiBase()}/query?${qs}`);
+  },
+
+  /**
+   * GET where it fits in a URL, because public-space readers and read-only
+   * tokens may only GET; POST for sources too long for proxies to accept.
+   */
+  async renderD2(source: string, theme: "light" | "dark"): Promise<string> {
+    const qs = new URLSearchParams({ source, theme });
+    const url = `${kiwiBase()}/render/d2`;
+    if (qs.toString().length <= D2_GET_LIMIT) return request(`${url}?${qs}`);
+    return request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, theme }),
+    });
   },
 
   async meta(opts: {

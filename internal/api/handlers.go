@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/claims"
 	"github.com/kiwifs/kiwifs/internal/comments"
 	"github.com/kiwifs/kiwifs/internal/config"
+	"github.com/kiwifs/kiwifs/internal/d2render"
 	"github.com/kiwifs/kiwifs/internal/dataview"
 	"github.com/kiwifs/kiwifs/internal/draft"
 	"github.com/kiwifs/kiwifs/internal/events"
@@ -81,6 +83,9 @@ type Handlers struct {
 
 	memoryCache atomic.Value // *memoryCacheEntry
 	memoryGroup singleflight.Group
+
+	d2Once sync.Once
+	d2     *d2render.Renderer
 }
 
 func (h *Handlers) invalidateGraphCache() {

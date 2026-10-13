@@ -37,6 +37,7 @@ const KiwiWidget = lazy(() => import("./KiwiWidget").then((m) => ({ default: m.K
 const CodeRunner = lazy(() => import("@kw/widgets/CodeRunner").then((m) => ({ default: m.CodeRunner })));
 const PageTracker = lazy(() => import("@kw/widgets/PageTracker").then((m) => ({ default: m.PageTracker })));
 const MermaidDiagram = lazy(() => import("./MermaidDiagram").then((m) => ({ default: m.MermaidDiagram })));
+const D2Diagram = lazy(() => import("./D2Diagram").then((m) => ({ default: m.D2Diagram })));
 const KiwiSteps = lazy(() => import("./KiwiSteps").then((m) => ({ default: m.KiwiSteps })));
 const KiwiChart = lazy(() => import("./KiwiChart").then((m) => ({ default: m.KiwiChart })));
 const KiwiApp = lazy(() => import("./KiwiApp").then((m) => ({ default: m.KiwiApp })));
@@ -99,6 +100,7 @@ type BlockKind =
   | "widget"
   | "query"
   | "mermaid"
+  | "d2"
   | "calc"
   | "chart"
   | "color"
@@ -124,6 +126,7 @@ const EXACT: Record<string, BlockKind> = {
   "widget:tracker": "tracker",
   "kiwi-query": "query",
   mermaid: "mermaid",
+  d2: "d2",
   "kiwi-calc": "calc",
   "kiwi-chart": "chart",
   "kiwi-color": "color",
@@ -208,6 +211,8 @@ export function FenceBlock({
       const { focus, dim } = parseMermaidMeta(meta);
       return <Deferred><MermaidDiagram chart={raw} onNavigate={onNavigate} focus={focus} dim={dim} /></Deferred>;
     }
+    case "d2":
+      return <Deferred><D2Diagram source={raw} /></Deferred>;
     case "calc":
       return <KiwiCalc source={raw} />;
     case "chart":

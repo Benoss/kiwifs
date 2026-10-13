@@ -14,6 +14,7 @@ For the full interactive API reference, see [docs.kiwifs.com/api-reference](http
 
 - [Health](#health)
 - [Files](#files)
+- [Rendering](#rendering)
 - [Search](#search)
 - [Versioning](#versioning)
 - [Metadata and Queries](#metadata-and-queries)
@@ -48,6 +49,23 @@ GET    /api/kiwi/backlinks?path=           → pages that link to this page
 GET    /api/kiwi/context                   → schema + playbook + index in one call
 GET    /api/kiwi/changes?since=&limit=     → git-based change feed
 ```
+
+---
+
+## Rendering
+
+```
+GET    /api/kiwi/render/d2?source=&theme=  → D2 diagram as SVG (theme: light | dark)
+POST   /api/kiwi/render/d2                 → same, body {"source": "...", "theme": "dark"}
+```
+
+A ```` ```d2 ```` fence renders through this endpoint. Rendering is in-process
+(D2's layout engines are native Go): no subprocess, no network, `@import`
+disabled, `dagre` or `elk` layout, 64 KB source limit, 10 s timeout. Results
+are cached under `.kiwi/state/d2/` by content hash and served with an `ETag`.
+A diagram error is a `422` carrying D2's message. Binaries built with
+`-tags nod2` leave D2 out (about 16 MB) and answer `501`; the UI then shows
+the fence as code.
 
 ---
 
