@@ -810,6 +810,7 @@ type renameRequest struct {
 //	@Tags			files
 //	@Security		BearerAuth
 //	@Param			update_links	query		bool			false	"If true, automatically updates links to the renamed file (default true)"
+//	@Param			overwrite		query		bool			false	"Replace an existing destination, like rename(2) (for protocol clients' atomic saves)"
 //	@Param			body			body		renameRequest	true	"Rename request body containing source and target paths"
 //	@Param			X-Actor			header		string			false	"Actor identity performing the rename"
 //	@Success		200				{object}	map[string]interface{}
@@ -829,7 +830,14 @@ func (h *Handlers) RenameFile(c echo.Context) error {
 	updateLinks := c.QueryParam("update_links") != "false"
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
 
-	res, updatedLinks, err := h.pipe.RenameWithLinks(c.Request().Context(), req.From, req.To, actor, updateLinks)
+	var res pipeline.Result
+	var updatedLinks []string
+	var err error
+	if c.QueryParam("overwrite") == "true" {
+		res, updatedLinks, err = h.pipe.RenameReplacing(c.Request().Context(), req.From, req.To, actor)
+	} else {
+		res, updatedLinks, err = h.pipe.RenameWithLinks(c.Request().Context(), req.From, req.To, actor, updateLinks)
+	}
 	if err != nil {
 		if errors.Is(err, storage.ErrPathDenied) {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())

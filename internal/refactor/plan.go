@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -84,6 +85,15 @@ type Plan struct {
 	State       []StateEdit  `json:"state,omitempty"`
 	RemovedDirs []string     `json:"removed_dirs,omitempty"`
 	Errors      []string     `json:"errors,omitempty"`
+	// Base is HEAD when the plan was built (informational: drift is
+	// detected per file by ETag, not by HEAD). ManifestHash identifies the
+	// request. Neither is part of the digest.
+	Base         string `json:"base,omitempty"`
+	ManifestHash string `json:"manifest_hash,omitempty"`
+	// Client names the tool that asked (an MCP client, the web UI).
+	Client string `json:"client,omitempty"`
+	// Reverts is the commit a revert plan undoes.
+	Reverts string `json:"reverts,omitempty"`
 	// Conflicts explains, by code, the destinations that cannot be used.
 	// Each one is also in Errors.
 	Conflicts []Conflict `json:"conflicts,omitempty"`
@@ -126,6 +136,16 @@ type SideWrite struct {
 	Path    string
 	Content []byte
 	Delete  bool
+	// Precondition, when set, is what the file must hold right before the
+	// write (a revert puts back what a restructuring replaced only if
+	// nothing has touched it since).
+	Precondition *SideImage
+}
+
+// SideImage is a comment or personal-state file's state at one moment.
+type SideImage struct {
+	Existed bool   `json:"existed"`
+	Content []byte `json:"content,omitempty"`
 }
 
 // ETag is the git blob hash of content. It matches pipeline.ETag, which is
@@ -149,6 +169,8 @@ type Options struct {
 	Actor string
 	// Claims maps a page path to the actor holding an active claim on it.
 	Claims map[string]string
+	// Client is recorded on the plan and in the commit trailers.
+	Client string
 }
 
 type planner struct {
@@ -234,7 +256,14 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		return p.plan, nil
 	}
 	p.plan.Digest = p.digest()
+	p.plan.ManifestHash = manifestHash(m)
+	p.plan.Client = opts.Client
 	return p.plan, nil
+}
+
+func manifestHash(m *Manifest) string {
+	data, _ := json.Marshal(m)
+	return fmt.Sprintf("%x", sha256.Sum256(data))[:16]
 }
 
 // listFiles returns every non-hidden file in the workspace, sorted.
@@ -818,6 +847,9 @@ func (p *planner) digest() string {
 	}
 	for _, s := range p.plan.Ops.Side {
 		fmt.Fprintf(h, "S %s %t %s\n", s.Path, s.Delete, ETag(s.Content))
+		if pre := s.Precondition; pre != nil {
+			fmt.Fprintf(h, "P %t %s\n", pre.Existed, ETag(pre.Content))
+		}
 	}
 	for _, d := range p.plan.Ops.Dirs {
 		fmt.Fprintf(h, "R %s\n", d)

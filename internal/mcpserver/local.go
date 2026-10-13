@@ -317,14 +317,26 @@ func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, a
 	if err := b.init(); err != nil {
 		return nil, err
 	}
-	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor})
+	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor, Client: clientName(ctx)})
+}
+
+func (b *LocalBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	if !apply {
+		plan, err := b.stack.Pipeline.PlanRevert(ctx, commit)
+		return &RefactorApplyResult{Plan: plan}, err
+	}
+	plan, res, err := b.stack.Pipeline.Revert(ctx, commit, digest, clientName(ctx), actor)
+	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 
 func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {
 	if err := b.init(); err != nil {
 		return nil, err
 	}
-	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, refactor.Options{}, digest, actor)
+	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, refactor.Options{Client: clientName(ctx)}, digest, actor)
 	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 

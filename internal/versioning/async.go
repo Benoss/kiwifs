@@ -14,6 +14,15 @@ type commitReq struct {
 	paths   []string
 	actor   string
 	message string
+	// done, when set, makes the request synchronous: everything queued
+	// before it is flushed, then it is committed on its own and the
+	// result is sent back.
+	done chan syncResult
+}
+
+type syncResult struct {
+	sha string
+	err error
 }
 
 // AsyncGit wraps a Versioner and defers commits to a background goroutine
@@ -230,12 +239,25 @@ func (a *AsyncGit) run() {
 		batchPaths = append(batchPaths, req.paths...)
 	}
 
+	commitNow := func(req commitReq) {
+		timer.Stop()
+		flush()
+		ctx, cancel := context.WithTimeout(context.Background(), gitCmdTimeout)
+		defer cancel()
+		sha, err := a.inner.(Recorder).CommitRecorded(ctx, req.paths, req.actor, req.message)
+		req.done <- syncResult{sha: sha, err: err}
+	}
+
 	for {
 		select {
 		case req, ok := <-a.pending:
 			if !ok {
 				flush()
 				return
+			}
+			if req.done != nil {
+				commitNow(req)
+				continue
 			}
 			appendReq(req)
 			if len(batchPaths) >= a.batchMax {
@@ -252,6 +274,10 @@ func (a *AsyncGit) run() {
 			for {
 				select {
 				case req := <-a.pending:
+					if req.done != nil {
+						commitNow(req)
+						continue
+					}
 					appendReq(req)
 				default:
 					flush()

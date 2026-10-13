@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/events"
 	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/storage"
+	"github.com/kiwifs/kiwifs/internal/versioning"
 )
 
 // ErrPlanStale is returned by ApplyRefactor when a file the plan read has
@@ -58,7 +60,47 @@ func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts 
 			opts.Claims[c.Path] = c.ClaimedBy
 		}
 	}
-	return refactor.BuildPlanWith(ctx, p.RefactorWorkspace(), m, opts)
+	plan, err := refactor.BuildPlanWith(ctx, p.RefactorWorkspace(), m, opts)
+	if err != nil {
+		return nil, err
+	}
+	p.checkRefactorGuards(ctx, plan)
+	if rec, ok := versioning.AsRecorder(p.Versioner); ok {
+		plan.Base, _ = rec.Head(ctx)
+	}
+	return plan, nil
+}
+
+// checkRefactorGuards applies the write rules a restructuring must not
+// slip past. Content is never reformatted (FormatWrite): a move is the same
+// bytes plus link splices. But a page that lands at a new path is validated
+// there (ValidateWrite: a folder's schema rules apply to what moves in),
+// and an append-only page may move but its text may not be rewritten.
+func (p *Pipeline) checkRefactorGuards(ctx context.Context, plan *refactor.Plan) {
+	if len(plan.Errors) > 0 {
+		return
+	}
+	for _, w := range plan.Ops.Writes {
+		if w.Source == "" {
+			continue
+		}
+		prior, err := p.Store.Read(ctx, w.Source)
+		if err != nil {
+			continue
+		}
+		if isAppendOnly(prior) && !bytes.Equal(prior, w.Content) {
+			plan.Errors = append(plan.Errors, fmt.Sprintf("%s is append-only, so its links cannot be rewritten; move or merge the pages it links to separately, or lift append_only first", w.Source))
+		}
+		if w.Source != w.Path && p.ValidateWrite != nil && storage.IsKnowledgeFile(w.Path) {
+			if err := p.ValidateWrite(ctx, w.Path, w.Content, WriteKindPut); err != nil {
+				plan.Errors = append(plan.Errors, fmt.Sprintf("moving %s to %s: %v", w.Source, w.Path, err))
+			}
+		}
+	}
+	if len(plan.Errors) > 0 {
+		plan.Ops = refactor.Ops{}
+		plan.Digest = ""
+	}
 }
 
 // Refactor plans m and applies it as one commit. With a digest, the plan
@@ -95,17 +137,19 @@ type RefactorResult struct {
 	Deleted int `json:"deleted"`
 	Side    int `json:"side_files"`
 	Dirs    int `json:"removed_dirs"`
+	// Commit is the commit the restructuring landed in, when the
+	// versioner keeps history; pass it to the revert endpoints to undo.
+	Commit string `json:"commit,omitempty"`
 }
 
-type fileSnapshot struct {
-	path    string
-	content []byte
-	existed bool
-}
-
-// ApplyRefactor carries out a plan from refactor.BuildPlan as one change:
-// every page write and delete lands in a single commit, and if any storage
-// operation fails, the pages already touched are restored.
+// ApplyRefactor carries out a plan as one change. Every precondition is
+// checked inside the write lock before anything is touched; a journal of
+// pre-images is written first so a crash mid-apply is rolled back on the
+// next start (RecoverRefactor); pages and comment/personal-state files are
+// then written, and everything lands in a single commit. If any write, side
+// file or the commit itself fails, every touched file is restored and the
+// error is returned: the workspace is either fully restructured and
+// committed, or unchanged.
 func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor string) (RefactorResult, error) {
 	if plan == nil || len(plan.Errors) > 0 {
 		return RefactorResult{}, fmt.Errorf("plan has errors; nothing applied")
@@ -120,6 +164,14 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 	}
 
 	for _, w := range ops.Writes {
+		if w.Source == "" {
+			// A file the plan creates (a revert restoring a deleted page)
+			// must still be absent.
+			if p.Store.Exists(ctx, w.Path) {
+				return RefactorResult{}, fmt.Errorf("%w (%s exists)", ErrPlanStale, w.Path)
+			}
+			continue
+		}
 		cur, err := p.Store.Read(ctx, w.Source)
 		if err != nil || ETag(cur) != w.SourceETag {
 			return RefactorResult{}, fmt.Errorf("%w (%s)", ErrPlanStale, w.Source)
@@ -131,84 +183,68 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 			return RefactorResult{}, fmt.Errorf("%w (%s)", ErrPlanStale, d.Path)
 		}
 	}
-
-	var snaps []fileSnapshot
-	snapshot := func(path string) {
-		c, err := p.Store.Read(ctx, path)
-		snaps = append(snaps, fileSnapshot{path: path, content: c, existed: err == nil})
-	}
-	restore := func() {
-		for i := len(snaps) - 1; i >= 0; i-- {
-			s := snaps[i]
-			p.markInflight(s.path)
-			var err error
-			if s.existed {
-				err = p.Store.Write(ctx, s.path, s.content)
-			} else {
-				err = p.Store.Delete(ctx, s.path)
-			}
-			if err != nil {
-				log.Printf("pipeline: ApplyRefactor rollback %s: %v", s.path, err)
-			}
-		}
-	}
-
-	// A delete whose path folds to the same key as a write (Foo.md → foo.md,
-	// or NFD → NFC) names the same file on case- or normalization-
-	// insensitive filesystems (APFS, NTFS). It must go first, or deleting
-	// the old spelling after writing the new one removes the page.
-	writeKeys := make(map[string]bool, len(ops.Writes))
-	for _, w := range ops.Writes {
-		writeKeys[refactor.FoldKey(w.Path)] = true
-	}
-	var early, late []refactor.FileDelete
-	for _, d := range ops.Deletes {
-		if writeKeys[refactor.FoldKey(d.Path)] {
-			early = append(early, d)
-		} else {
-			late = append(late, d)
-		}
-	}
-	var paths []string
-	deleteFile := func(d refactor.FileDelete) error {
-		snapshot(d.Path)
-		p.markInflight(d.Path)
-		p.tryPreDelete(d.Path)
-		if err := p.Store.Delete(ctx, d.Path); err != nil {
-			restore()
-			return fmt.Errorf("delete %s: %w", d.Path, err)
-		}
-		paths = append(paths, d.Path)
-		return nil
-	}
-	for _, d := range early {
-		if err := deleteFile(d); err != nil {
-			return RefactorResult{}, err
-		}
-	}
-	for _, w := range ops.Writes {
-		snapshot(w.Path)
-		p.markInflightEtag(w.Path, ETag(w.Content))
-		if err := p.Store.Write(ctx, w.Path, w.Content); err != nil {
-			restore()
-			return RefactorResult{}, fmt.Errorf("write %s: %w", w.Path, err)
-		}
-		paths = append(paths, w.Path)
-	}
-	for _, d := range late {
-		if err := deleteFile(d); err != nil {
-			return RefactorResult{}, err
-		}
-	}
-
-	side := 0
-	for _, s := range ops.Side {
-		if err := applySideWrite(p.Root, s); err != nil {
-			log.Printf("pipeline: ApplyRefactor %s: %v", s.Path, err)
+	for _, sw := range ops.Side {
+		if sw.Precondition == nil {
 			continue
 		}
-		side++
+		cur, existed := readSide(p.Root, sw.Path)
+		if existed != sw.Precondition.Existed || existed && ETag(cur) != ETag(sw.Precondition.Content) {
+			return RefactorResult{}, fmt.Errorf("%w (%s)", ErrPlanStale, sw.Path)
+		}
 	}
+
+	tx := &refactorTx{p: p, ctx: ctx}
+	for _, w := range ops.Writes {
+		tx.capturePage(w.Path)
+	}
+	for _, d := range ops.Deletes {
+		tx.capturePage(d.Path)
+	}
+	for _, sw := range ops.Side {
+		tx.captureSide(sw.Path)
+	}
+	head := ""
+	rec, recording := versioning.AsRecorder(p.Versioner)
+	if recording {
+		head, _ = rec.Head(ctx)
+	}
+	if err := tx.writeJournal(plan.Digest, actor, head, journalApplying); err != nil {
+		return RefactorResult{}, fmt.Errorf("refactor journal: %w", err)
+	}
+
+	paths, err := tx.applyPages(ops)
+	if err != nil {
+		tx.rollback()
+		return RefactorResult{}, err
+	}
+	for _, sw := range ops.Side {
+		tx.touchedSide = append(tx.touchedSide, sw.Path)
+		if err := applySideWrite(p.Root, sw); err != nil {
+			tx.rollback()
+			return RefactorResult{}, fmt.Errorf("%s: %w", sw.Path, err)
+		}
+	}
+
+	msg := refactorMessage(plan, actor) + "\n\n" + refactorTrailers(plan, actor)
+	var sha string
+	if recording {
+		sha, err = rec.CommitRecorded(ctx, paths, actor, msg)
+	} else {
+		err = p.Versioner.BulkCommit(ctx, paths, actor, msg)
+	}
+	if err != nil {
+		tx.rollback()
+		return RefactorResult{}, fmt.Errorf("commit: %w", err)
+	}
+	if err := tx.writeJournal(plan.Digest, actor, head, journalCommitted); err != nil {
+		log.Printf("pipeline: ApplyRefactor journal: %v", err)
+	}
+	if sha != "" {
+		if err := tx.writeUndo(sha, plan); err != nil {
+			log.Printf("pipeline: ApplyRefactor undo record: %v", err)
+		}
+	}
+
 	dirs := 0
 	for _, d := range ops.Dirs {
 		abs := p.Store.AbsPath(d)
@@ -217,14 +253,7 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 			dirs++
 		}
 	}
-
-	msg := refactorMessage(plan, actor)
-	if err := p.Versioner.BulkCommit(ctx, paths, actor, msg); err != nil {
-		log.Printf("pipeline: ApplyRefactor BulkCommit: %v", err)
-		for _, pa := range paths {
-			p.trackUncommitted(pa)
-		}
-	}
+	tx.removeJournal()
 
 	if p.Claims != nil {
 		renames := map[string]string{}
@@ -255,10 +284,42 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		p.broadcast(events.Event{Op: "write", Path: w.Path, Actor: actor, ETag: ETag(w.Content)})
 	}
 
-	return RefactorResult{Written: len(ops.Writes), Deleted: len(ops.Deletes), Side: side, Dirs: dirs}, nil
+	return RefactorResult{Written: len(ops.Writes), Deleted: len(ops.Deletes), Side: len(ops.Side), Dirs: dirs, Commit: sha}, nil
 }
 
+// refactorTrailers are git trailers (git interpret-trailers) that make a
+// restructuring commit findable and undoable: who ran it, through which
+// client, the reviewed digest, what was asked for, and the HEAD it was
+// planned against.
+func refactorTrailers(plan *refactor.Plan, actor string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Kiwi-Actor: %s\n", NormalizeActor(actor))
+	if client := NormalizeActor(plan.Client); client != "" {
+		fmt.Fprintf(&b, "Kiwi-Client: %s\n", client)
+	}
+	fmt.Fprintf(&b, "%s: %s\n", trailerDigest, plan.Digest)
+	if plan.ManifestHash != "" {
+		fmt.Fprintf(&b, "Kiwi-Manifest: %s\n", plan.ManifestHash)
+	}
+	if plan.Base != "" {
+		fmt.Fprintf(&b, "Kiwi-Base: %s\n", plan.Base)
+	}
+	if plan.Reverts != "" {
+		fmt.Fprintf(&b, "Kiwi-Reverts: %s\n", plan.Reverts)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+const trailerDigest = "Kiwi-Refactor-Digest"
+
 func refactorMessage(plan *refactor.Plan, actor string) string {
+	if plan.Reverts != "" {
+		short := plan.Reverts
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		return fmt.Sprintf("%s: revert %s (%d pages restored, %d removed)", actor, short, len(plan.Ops.Writes), len(plan.Ops.Deletes))
+	}
 	if len(plan.Moves) == 1 && len(plan.Merges) == 0 {
 		mv := plan.Moves[0]
 		msg := fmt.Sprintf("%s: rename %s → %s", actor, mv.From, mv.To)

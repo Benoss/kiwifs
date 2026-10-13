@@ -60,6 +60,7 @@ GET    /api/kiwi/changes?since=&limit=     → git-based change feed
 ```
 POST   /api/kiwi/refactor/plan             → preview a manifest of moves and merges (nothing written)
 POST   /api/kiwi/refactor/apply            → apply it as one commit ({"manifest":{...},"digest":"..."})
+POST   /api/kiwi/refactor/revert           → undo a commit as a plan ({"commit":"...","dry_run":true} to preview)
 POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
 ```
 
@@ -74,8 +75,22 @@ lock and lands everything in a single commit, rolling back on failure.
 workspace changed since, it answers `409` with the fresh plan. A plan with
 errors (a taken destination, a link that cannot be kept) answers `422`.
 `rename` and `rename-dir` answer `409` for the same reasons and never
-overwrite an existing destination. Agents get the same engine through
-`kiwi_refactor_plan` / `kiwi_refactor_apply`.
+overwrite an existing destination (protocol clients that need rename(2)
+semantics pass `?overwrite=true`). Agents get the same engine through
+`kiwi_refactor_plan` / `kiwi_refactor_apply` / `kiwi_refactor_revert`.
+
+Plans also cover typed-link frontmatter fields (`[links] typed_fields`),
+`**` globs, `from_regex` moves with `$1` captures, and task claims: a page
+claimed by another actor cannot be moved. Destinations that collide by case or
+Unicode normalization, or are not portable names, are reported as
+`conflicts` with a code (`exists`, `many_to_one`, `case_or_normalization`, …).
+
+Applying writes a journal of pre-images first (`.kiwi/state/refactor-journal.json`,
+rolled back on the next start if the process dies mid-apply), and the commit
+carries trailers (`Kiwi-Actor`, `Kiwi-Client`, `Kiwi-Refactor-Digest`,
+`Kiwi-Manifest`, `Kiwi-Base`). The apply response names the commit; `revert`
+puts every page and comment/state file back byte for byte, and refuses if any
+of them changed since.
 
 ---
 

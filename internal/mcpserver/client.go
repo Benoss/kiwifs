@@ -1042,7 +1042,7 @@ func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/plan", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor)
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/plan", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor, "X-Kiwi-Client", clientName(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1060,15 +1060,26 @@ func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, 
 // RefactorApply keeps the server's 409 and 422 bodies: both carry the plan
 // the agent has to look at next.
 func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {
-	body, err := json.Marshal(map[string]any{"manifest": m, "digest": digest})
+	return r.refactorCall(ctx, "/refactor/apply", map[string]any{"manifest": m, "digest": digest}, actor, false)
+}
+
+func (r *RemoteBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
+	return r.refactorCall(ctx, "/refactor/revert", map[string]any{"commit": commit, "digest": digest, "dry_run": !apply}, actor, !apply)
+}
+
+// refactorCall posts to a refactor endpoint and maps its answers back to
+// the pipeline errors a local backend would return. A dry run answers with
+// the bare plan.
+func (r *RemoteBackend) refactorCall(ctx context.Context, endpoint string, payload map[string]any, actor string, bare bool) (*RefactorApplyResult, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	hdrs := []string{"Content-Type", "application/json"}
+	hdrs := []string{"Content-Type", "application/json", "X-Kiwi-Client", clientName(ctx)}
 	if actor != "" {
 		hdrs = append(hdrs, "X-Actor", actor)
 	}
-	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/apply", bytes.NewReader(body), hdrs...)
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+endpoint, bytes.NewReader(body), hdrs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1076,6 +1087,13 @@ func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest,
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
+	}
+	if bare && resp.StatusCode < 400 {
+		var plan refactor.Plan
+		if err := json.Unmarshal(data, &plan); err != nil {
+			return nil, err
+		}
+		return &RefactorApplyResult{Plan: &plan}, nil
 	}
 	var out struct {
 		Error   any                     `json:"error"`

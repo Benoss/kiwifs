@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/refactor"
@@ -49,6 +50,18 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 				mcp.WithIdempotentHintAnnotation(false),
 			),
 			Handler: handleRefactorApply(b),
+		},
+		server.ServerTool{
+			Tool: mcp.NewTool("kiwi_refactor_revert",
+				mcp.WithDescription("Undo a commit (usually a kiwi_refactor_apply, whose result names it) as a new commit: pages go back to their previous bytes, comments and personal state to where they were. "+
+					"Without digest it only previews; pass the preview's digest to apply. Refused if any affected page changed since — it never discards later work."),
+				mcp.WithString("commit", mcp.Required(), mcp.Description("Commit id to revert"), mcp.MaxLength(64)),
+				mcp.WithString("digest", mcp.Description("Digest of the reviewed revert preview; omit to preview"), mcp.MaxLength(64)),
+				mcp.WithString("actor", mcp.Description("Who is reverting — defaults to mcp-agent")),
+				mcp.WithDestructiveHintAnnotation(true),
+				mcp.WithIdempotentHintAnnotation(false),
+			),
+			Handler: handleRefactorRevert(b),
 		},
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_patch_frontmatter",
@@ -168,6 +181,16 @@ func viewPlan(plan *refactor.Plan, full bool, offset, limit int) planView {
 	return v
 }
 
+// clientName is the MCP client on the other end ("claude-code 2.1"), for
+// the commit trailers of a restructuring.
+func clientName(ctx context.Context) string {
+	if s, ok := server.ClientSessionFromContext(ctx).(server.SessionWithClientInfo); ok {
+		info := s.GetClientInfo()
+		return strings.TrimSpace("mcp/" + info.Name + " " + info.Version)
+	}
+	return "mcp"
+}
+
 func structured(v any) *mcp.CallToolResult {
 	data, _ := json.MarshalIndent(v, "", "  ")
 	return mcp.NewToolResultStructured(v, string(data))
@@ -217,34 +240,54 @@ func handleRefactorApply(b Backend) server.ToolHandlerFunc {
 			actor = "mcp-agent"
 		}
 		res, err := b.RefactorApply(ctx, m, digest, actor)
-		var plan *refactor.Plan
-		if res != nil {
-			plan = res.Plan
-		}
-		switch {
-		case errors.Is(err, pipeline.ErrDigestMismatch) && plan != nil:
-			r := structured(map[string]any{
-				"error": "the workspace changed since this plan was reviewed; nothing was applied. Review the fresh plan and apply with its digest.",
-				"plan":  viewPlan(plan, false, 0, 25),
-			})
-			r.IsError = true
-			return r, nil
-		case errors.Is(err, pipeline.ErrPlanInvalid) && plan != nil:
-			r := structured(map[string]any{
-				"error": "the plan has errors; nothing was applied",
-				"plan":  viewPlan(plan, false, 0, 25),
-			})
-			r.IsError = true
-			return r, nil
-		case err != nil:
-			return mcp.NewToolResultError(fmt.Sprintf("Apply failed: %v", err)), nil
-		}
-		return structured(map[string]any{
-			"applied": res.Applied,
-			"digest":  plan.Digest,
-			"counts":  viewPlan(plan, false, 0, 0).Counts,
-		}), nil
+		return refactorResult(res, err, false)
 	}
+}
+
+func handleRefactorRevert(b Backend) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		commit, _ := args["commit"].(string)
+		if commit == "" {
+			return mcp.NewToolResultError("commit is required"), nil
+		}
+		digest, _ := args["digest"].(string)
+		actor, _ := args["actor"].(string)
+		if actor == "" {
+			actor = "mcp-agent"
+		}
+		res, err := b.RefactorRevert(ctx, commit, digest, actor, digest != "")
+		return refactorResult(res, err, digest == "")
+	}
+}
+
+// refactorResult turns an apply or revert outcome into a tool result. An
+// invalid or drifted plan is an error result that still carries the plan.
+func refactorResult(res *RefactorApplyResult, err error, preview bool) (*mcp.CallToolResult, error) {
+	var plan *refactor.Plan
+	if res != nil {
+		plan = res.Plan
+	}
+	withPlan := func(msg string) *mcp.CallToolResult {
+		r := structured(map[string]any{"error": msg, "plan": viewPlan(plan, false, 0, 25)})
+		r.IsError = true
+		return r
+	}
+	switch {
+	case errors.Is(err, pipeline.ErrDigestMismatch) && plan != nil:
+		return withPlan("the workspace changed since this plan was reviewed; nothing was applied. Review the fresh plan and apply with its digest."), nil
+	case errors.Is(err, pipeline.ErrPlanInvalid) && plan != nil:
+		return withPlan("the plan has errors; nothing was applied"), nil
+	case err != nil:
+		return mcp.NewToolResultError(fmt.Sprintf("Failed: %v", err)), nil
+	case preview:
+		return structured(viewPlan(plan, true, 0, 200)), nil
+	}
+	return structured(map[string]any{
+		"applied": res.Applied,
+		"digest":  plan.Digest,
+		"counts":  viewPlan(plan, false, 0, 0).Counts,
+	}), nil
 }
 
 func handlePatchFrontmatter(b Backend) server.ToolHandlerFunc {

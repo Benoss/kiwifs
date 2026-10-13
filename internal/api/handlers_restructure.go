@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/refactor"
@@ -25,7 +26,7 @@ type RefactorApplyRequest struct {
 
 func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*refactor.Plan, error) {
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
-	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{Actor: actor})
+	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{Actor: actor, Client: requestClient(c)})
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -86,7 +87,7 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 	if len(req.Manifest.Moves) == 0 && len(req.Manifest.Merges) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves or merges")
 	}
-	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, refactor.Options{}, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
+	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, refactor.Options{Client: requestClient(c)}, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
 	switch {
 	case errors.Is(err, pipeline.ErrPlanInvalid):
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
@@ -98,4 +99,77 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(http.StatusOK, map[string]any{"applied": res, "plan": plan})
+}
+
+// requestClient names the tool behind a request for the commit trailers:
+// X-Kiwi-Client when the caller says (the MCP remote backend, the web UI),
+// else "rest". Sanitized like an actor, since it lands in a commit message.
+func requestClient(c echo.Context) string {
+	if v := c.Request().Header.Get("X-Kiwi-Client"); v != "" {
+		return sanitizeActor(v)
+	}
+	return "rest"
+}
+
+// RefactorRevertRequest is the body of POST /api/kiwi/refactor/revert.
+type RefactorRevertRequest struct {
+	Commit string `json:"commit"`
+	// Digest, when set, must equal the digest of the revert plan the
+	// caller reviewed (from a dry run).
+	Digest string `json:"digest,omitempty"`
+	// DryRun returns the revert plan without applying it.
+	DryRun bool `json:"dry_run,omitempty"`
+}
+
+// RefactorRevert godoc
+//
+//	@Summary		Undo a commit as a plan
+//	@Description	Puts every page the commit changed back to its previous bytes, and the comment and personal-state files a restructuring rewrote back to what they were, as one new commit. Refused (422) if any of those files changed since. dry_run returns the plan; a digest pins the reviewed plan (409 with the fresh plan on drift).
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		RefactorRevertRequest	true	"Commit to revert"
+//	@Param			X-Actor	header		string					false	"Actor identity performing the revert"
+//	@Success		200		{object}	map[string]any
+//	@Failure		409		{object}	map[string]any
+//	@Failure		422		{object}	map[string]any
+//	@Router			/api/kiwi/refactor/revert [post]
+func (h *Handlers) RefactorRevert(c echo.Context) error {
+	var req RefactorRevertRequest
+	if err := bindJSON(c, &req); err != nil {
+		return err
+	}
+	if req.Commit == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "commit is required")
+	}
+	ctx := c.Request().Context()
+	if req.DryRun {
+		plan, err := h.pipe.PlanRevert(ctx, req.Commit)
+		if err != nil {
+			return revertError(err)
+		}
+		return c.JSON(http.StatusOK, plan)
+	}
+	plan, res, err := h.pipe.Revert(ctx, req.Commit, req.Digest, requestClient(c), sanitizeActor(c.Request().Header.Get("X-Actor")))
+	switch {
+	case errors.Is(err, pipeline.ErrPlanInvalid):
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "the revert plan has errors", "plan": plan})
+	case errors.Is(err, pipeline.ErrDigestMismatch):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "plan": plan})
+	case errors.Is(err, pipeline.ErrPlanStale):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
+	case err != nil:
+		return revertError(err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"applied": res, "plan": plan})
+}
+
+func revertError(err error) error {
+	if errors.Is(err, pipeline.ErrRevertUnsupported) {
+		return echo.NewHTTPError(http.StatusNotImplemented, err.Error())
+	}
+	if strings.Contains(err.Error(), "invalid commit id") {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 }

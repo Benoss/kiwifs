@@ -107,6 +107,9 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 	pipe := pipeline.New(store, ver, searcher, linker, hub, vectors, root)
 	pipe.TypedLinkFields = cfg.Links.TypedLinkFields()
 	pipe.SequenceDirs = cfg.Sequences.Directories
+	if err := pipe.RecoverRefactor(context.Background()); err != nil {
+		log.Printf("%srefactor recovery: %v", prefix, err)
+	}
 
 	asyncIdxEnabled := cfg.Search.AsyncIndex == nil || *cfg.Search.AsyncIndex
 	if asyncIdxEnabled && cfg.Search.Engine != "grep" {

@@ -398,3 +398,33 @@ func TestSwapIsNotAConflict(t *testing.T) {
 		t.Fatalf("i.md = %q", got)
 	}
 }
+
+// Obsidian's "links not updating after rename" came from a stale index.
+// The planner reads every page from disk, so a page no index has seen yet
+// (written a moment ago, or by another tool) is still relinked.
+func TestPlanReadsDiskNotTheIndex(t *testing.T) {
+	dir := writeTree(t, map[string]string{"x.md": "# X\n"})
+	if err := os.WriteFile(filepath.Join(dir, "fresh.md"), []byte("[x](x.md)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := plan(t, dir, "moves: [{from: x.md, to: y/x.md}]")
+	requireNoErrors(t, p)
+	if got := written(t, p, "fresh.md"); got != "[x](y/x.md)\n" {
+		t.Fatalf("fresh.md = %q", got)
+	}
+}
+
+// Logseq's merge bugs dropped references that carried a fragment. A merge
+// retargets heading links and embeds, keeping the fragment and label.
+func TestMergeKeepsAnchorsLabelsAndEmbeds(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"faq/dup.md":  "# Dup\n",
+		"faq/keep.md": "# Keep\n",
+		"page.md":     "[[faq/dup#Install|how]] ![[faq/dup]] [md](faq/dup.md#install)\n",
+	})
+	p := plan(t, dir, "merges: [{from: faq/dup.md, into: faq/keep.md}]")
+	requireNoErrors(t, p)
+	if got := written(t, p, "page.md"); got != "[[faq/keep#Install|how]] ![[faq/keep]] [md](faq/keep.md#install)\n" {
+		t.Fatalf("page.md = %q", got)
+	}
+}

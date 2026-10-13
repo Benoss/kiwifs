@@ -182,6 +182,8 @@ type Backend interface {
 	// digest must match the reviewed plan, else pipeline.ErrDigestMismatch
 	// comes back with the fresh plan in the result.
 	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error)
+	// RefactorRevert previews (apply false) or applies the undo of commit.
+	RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error)
 	DeleteFile(ctx context.Context, path, actor string) error
 	Tree(ctx context.Context, path string) (json.RawMessage, error)
 	Search(ctx context.Context, query string, limit, offset int, pathPrefix string) ([]SearchResult, error)

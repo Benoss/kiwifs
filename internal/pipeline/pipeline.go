@@ -1137,6 +1137,22 @@ func (p *Pipeline) RenameWithLinks(ctx context.Context, oldPath, newPath, actor 
 	return res, updated, nil
 }
 
+// RenameReplacing is rename(2) for protocol clients: when newPath exists it
+// is replaced, as an editor's "write temp, rename over the original" save
+// expects, and references to it stay valid because it keeps its path.
+// Otherwise it is RenameWithLinks.
+func (p *Pipeline) RenameReplacing(ctx context.Context, oldPath, newPath, actor string) (Result, []string, error) {
+	to, err := p.workspacePath(newPath)
+	if err != nil {
+		return Result{}, nil, err
+	}
+	if p.Store.Exists(ctx, to) {
+		res, err := p.Rename(ctx, oldPath, newPath, actor)
+		return res, nil, err
+	}
+	return p.RenameWithLinks(ctx, oldPath, newPath, actor, true)
+}
+
 // RenameDirResult holds the outcome of a directory rename with link updates.
 type RenameDirResult struct {
 	Renamed      int      `json:"renamed"`

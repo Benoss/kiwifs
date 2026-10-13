@@ -278,3 +278,49 @@ func TestPatchFrontmatterTool(t *testing.T) {
 		t.Fatal("stale if_match must fail")
 	}
 }
+
+func TestRefactorTools_ApplyThenRevertWithGit(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		".kiwi/config.toml": "[search]\nengine = \"sqlite\"\n[versioning]\nstrategy = \"git\"\n",
+		"a/page.md":         "# Page\n",
+		"index.md":          "[[a/page]]\n",
+	})
+	b := NewLocalBackend(tmp)
+	defer b.Close()
+	manifest := "moves: [{from: a/page.md, to: b/page.md}]\ndelete_empty_dirs: true\n"
+	plan := planOf(t, callTool(t, handleRefactorPlan(b), "kiwi_refactor_plan", map[string]any{"manifest": manifest}))
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply: %s", resultText(res))
+	}
+	var applied struct {
+		Applied struct {
+			Commit string `json:"commit"`
+		} `json:"applied"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &applied); err != nil || applied.Applied.Commit == "" {
+		t.Fatalf("apply result must name the commit: %s", resultText(res))
+	}
+	if readTree(t, tmp, "index.md") != "[[b/page]]\n" {
+		t.Fatalf("index.md = %q", readTree(t, tmp, "index.md"))
+	}
+
+	preview := planOf(t, callTool(t, handleRefactorRevert(b), "kiwi_refactor_revert", map[string]any{"commit": applied.Applied.Commit}))
+	if !preview.Applicable || preview.Digest == "" {
+		t.Fatalf("revert preview = %+v", preview)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "b/page.md")); err != nil {
+		t.Fatal("a preview must not change anything")
+	}
+	res = callTool(t, handleRefactorRevert(b), "kiwi_refactor_revert", map[string]any{"commit": applied.Applied.Commit, "digest": preview.Digest})
+	if res.IsError {
+		t.Fatalf("revert: %s", resultText(res))
+	}
+	if readTree(t, tmp, "index.md") != "[[a/page]]\n" || readTree(t, tmp, "a/page.md") != "# Page\n" {
+		t.Fatal("revert did not restore the tree")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "b")); !os.IsNotExist(err) {
+		t.Fatal("the folder the refactor created should be gone")
+	}
+}
