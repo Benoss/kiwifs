@@ -390,3 +390,16 @@ func TestSwapMovesCommentsWithTheirPages(t *testing.T) {
 		t.Fatalf("a.md comments = %s", got)
 	}
 }
+
+func TestApplyReportsProgress(t *testing.T) {
+	p, dir := refactorFixture(t)
+	var calls [][2]int
+	ctx := WithProgress(context.Background(), func(done, total int) { calls = append(calls, [2]int{done, total}) })
+	if _, _, err := p.Refactor(ctx, &refactor.Manifest{Moves: []refactor.Move{{From: "old", To: "new"}}}, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	_ = dir
+	if len(calls) == 0 || calls[len(calls)-1][0] != calls[len(calls)-1][1] {
+		t.Fatalf("progress = %v", calls)
+	}
+}

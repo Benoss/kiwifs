@@ -320,6 +320,14 @@ func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, a
 	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor, Client: clientName(ctx)})
 }
 
+func (b *LocalBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
+	if err := b.init(); err != nil {
+		return nil, nil, err
+	}
+	m, moves, err := b.stack.Pipeline.RawMoveFix(ctx)
+	return moves, m, err
+}
+
 func (b *LocalBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
 	if err := b.init(); err != nil {
 		return nil, err
@@ -332,11 +340,12 @@ func (b *LocalBackend) RefactorRevert(ctx context.Context, commit, digest, actor
 	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 
-func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {
+func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error) {
 	if err := b.init(); err != nil {
 		return nil, err
 	}
-	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, refactor.Options{Client: clientName(ctx)}, digest, actor)
+	opts := refactor.Options{Client: clientName(ctx), RequireApproval: true, Approved: approved}
+	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, opts, digest, actor)
 	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 

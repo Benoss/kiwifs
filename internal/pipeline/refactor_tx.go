@@ -123,6 +123,17 @@ func (t *refactorTx) applyPages(ops refactor.Ops) ([]string, error) {
 		}
 	}
 	var paths []string
+	progress := progressFrom(ctx)
+	total := len(ops.Writes) + len(ops.Deletes)
+	step := total / 20
+	if step < 1 {
+		step = 1
+	}
+	report := func() {
+		if progress != nil && (len(paths)%step == 0 || len(paths) == total) {
+			progress(len(paths), total)
+		}
+	}
 	del := func(d refactor.FileDelete) error {
 		t.touched = append(t.touched, d.Path)
 		p.markInflight(d.Path)
@@ -131,6 +142,7 @@ func (t *refactorTx) applyPages(ops refactor.Ops) ([]string, error) {
 			return fmt.Errorf("delete %s: %w", d.Path, err)
 		}
 		paths = append(paths, d.Path)
+		report()
 		return nil
 	}
 	for _, d := range early {
@@ -145,6 +157,7 @@ func (t *refactorTx) applyPages(ops refactor.Ops) ([]string, error) {
 			return nil, fmt.Errorf("write %s: %w", w.Path, err)
 		}
 		paths = append(paths, w.Path)
+		report()
 	}
 	for _, d := range late {
 		if err := del(d); err != nil {

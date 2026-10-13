@@ -551,3 +551,69 @@ func TestRegexReplaceSkipsCode(t *testing.T) {
 		t.Fatalf("a.md = %q", got)
 	}
 }
+
+func TestPolicyProtectScopeAndFolderMap(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"docs/a.md":        "# A\n",
+		"docs/b.md":        "[[a]]\n",
+		"legal/terms.md":   "[[docs/a]]\n",
+		"_meta/folders.md": "---\nfolders: [docs, archive]\n---\n",
+	})
+	pol := Policy{Protect: []string{"legal/**"}}
+	p := planWith(t, dir, "moves: [{from: docs/a.md, to: archive/a.md}]", Options{Policy: pol})
+	if len(p.Rejected) != 1 || p.Rejected[0].Path != "legal/terms.md" || len(p.Ops.Writes) != 0 {
+		t.Fatalf("relinking a protected page must be refused: %+v", p.Rejected)
+	}
+	p = planWith(t, dir, "moves: [{from: docs/b.md, to: elsewhere/b.md}]", Options{Policy: Policy{Scope: "docs"}})
+	if len(p.Errors) == 0 || !strings.Contains(p.Errors[0], "outside the refactor scope docs/") {
+		t.Fatalf("errors = %v", p.Errors)
+	}
+	p = planWith(t, dir, "moves: [{from: docs/b.md, to: misc/b.md}]", Options{Policy: Policy{FolderMap: "_meta/folders.md"}})
+	requireNoErrors(t, p)
+	if len(p.Warnings) != 1 || !strings.Contains(p.Warnings[0], "misc/ is not in the folder map") {
+		t.Fatalf("warnings = %v", p.Warnings)
+	}
+	if got := ParseFolderMap([]byte("# Map\n- `projects/` — active work\n- archive\n* [[people]]\nnot a bullet\n")); strings.Join(got, ",") != "projects,archive,people" {
+		t.Fatalf("bullets = %v", got)
+	}
+}
+
+func TestApprovalAndIntegrity(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"faq/dup.md":       "# Dup\nSee [[only-from-dup]].\n",
+		"faq/keep.md":      "# Keep\n",
+		"only-from-dup.md": "# Lonely\n",
+		"index.md":         "[[faq/dup]] [[nowhere]]\n",
+	})
+	p := planWith(t, dir, "merges: [{from: faq/dup.md, into: faq/keep.md}]", Options{Policy: Policy{ApprovalFiles: 1}})
+	requireNoErrors(t, p)
+	if p.Approval == nil || !p.Approval.Required || !strings.Contains(p.Approval.Reason, "files (limit 1)") {
+		t.Fatalf("approval = %+v", p.Approval)
+	}
+	if p.Integrity == nil || !p.Integrity.Complete || p.Integrity.Unresolved != 1 ||
+		len(p.Integrity.Orphaned) != 1 || p.Integrity.Orphaned[0] != "only-from-dup.md" {
+		t.Fatalf("integrity = %+v", p.Integrity)
+	}
+}
+
+func TestRelinksRepairAMoveMadeOutsideTheEngine(t *testing.T) {
+	// guides/ was renamed to handbook/ by a shell mv: the files are there,
+	// every reference still says guides/.
+	dir := writeTree(t, map[string]string{
+		"handbook/setup.md":   "# Setup\n[next](install.md)\n",
+		"handbook/install.md": "# Install\n",
+		"index.md":            "[[guides/setup]] and [md](guides/install.md) and [[nowhere]]\n",
+	})
+	p := plan(t, dir, "relinks: [{from: guides, to: handbook}]")
+	requireNoErrors(t, p)
+	if got := written(t, p, "index.md"); got != "[[handbook/setup]] and [md](handbook/install.md) and [[nowhere]]\n" {
+		t.Fatalf("index.md = %q", got)
+	}
+	if len(p.Moves) != 0 || len(p.Ops.Deletes) != 0 {
+		t.Fatalf("a relink must not move anything: %+v", p.Ops)
+	}
+	stillThere := plan(t, dir, "relinks: [{from: index.md, to: handbook/setup.md}]")
+	if len(stillThere.Errors) == 0 {
+		t.Fatal("relinking from a path that exists must be refused")
+	}
+}

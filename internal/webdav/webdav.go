@@ -196,8 +196,7 @@ func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 	}
 
 	if info.IsDir() {
-		absNew := filepath.Join(f.root, newRel)
-		return os.Rename(absOld, absNew)
+		return f.pipe.RenameDirPOSIX(ctx, oldRel, newRel, f.actorFor(ctx))
 	}
 
 	_, rerr := f.pipe.Rename(ctx, oldRel, newRel, f.actorFor(ctx))

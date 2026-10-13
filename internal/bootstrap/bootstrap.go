@@ -107,6 +107,7 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 	hub := events.NewHub()
 	pipe := pipeline.New(store, ver, searcher, linker, hub, vectors, root)
 	pipe.TypedLinkFields = cfg.Links.TypedLinkFields()
+	pipe.RefactorPolicy = cfg.Refactor.Policy()
 	if sq, ok := searcher.(*search.SQLite); ok {
 		selector := dataview.NewExecutor(sq.ReadDB())
 		maxRows := 10000

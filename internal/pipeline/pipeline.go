@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"bytes"
+	"errors"
 	"context"
 	"crypto/sha1"
 	"fmt"
@@ -90,6 +91,12 @@ type Pipeline struct {
 	// SelectPages, when set, resolves a restructuring edit's select.query
 	// (a DQL query) to page paths.
 	SelectPages refactor.SelectFunc
+
+	// RefactorPolicy is the workspace's [refactor] rules: protected paths,
+	// scope, folder map, and the size above which agents need approval.
+	RefactorPolicy refactor.Policy
+	approvals      sync.Map // plan digest → approval expiry (time.Time)
+	rawMoves       rawMoveTracker
 
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so
@@ -721,6 +728,7 @@ func (p *Pipeline) Observe(ctx context.Context, path string, content []byte, act
 	actor = coalesce(actor)
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	p.watchCreated(ctx, path, etag, actor)
 	p.commitAndTrack(ctx, path, actor)
 	p.indexFile(ctx, path, content)
 	// Stamp the etag so a second fsnotify batch for the same content
@@ -742,6 +750,7 @@ func (p *Pipeline) ObserveDelete(ctx context.Context, path, actor string) {
 	actor = coalesce(actor)
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	p.watchDeleted(ctx, path, actor)
 	p.tryPreDelete(path)
 	if err := p.Versioner.CommitDelete(ctx, path, actor); err != nil {
 		log.Printf("pipeline: versioner.CommitDelete(%s): %v", path, err)
@@ -1076,6 +1085,11 @@ func (p *Pipeline) Rename(ctx context.Context, oldPath, newPath, actor string) (
 	p.broadcast(events.Event{Op: "write", Path: newPath, Actor: actor, ETag: etag})
 	p.broadcast(events.Event{Op: "delete", Path: oldPath, Actor: actor})
 
+	// A plain rename relinks nothing; remember it if anything pointed at
+	// the old path, so RawMoveFix can offer the repair.
+	if p.referenced(ctx, oldPath) {
+		p.noteRawMove(oldPath, newPath, actor, "rename")
+	}
 	return Result{Path: newPath, ETag: etag}, nil
 }
 
@@ -1170,6 +1184,91 @@ func (p *Pipeline) RenameDir(ctx context.Context, from, to, actor string) (int, 
 		return 0, err
 	}
 	return res.Renamed, nil
+}
+
+// ErrDirNotEmpty is returned by RenameDirPOSIX when the destination is a
+// folder that already holds files, as rename(2) answers ENOTEMPTY.
+var ErrDirNotEmpty = errors.New("destination directory is not empty")
+
+// RenameDirPOSIX renames a folder for a protocol client (WebDAV, NFS) with
+// rename(2) semantics: an empty destination is replaced, a non-empty one is
+// an error, and references are left as they are (a rename is not a
+// restructuring; RawMoveFix offers the repair). It goes through the refactor
+// engine — one journaled commit, indexes updated — unless the folder holds
+// hidden files storage cannot move (an .obsidian/ inside it), in which case
+// the folder is renamed on disk and the moved pages committed and reindexed.
+func (p *Pipeline) RenameDirPOSIX(ctx context.Context, from, to, actor string) error {
+	src, err := p.workspacePath(from)
+	if err != nil {
+		return err
+	}
+	dst, err := p.workspacePath(to)
+	if err != nil {
+		return err
+	}
+	if info, err := p.Store.Stat(ctx, dst); err == nil && info != nil {
+		if !info.IsDir {
+			return fmt.Errorf("rename %s: %w", dst, os.ErrExist)
+		}
+		if entries, _ := os.ReadDir(p.Store.AbsPath(dst)); len(entries) > 0 {
+			return fmt.Errorf("rename %s: %w", dst, ErrDirNotEmpty)
+		}
+	}
+	if !hasHiddenData(p.Store.AbsPath(src)) {
+		_, err := p.RenameDir(ctx, src, dst, actor)
+		return err
+	}
+
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	absOld, absNew := p.Store.AbsPath(src), p.Store.AbsPath(dst)
+	if err := os.MkdirAll(filepath.Dir(absNew), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(absOld, absNew); err != nil {
+		return err
+	}
+	var paths []string
+	_ = storage.WalkAll(ctx, p.Store, dst, func(e storage.Entry) error {
+		newRel := strings.TrimPrefix(e.Path, "/")
+		oldRel := src + strings.TrimPrefix(newRel, dst)
+		p.markInflight(newRel)
+		p.markInflight(oldRel)
+		if content, err := p.Store.Read(ctx, newRel); err == nil {
+			p.indexFile(ctx, newRel, content)
+		}
+		p.deindexFile(ctx, oldRel)
+		paths = append(paths, newRel, oldRel)
+		return nil
+	})
+	if len(paths) > 0 {
+		msg := fmt.Sprintf("%s: rename dir %s → %s", coalesce(actor), src, dst)
+		if err := p.Versioner.BulkCommit(ctx, paths, coalesce(actor), msg); err != nil {
+			log.Printf("pipeline: RenameDirPOSIX commit: %v", err)
+			for _, pa := range paths {
+				p.trackUncommitted(pa)
+			}
+		}
+	}
+	p.noteRawMove(src, dst, coalesce(actor), "rename")
+	return nil
+}
+
+// hasHiddenData reports whether a folder holds hidden files or folders
+// other than .DS_Store, which storage cannot move one by one.
+func hasHiddenData(abs string) bool {
+	found := false
+	_ = filepath.WalkDir(abs, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return filepath.SkipAll
+		}
+		if name := d.Name(); strings.HasPrefix(name, ".") && name != ".DS_Store" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // RenameDirWithLinks moves a directory through the refactor engine, file by

@@ -22,6 +22,16 @@ type RefactorApplyRequest struct {
 	// reviewed. If the workspace changed since, the request fails with 409
 	// and returns the new plan instead of applying something unreviewed.
 	Digest string `json:"digest,omitempty"`
+	// Approved says the agent's user confirmed this plan through MCP
+	// elicitation. It only matters for agent callers (X-Kiwi-Client
+	// mcp/…), which need approval for plans over the workspace's limits.
+	Approved bool `json:"approved,omitempty"`
+}
+
+// RefactorApproveRequest is the body of POST /api/kiwi/refactor/approve.
+type RefactorApproveRequest struct {
+	Manifest refactor.Manifest `json:"manifest"`
+	Digest   string            `json:"digest"`
 }
 
 func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*refactor.Plan, error) {
@@ -94,8 +104,12 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 	if req.Manifest.Empty() {
 		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves, merges, edits or tag renames")
 	}
-	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, refactor.Options{Client: requestClient(c)}, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
+	client := requestClient(c)
+	opts := refactor.Options{Client: client, RequireApproval: strings.HasPrefix(client, "mcp"), Approved: req.Approved}
+	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, opts, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
 	switch {
+	case errors.Is(err, pipeline.ErrApprovalRequired):
+		return c.JSON(http.StatusPreconditionRequired, map[string]any{"error": err.Error(), "plan": plan})
 	case errors.Is(err, pipeline.ErrPlanInvalid):
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
 	case errors.Is(err, pipeline.ErrDigestMismatch):
@@ -116,6 +130,36 @@ func requestClient(c echo.Context) string {
 		return sanitizeActor(v)
 	}
 	return "rest"
+}
+
+// RefactorApprove godoc
+//
+//	@Summary		Approve a restructuring for an agent
+//	@Description	Records a human's approval of the plan with this digest, so an agent may apply it once within the hour even though it exceeds the workspace's [refactor] approval limits. The manifest is planned again and must still produce the digest.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		RefactorApproveRequest	true	"Manifest and the digest being approved"
+//	@Success		200		{object}	map[string]any
+//	@Failure		409		{object}	map[string]any
+//	@Router			/api/kiwi/refactor/approve [post]
+func (h *Handlers) RefactorApprove(c echo.Context) error {
+	var req RefactorApproveRequest
+	if err := bindJSON(c, &req); err != nil {
+		return err
+	}
+	if req.Digest == "" || req.Manifest.Empty() {
+		return echo.NewHTTPError(http.StatusBadRequest, "manifest and digest are required")
+	}
+	plan, err := h.buildRefactorPlan(c, &req.Manifest)
+	if err != nil {
+		return err
+	}
+	if len(plan.Errors) > 0 || plan.Digest != req.Digest {
+		return c.JSON(http.StatusConflict, map[string]any{"error": "the plan no longer matches that digest; review it again", "plan": plan})
+	}
+	h.pipe.ApproveRefactor(plan.Digest)
+	return c.JSON(http.StatusOK, map[string]any{"approved": plan.Digest, "expires_in": "1h"})
 }
 
 // RefactorRevertRequest is the body of POST /api/kiwi/refactor/revert.
@@ -179,4 +223,23 @@ func revertError(err error) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+}
+
+// RefactorRawMoves godoc
+//
+//	@Summary		Moves that left references behind
+//	@Description	Lists moves made without relinking (WebDAV/NFS renames, update_links=false, files moved on disk while the server watched) whose old paths are still referenced, with the relinks manifest that repairs them. Plan and apply that manifest like any other.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]any
+//	@Router			/api/kiwi/refactor/raw-moves [get]
+func (h *Handlers) RefactorRawMoves(c echo.Context) error {
+	m, moves, err := h.pipe.RawMoveFix(c.Request().Context())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	if moves == nil {
+		moves = []pipeline.RawMove{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"moves": moves, "manifest": m})
 }

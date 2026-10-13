@@ -180,8 +180,14 @@ type Backend interface {
 	RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error)
 	// RefactorApply applies a restructuring as one commit. A non-empty
 	// digest must match the reviewed plan, else pipeline.ErrDigestMismatch
-	// comes back with the fresh plan in the result.
-	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error)
+	// comes back with the fresh plan in the result. Plans over the
+	// workspace's approval limits fail with pipeline.ErrApprovalRequired
+	// unless approved (the user said yes through elicitation) or a human
+	// approved the digest.
+	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error)
+	// RawMoves lists moves that left references behind, with the relinks
+	// manifest that repairs them (nil when nothing needs repair).
+	RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error)
 	// RefactorRevert previews (apply false) or applies the undo of commit.
 	RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error)
 	DeleteFile(ctx context.Context, path, actor string) error

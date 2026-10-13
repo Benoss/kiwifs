@@ -101,6 +101,10 @@ type Plan struct {
 	// Now is the clock the manifest's expressions saw. Pass it back as the
 	// manifest's now to apply exactly this plan.
 	Now *time.Time `json:"now,omitempty"`
+	// Approval says whether an agent needs a human's go-ahead to apply.
+	Approval *Approval `json:"approval,omitempty"`
+	// Integrity is the link health the plan leaves behind.
+	Integrity *Integrity `json:"integrity,omitempty"`
 	// Rejected names the pages behind errors that are about one page only
 	// (a failed validation, an edit that cannot apply). A caller may drop
 	// those pages and plan again; any error not listed here is global.
@@ -205,6 +209,13 @@ type Options struct {
 	// Now is the clock expressions see when the manifest pins none.
 	// Zero means the current time.
 	Now time.Time
+	// Policy is the workspace's standing rules ([refactor] in config).
+	Policy Policy
+	// RequireApproval makes applying a plan over the policy's limits
+	// need a human: Approved (the user said yes in the agent's client) or
+	// an approval recorded for the digest. Set for agent callers.
+	RequireApproval bool
+	Approved        bool
 }
 
 type planner struct {
@@ -227,6 +238,14 @@ type planner struct {
 	steps []*editStep
 	envs  map[string]map[string]any
 	now   time.Time
+	// relinked maps a path that no longer exists to where its file went
+	// (manifest relinks); the pre-change index still knows the old path.
+	relinked map[string]string
+	// Link tallies for the integrity report.
+	inboundBefore   map[string]int
+	inboundAfter    map[string]int
+	unresolvedAfter int
+	partial         bool // some pages were not read
 }
 
 func (p *planner) errorf(format string, args ...any) {
@@ -236,6 +255,9 @@ func (p *planner) errorf(format string, args ...any) {
 // final is where a page's references should point after the refactor.
 func (p *planner) final(path string) string {
 	if to, ok := p.moved[path]; ok {
+		return to
+	}
+	if to, ok := p.relinked[path]; ok {
 		return to
 	}
 	if to, ok := p.merged[path]; ok {
@@ -268,7 +290,14 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 	for _, f := range files {
 		p.exists[f] = true
 	}
-	p.pre = links.BuildPathIndex(files)
+	if err := p.expandRelinks(m.Relinks); err != nil {
+		return nil, err
+	}
+	preFiles := files
+	if len(p.relinked) > 0 {
+		preFiles = append(append([]string(nil), files...), sortedMapKeys(p.relinked)...)
+	}
+	p.pre = links.BuildPathIndex(preFiles)
 	switch {
 	case m.Now != nil:
 		p.now = m.Now.UTC()
@@ -306,6 +335,11 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		return p.plan, nil
 	}
 	p.dropOverwrittenDeletes()
+	p.enforcePolicy()
+	if len(p.plan.Errors) > 0 {
+		p.plan.Ops = Ops{}
+		return p.plan, nil
+	}
 	if err := p.migrateSideFiles(); err != nil {
 		return nil, err
 	}
@@ -313,14 +347,76 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		p.planEmptyDirs(postFiles)
 	}
 	p.warnClaimedEdits()
+	if fm := strings.TrimPrefix(opts.Policy.FolderMap, "/"); fm != "" {
+		if content, err := ws.Store.Read(ctx, fm); err == nil {
+			p.warnUnmappedFolders(ParseFolderMap(content))
+		} else {
+			p.plan.Warnings = append(p.plan.Warnings, fmt.Sprintf("folder map %s is missing", fm))
+		}
+	}
 	if len(p.plan.Errors) > 0 {
 		p.plan.Ops = Ops{}
 		return p.plan, nil
 	}
+	p.plan.Approval = p.approval()
+	p.plan.Integrity = p.integrity(!p.partial && !opts.LeaveLinks)
 	p.plan.Digest = p.digest()
 	p.plan.ManifestHash = manifestHash(m)
 	p.plan.Client = opts.Client
 	return p.plan, nil
+}
+
+// expandRelinks records, for each relink, the old paths that should now
+// resolve to existing files. The old path must be gone and the new one
+// present: a relink never moves anything.
+func (p *planner) expandRelinks(relinks []Move) error {
+	if len(relinks) == 0 {
+		return nil
+	}
+	p.relinked = map[string]string{}
+	for _, r := range relinks {
+		from, _, err := cleanPath(r.From)
+		if err != nil || from == "" {
+			p.errorf("relink from %q: invalid path", r.From)
+			continue
+		}
+		to, _, err := cleanPath(r.To)
+		if err != nil || to == "" {
+			p.errorf("relink to %q: invalid path", r.To)
+			continue
+		}
+		switch {
+		case p.exists[from]:
+			p.errorf("relink %s: it still exists; use a move instead", from)
+		case p.exists[to]:
+			p.relinked[from] = to
+		default:
+			prefix := to + "/"
+			n := 0
+			for _, f := range p.files {
+				if strings.HasPrefix(f, prefix) {
+					old := joinDir(from, strings.TrimPrefix(f, prefix))
+					if !p.exists[old] {
+						p.relinked[old] = f
+						n++
+					}
+				}
+			}
+			if n == 0 {
+				p.errorf("relink %s → %s: %s does not exist", from, to, to)
+			}
+		}
+	}
+	return nil
+}
+
+func sortedMapKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func usesExpressions(m *Manifest) bool {
@@ -685,6 +781,8 @@ func (p *planner) read(ctx context.Context, f string) ([]byte, error) {
 // writes and deletes, then checks the result: each reference that resolved
 // before must resolve to the same page (after moves and merges) afterwards.
 func (p *planner) rewritePages(ctx context.Context) error {
+	p.inboundBefore = map[string]int{}
+	p.inboundAfter = map[string]int{}
 	for _, f := range p.files {
 		if _, ok := p.merged[f]; ok {
 			c, err := p.read(ctx, f)
@@ -692,6 +790,13 @@ func (p *planner) rewritePages(ctx context.Context) error {
 				return err
 			}
 			p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(c)})
+			if isMarkdown(f) {
+				for _, r := range scanAll(c, p.ws.typedFields()) {
+					if t := resolve(p.pre, r.Kind, r.Path, f); t != "" && t != f {
+						p.inboundBefore[t]++
+					}
+				}
+			}
 			continue
 		}
 		to, moving := p.moved[f]
@@ -708,9 +813,10 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		}
 
 		_, isEdited := p.edited[f]
-		if !moving && !isEdited && len(p.moved) == 0 && len(p.merged) == 0 {
+		if !moving && !isEdited && len(p.moved) == 0 && len(p.merged) == 0 && len(p.relinked) == 0 {
 			// Nothing moves, so no link can change: only edited pages
 			// need reading.
+			p.partial = true
 			continue
 		}
 		p.plan.Stats.Pages++
@@ -745,6 +851,9 @@ func (p *planner) rewritePages(ctx context.Context) error {
 				p.plan.Stats.Unresolved++
 				continue
 			}
+			if before != f {
+				p.inboundBefore[before]++
+			}
 			want := p.final(before)
 			expected[i] = want
 			// A link that still lands on the right page is left alone, unless
@@ -772,6 +881,20 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		}
 
 		after := scanAll(updated, p.ws.typedFields())
+		written := moving || len(edits) > 0 || edited
+		for _, r := range after {
+			if r.Unsplicable {
+				continue
+			}
+			switch got := resolve(p.post, r.Kind, r.Path, from); {
+			case got == "":
+				if written {
+					p.unresolvedAfter++
+				}
+			case got != from:
+				p.inboundAfter[got]++
+			}
+		}
 		if len(after) != len(refs) {
 			p.errorf("%s: rewriting changed the number of links (%d → %d)", f, len(refs), len(after))
 		} else {

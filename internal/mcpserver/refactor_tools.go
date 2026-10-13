@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kiwifs/kiwifs/internal/pipeline"
@@ -23,12 +24,93 @@ const manifestHelp = `Restructuring manifest, as a YAML/JSON string or an object
                       set: {status: archived}, unset: [reviewer], add_tags: [x], remove_tags: [y],
                       replace: [{find: "Acme Corp", with: "Acme"}]}]
   rename_tags:      [{from: ml, to: machine-learning}]
+  relinks:          [{from: old/path.md, to: new/path.md}]   (repair references after a move made outside KiwiFS; see resource kiwi://refactor/raw-moves)
 Edits may also take when: (a boolean expression), compute: {key: expression}, and move_to: "archive/{{year}}/{{slug}}.md"
 with on_conflict: suffix("-%d"). Expressions see path, dir, name, stem, title, tags, fm, links, date, modified, now and
 slug(), year(), month(), day(), date(t, layout).
 Selection sees the workspace before any change; select needs at least one criterion. Unknown keys are an error.`
 
+// planCache keeps the last plans built in this session's server, so an
+// agent (or its user) can read a whole plan as a resource instead of paging
+// through tool results.
+type planCache struct {
+	mu    sync.Mutex
+	order []string
+	plans map[string]*refactor.Plan
+}
+
+const planCacheSize = 32
+
+func (c *planCache) put(p *refactor.Plan) {
+	if p == nil || p.Digest == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.plans == nil {
+		c.plans = map[string]*refactor.Plan{}
+	}
+	if _, ok := c.plans[p.Digest]; !ok {
+		c.order = append(c.order, p.Digest)
+		if len(c.order) > planCacheSize {
+			delete(c.plans, c.order[0])
+			c.order = c.order[1:]
+		}
+	}
+	c.plans[p.Digest] = p
+}
+
+func (c *planCache) get(digest string) *refactor.Plan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.plans[digest]
+}
+
+func planURI(digest string) string { return "kiwi://refactor/plans/" + digest }
+
 func registerRefactorTools(s *server.MCPServer, b Backend) {
+	plans := &planCache{}
+	s.AddResourceTemplate(
+		mcp.NewResourceTemplate("kiwi://refactor/plans/{digest}", "Restructuring plan",
+			mcp.WithTemplateDescription("A plan built by kiwi_refactor_plan in this session: every move, link edit, content edit and diff, as JSON."),
+			mcp.WithTemplateMIMEType("application/json"),
+		),
+		func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			digest := strings.TrimPrefix(req.Params.URI, "kiwi://refactor/plans/")
+			plan := plans.get(digest)
+			if plan == nil {
+				return nil, fmt.Errorf("no plan %s in this session; run kiwi_refactor_plan", digest)
+			}
+			data, err := json.MarshalIndent(struct {
+				*refactor.Plan
+				Diffs []refactor.FileDiff `json:"diffs"`
+			}{plan, plan.FileDiffs()}, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			return []mcp.ResourceContents{mcp.TextResourceContents{URI: req.Params.URI, MIMEType: "application/json", Text: string(data)}}, nil
+		},
+	)
+	s.AddResource(
+		mcp.NewResource("kiwi://refactor/raw-moves", "Moves that left links behind",
+			mcp.WithResourceDescription("Moves made without relinking (WebDAV/NFS renames, files moved on disk) whose old paths are still referenced, and the relinks manifest that repairs them: pass it to kiwi_refactor_plan."),
+			mcp.WithMIMEType("application/json"),
+		),
+		func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			moves, m, err := b.RawMoves(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if moves == nil {
+				moves = []pipeline.RawMove{}
+			}
+			data, err := json.MarshalIndent(map[string]any{"moves": moves, "manifest": m}, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			return []mcp.ResourceContents{mcp.TextResourceContents{URI: req.Params.URI, MIMEType: "application/json", Text: string(data)}}, nil
+		},
+	)
 	s.AddTools(
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_refactor_plan",
@@ -45,13 +127,14 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
 			),
-			Handler: handleRefactorPlan(b),
+			Handler: handleRefactorPlan(b, plans),
 		},
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_refactor_apply",
 				mcp.WithDescription("Apply a restructuring previewed with kiwi_refactor_plan, as one git commit. "+
 					"digest must be the one from the reviewed plan: if any affected file changed since, nothing is written and the fresh plan comes back to review instead. "+
-					"Show the plan to the user before applying anything large."),
+					"Plans over the workspace's size limits ask the user to confirm (or, if the client cannot ask, need a human's approval in the KiwiFS UI). "+
+					"The result names the commit; kiwi_refactor_revert undoes it."),
 				mcp.WithAny("manifest", mcp.Required(), mcp.Description("The same manifest that was planned.")),
 				mcp.WithString("digest", mcp.Required(), mcp.Description("Digest from kiwi_refactor_plan."), mcp.MaxLength(64)),
 				mcp.WithString("now", mcp.Description("The plan's now, when it reports one (manifests with when/compute/move_to expressions): applying recomputes with that clock so the digest still matches.")),
@@ -128,7 +211,9 @@ type planView struct {
 	Diffs      []refactor.FileDiff    `json:"diffs,omitempty"`
 	Removed    []string               `json:"removed_dirs,omitempty"`
 	Offset     int                    `json:"offset"`
-	NextOffset int                    `json:"next_offset,omitempty"`
+	// Resource reads the whole plan, diffs included, without paging.
+	Resource   string `json:"resource,omitempty"`
+	NextOffset int    `json:"next_offset,omitempty"`
 }
 
 type planCounts struct {
@@ -226,7 +311,7 @@ func structured(v any) *mcp.CallToolResult {
 	return mcp.NewToolResultStructured(v, string(data))
 }
 
-func handleRefactorPlan(b Backend) server.ToolHandlerFunc {
+func handleRefactorPlan(b Backend, plans *planCache) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		m, err := manifestArg(args)
@@ -250,7 +335,12 @@ func handleRefactorPlan(b Backend) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Plan failed: %v", err)), nil
 		}
-		return structured(viewPlanDetail(plan, detail, offset, limit)), nil
+		view := viewPlanDetail(plan, detail, offset, limit)
+		if plans != nil && plan.Digest != "" {
+			plans.put(plan)
+			view.Resource = planURI(plan.Digest)
+		}
+		return structured(view), nil
 	}
 }
 
@@ -276,9 +366,93 @@ func handleRefactorApply(b Backend) server.ToolHandlerFunc {
 		if actor == "" {
 			actor = "mcp-agent"
 		}
-		res, err := b.RefactorApply(ctx, m, digest, actor)
+		approved := false
+		if answer := server.ElicitationResponse(req.Params.InputResponses, approveInput); answer != nil {
+			if answer.Action != mcp.ElicitationResponseActionAccept || !approvedContent(answer.Content) {
+				return mcp.NewToolResultError("The user declined this restructuring; nothing was applied."), nil
+			}
+			if req.Params.RequestState != digest {
+				return mcp.NewToolResultError("The confirmation was for a different plan; plan again and apply with its digest."), nil
+			}
+			approved = true
+		}
+		res, err := b.RefactorApply(withProgress(ctx, req), m, digest, actor, approved)
+		if errors.Is(err, pipeline.ErrApprovalRequired) && res != nil && res.Plan != nil {
+			return askApproval(ctx, res.Plan, err), nil
+		}
 		return refactorResult(res, err, false)
 	}
+}
+
+// withProgress forwards apply progress to the client as
+// notifications/progress when the call carries a progress token.
+func withProgress(ctx context.Context, req mcp.CallToolRequest) context.Context {
+	if req.Params.Meta == nil || req.Params.Meta.ProgressToken == nil {
+		return ctx
+	}
+	srv := server.ServerFromContext(ctx)
+	if srv == nil {
+		return ctx
+	}
+	token := req.Params.Meta.ProgressToken
+	return pipeline.WithProgress(ctx, func(done, total int) {
+		_ = srv.SendNotificationToClient(ctx, "notifications/progress", map[string]any{
+			"progressToken": token,
+			"progress":      done,
+			"total":         total,
+			"message":       fmt.Sprintf("%d of %d files", done, total),
+		})
+	})
+}
+
+// approveInput keys the confirmation in a multi round-trip apply.
+const approveInput = "approve"
+
+// askApproval asks the user, through the client, to confirm a plan over
+// the workspace's approval limits. A client that cannot ask gets the plan
+// back with how a human can approve it instead; an agent cannot approve
+// its own restructuring.
+func askApproval(ctx context.Context, plan *refactor.Plan, cause error) *mcp.CallToolResult {
+	view := viewPlan(plan, false, 0, 10)
+	reason := ""
+	if plan.Approval != nil {
+		reason = plan.Approval.Reason
+	}
+	if canElicit(ctx) {
+		msg := fmt.Sprintf("Apply this restructuring? %d moves, %d merges, %d pages with edited content, %d links rewritten in %d pages (%s). Plan %s.",
+			view.Counts.Moves, view.Counts.Merges, view.Counts.ContentEdits, plan.Stats.Rewritten, view.Counts.EditedPages, reason, plan.Digest)
+		return server.NewInputRequestBuilder(plan.Digest).Elicit(approveInput, mcp.ElicitationParams{
+			Message: msg,
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"approve": map[string]any{"type": "boolean", "title": "Apply", "description": "Apply every change in this plan as one commit"},
+				},
+				"required": []string{"approve"},
+			},
+		}).ToolResult()
+	}
+	r := structured(map[string]any{
+		"error": fmt.Sprintf("%v. This client cannot ask the user directly: ask them to approve plan %s in the KiwiFS web UI (Refactor review) "+
+			"or with POST /api/kiwi/refactor/approve {manifest, digest}, then call kiwi_refactor_apply again with the same manifest and digest.", cause, plan.Digest),
+		"plan": view,
+	})
+	r.IsError = true
+	return r
+}
+
+func canElicit(ctx context.Context) bool {
+	s, ok := server.ClientSessionFromContext(ctx).(server.SessionWithClientInfo)
+	return ok && s.GetClientCapabilities().Elicitation != nil
+}
+
+func approvedContent(content any) bool {
+	m, ok := content.(map[string]any)
+	if !ok {
+		return false
+	}
+	v, _ := m["approve"].(bool)
+	return v
 }
 
 func handleRefactorRevert(b Backend) server.ToolHandlerFunc {
@@ -320,11 +494,20 @@ func refactorResult(res *RefactorApplyResult, err error, preview bool) (*mcp.Cal
 	case preview:
 		return structured(viewPlan(plan, true, 0, 200)), nil
 	}
-	return structured(map[string]any{
+	out := map[string]any{
 		"applied": res.Applied,
 		"digest":  plan.Digest,
 		"counts":  viewPlan(plan, false, 0, 0).Counts,
-	}), nil
+	}
+	// What the workspace looks like now: links that point nowhere in the
+	// pages written, and pages nothing links to any more.
+	if plan.Integrity != nil {
+		out["integrity"] = plan.Integrity
+	}
+	if len(plan.Warnings) > 0 {
+		out["warnings"] = plan.Warnings
+	}
+	return structured(out), nil
 }
 
 func handlePatchFrontmatter(b Backend) server.ToolHandlerFunc {

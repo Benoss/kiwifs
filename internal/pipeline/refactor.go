@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kiwifs/kiwifs/internal/claims"
 	"github.com/kiwifs/kiwifs/internal/events"
@@ -30,6 +31,26 @@ var ErrPlanInvalid = errors.New("refactor plan has errors")
 // whose digest no longer matches the workspace. Nothing has been written;
 // the plan returned alongside is the fresh one to review instead.
 var ErrDigestMismatch = errors.New("the workspace changed since the plan was reviewed")
+
+// ErrApprovalRequired is returned by Refactor when an agent applies a plan
+// bigger than the workspace's approval limits that no human has approved.
+// Nothing has been written; the plan comes back with the reason.
+var ErrApprovalRequired = errors.New("this restructuring needs a human's approval")
+
+// approvalTTL is how long a human's approval of a plan digest stays valid.
+const approvalTTL = time.Hour
+
+// ApproveRefactor records that a human approved the plan with digest, so an
+// agent may apply it once within the next hour.
+func (p *Pipeline) ApproveRefactor(digest string) {
+	p.approvals.Store(digest, time.Now().Add(approvalTTL))
+}
+
+// takeApproval consumes an approval for digest, if there is a live one.
+func (p *Pipeline) takeApproval(digest string) bool {
+	v, ok := p.approvals.LoadAndDelete(digest)
+	return ok && time.Now().Before(v.(time.Time))
+}
 
 // staleRetries bounds how often Refactor replans after losing a race with
 // another writer when the caller did not pin a reviewed digest.
@@ -60,6 +81,7 @@ func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts 
 			opts.Claims[c.Path] = c.ClaimedBy
 		}
 	}
+	opts.Policy = p.RefactorPolicy
 	if opts.Select == nil && p.SelectPages != nil {
 		opts.Select = func(ctx context.Context, query string) ([]string, error) {
 			// Pages written through the pipeline a moment ago may still
@@ -145,9 +167,15 @@ func (p *Pipeline) Refactor(ctx context.Context, m *refactor.Manifest, opts refa
 		if digest != "" && digest != plan.Digest {
 			return plan, RefactorResult{}, ErrDigestMismatch
 		}
+		if opts.RequireApproval && plan.Approval != nil && plan.Approval.Required && !opts.Approved && !p.takeApproval(plan.Digest) {
+			return plan, RefactorResult{}, fmt.Errorf("%w: %s", ErrApprovalRequired, plan.Approval.Reason)
+		}
 		res, err := p.ApplyRefactor(ctx, plan, actor)
 		if errors.Is(err, ErrPlanStale) && digest == "" && attempt < staleRetries {
 			continue
+		}
+		if err == nil {
+			p.afterRefactor(ctx, m, opts, plan, actor)
 		}
 		return plan, res, err
 	}
@@ -451,4 +479,33 @@ func dropPaths(m *refactor.Manifest, dropped map[string]string) bool {
 	}
 	m.Edits = kept
 	return removed
+}
+
+// afterRefactor keeps the raw-move log in step: a move that kept its links
+// may have left references behind, and a relinks manifest repaired some.
+func (p *Pipeline) afterRefactor(ctx context.Context, m *refactor.Manifest, opts refactor.Options, plan *refactor.Plan, actor string) {
+	if opts.LeaveLinks {
+		for _, mv := range plan.Moves {
+			if p.referenced(ctx, mv.From) {
+				p.noteRawMove(mv.From, mv.To, actor, "links-kept")
+			}
+		}
+	}
+	p.pruneRelinked(m.Relinks)
+}
+
+// ProgressFunc hears how far an apply has got: done of total file
+// operations.
+type ProgressFunc func(done, total int)
+
+type progressKey struct{}
+
+// WithProgress attaches a progress callback for ApplyRefactor to ctx.
+func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
+	return context.WithValue(ctx, progressKey{}, fn)
+}
+
+func progressFrom(ctx context.Context) ProgressFunc {
+	fn, _ := ctx.Value(progressKey{}).(ProgressFunc)
+	return fn
 }

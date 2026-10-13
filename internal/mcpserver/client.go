@@ -1059,8 +1059,19 @@ func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, 
 
 // RefactorApply keeps the server's 409 and 422 bodies: both carry the plan
 // the agent has to look at next.
-func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {
-	return r.refactorCall(ctx, "/refactor/apply", map[string]any{"manifest": m, "digest": digest}, actor, false)
+func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error) {
+	return r.refactorCall(ctx, "/refactor/apply", map[string]any{"manifest": m, "digest": digest, "approved": approved}, actor, false)
+}
+
+func (r *RemoteBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
+	var out struct {
+		Moves    []pipeline.RawMove `json:"moves"`
+		Manifest *refactor.Manifest `json:"manifest"`
+	}
+	if err := r.getJSON(ctx, r.apiPrefix+"/refactor/raw-moves", &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Moves, out.Manifest, nil
 }
 
 func (r *RemoteBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
@@ -1112,6 +1123,8 @@ func (r *RemoteBackend) refactorCall(ctx context.Context, endpoint string, paylo
 		return res, nil
 	case resp.StatusCode == http.StatusUnprocessableEntity && out.Plan != nil:
 		return res, fmt.Errorf("%w: %s", pipeline.ErrPlanInvalid, strings.Join(out.Plan.Errors, "; "))
+	case resp.StatusCode == http.StatusPreconditionRequired:
+		return res, fmt.Errorf("%w: %s", pipeline.ErrApprovalRequired, msg)
 	case resp.StatusCode == http.StatusConflict && out.Plan != nil:
 		return res, pipeline.ErrDigestMismatch
 	case resp.StatusCode == http.StatusConflict:

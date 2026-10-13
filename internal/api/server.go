@@ -609,6 +609,8 @@ func (s *Server) setupRoutes() {
 	api.POST("/refactor/plan", h.RefactorPlan)
 	api.POST("/refactor/apply", h.RefactorApply)
 	api.POST("/refactor/revert", h.RefactorRevert)
+	api.POST("/refactor/approve", h.RefactorApprove)
+	api.GET("/refactor/raw-moves", h.RefactorRawMoves)
 	api.GET("/health-check", h.HealthCheck)
 	api.GET("/context", h.Context)
 	api.GET("/rules", h.Rules)

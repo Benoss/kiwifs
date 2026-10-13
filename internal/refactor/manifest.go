@@ -56,6 +56,12 @@ type Manifest struct {
 	DeleteEmptyDirs bool        `json:"delete_empty_dirs,omitempty" yaml:"delete_empty_dirs"`
 	Edits           []Edit      `json:"edits,omitempty" yaml:"edits"`
 	RenameTags      []TagRename `json:"rename_tags,omitempty" yaml:"rename_tags"`
+	// Relinks repair references after a move that happened outside the
+	// engine (a WebDAV or NFS rename, an mv in a shell): every reference
+	// that meant From, which no longer exists, is respelled to reach To,
+	// which does. Folders work too: From/x.md → To/x.md for every file
+	// now under To.
+	Relinks []Move `json:"relinks,omitempty" yaml:"relinks"`
 	// Now pins the clock expressions see. A plan records the time it used;
 	// pass it back to apply exactly what was reviewed.
 	Now *time.Time `json:"now,omitempty" yaml:"now"`
@@ -118,7 +124,7 @@ type TagRename struct {
 
 // Empty reports whether the manifest asks for nothing.
 func (m *Manifest) Empty() bool {
-	return len(m.Moves) == 0 && len(m.Merges) == 0 && len(m.Edits) == 0 && len(m.RenameTags) == 0
+	return len(m.Moves) == 0 && len(m.Merges) == 0 && len(m.Edits) == 0 && len(m.RenameTags) == 0 && len(m.Relinks) == 0
 }
 
 // Move relocates a file, a folder, or the files matching a glob. A To that
@@ -155,7 +161,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}
 	if m.Empty() {
-		return nil, fmt.Errorf("manifest has no moves, merges, edits or tag renames")
+		return nil, fmt.Errorf("manifest has no moves, merges, edits, tag renames or relinks")
 	}
 	return &m, nil
 }

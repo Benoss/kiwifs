@@ -358,3 +358,68 @@ func TestRefactorGuards(t *testing.T) {
 		t.Fatalf("errors = %v", plan.Errors)
 	}
 }
+
+func TestRawRenameIsLoggedAndRepairedByRelinks(t *testing.T) {
+	p, dir := refactorFixture(t)
+	ctx := context.Background()
+	// A WebDAV client renames a page: no relinking.
+	if _, err := p.Rename(ctx, "old/page.md", "pages/page.md", "webdav"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "index.md"); got != "[[old/page|Page]] [[old/_index|Old]]\n" {
+		t.Fatalf("a raw rename must not relink: %q", got)
+	}
+	m, moves, err := p.RawMoveFix(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moves) != 1 || m == nil || len(m.Relinks) != 1 || m.Relinks[0].To != "pages/page.md" {
+		t.Fatalf("moves = %+v manifest = %+v", moves, m)
+	}
+	if _, _, err := p.Refactor(ctx, m, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "index.md"); got != "[[pages/page|Page]] [[old/_index|Old]]\n" {
+		t.Fatalf("index.md = %q", got)
+	}
+	if left, _ := p.RawMoves(); len(left) != 0 {
+		t.Fatalf("the repaired move should leave the log: %+v", left)
+	}
+}
+
+func TestWatcherPairsAMoveMadeOnDisk(t *testing.T) {
+	p, dir := gitPipeline(t, false)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(dir, "elsewhere"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "guides/old.md"), filepath.Join(dir, "elsewhere/old.md")); err != nil {
+		t.Fatal(err)
+	}
+	content, _ := os.ReadFile(filepath.Join(dir, "elsewhere/old.md"))
+	// fsnotify reports the removal and the creation; order varies.
+	p.Observe(ctx, "elsewhere/old.md", content, "fswatch")
+	p.ObserveDelete(ctx, "guides/old.md", "fswatch")
+	moves, err := p.RawMoves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moves) != 1 || moves[0].From != "guides/old.md" || moves[0].To != "elsewhere/old.md" || moves[0].Via != "watcher" {
+		t.Fatalf("moves = %+v", moves)
+	}
+	m, _, err := p.RawMoveFix(ctx)
+	if err != nil || m == nil {
+		t.Fatalf("fix = %+v, %v", m, err)
+	}
+	plan, err := p.PlanRefactor(ctx, m, refactor.Options{})
+	if err != nil || len(plan.Errors) > 0 {
+		t.Fatalf("plan: %v %v", err, plan.Errors)
+	}
+	found := false
+	for _, w := range plan.Ops.Writes {
+		found = found || w.Path == "index.md" && strings.Contains(string(w.Content), "elsewhere/old")
+	}
+	if !found {
+		t.Fatalf("the fix should relink index.md: %v", plan.Edits)
+	}
+}

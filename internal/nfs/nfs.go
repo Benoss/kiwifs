@@ -377,8 +377,7 @@ func (fs *kiwiFS) Rename(oldpath, newpath string) error {
 	if err != nil {
 		return err
 	}
-	absNew, err := fs.safePath(newpath)
-	if err != nil {
+	if _, err := fs.safePath(newpath); err != nil {
 		return err
 	}
 
@@ -392,46 +391,7 @@ func (fs *kiwiFS) Rename(oldpath, newpath string) error {
 		return rerr
 	}
 
-	// os.Rename follows POSIX rename(2): if absNew is an empty dir it is
-	// replaced; if non-empty, ENOTEMPTY. Files under a replaced destination
-	// are not de-indexed — accepted gap for rename-onto-existing-dir.
-	if err := os.Rename(absOld, absNew); err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	var allPaths []string
-	filepath.WalkDir(absNew, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			log.Printf("nfs: dir rename walk error: %v", err)
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		relToNew, relErr := filepath.Rel(absNew, path)
-		if relErr != nil {
-			log.Printf("nfs: dir rename rel(%s, %s): %v", absNew, path, relErr)
-			return nil
-		}
-		newRel := filepath.ToSlash(filepath.Join(newpath, relToNew))
-		oldRel := filepath.ToSlash(filepath.Join(oldpath, relToNew))
-		content, rerr := os.ReadFile(path)
-		if rerr != nil {
-			log.Printf("nfs: dir rename read(%s): %v", path, rerr)
-			return nil
-		}
-		fs.pipe.IndexFile(ctx, newRel, content)
-		fs.pipe.DeindexFile(ctx, oldRel)
-		allPaths = append(allPaths, newRel, oldRel)
-		return nil
-	})
-
-	if len(allPaths) > 0 {
-		msg := fmt.Sprintf("nfs: rename dir %s → %s", oldpath, newpath)
-		fs.pipe.BulkCommitOnly(ctx, allPaths, "nfs", msg)
-	}
-	return nil
+	return fs.pipe.RenameDirPOSIX(context.Background(), oldpath, newpath, "nfs")
 }
 
 func (fs *kiwiFS) safePath(filename string) (string, error) {
