@@ -1,6 +1,6 @@
 module github.com/kiwifs/kiwifs
 
-go 1.26
+go 1.27.0
 
 require (
 	cloud.google.com/go/firestore v1.22.0
@@ -12,7 +12,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.2
 	github.com/bluuewhale/loom v0.0.0-20260402142357-ae7e94ccfead
 	github.com/coreos/go-oidc/v3 v3.18.0
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/d2lang/d2 v0.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fvbommel/sortorder v1.1.0
 	github.com/go-git/go-billy/v5 v5.6.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
@@ -48,13 +49,13 @@ require (
 	github.com/willscott/go-nfs v0.0.4
 	github.com/xuri/excelize/v2 v2.10.1
 	github.com/yalue/onnxruntime_go v1.30.1
-	github.com/yuin/goldmark v1.8.2
+	github.com/yuin/goldmark v1.8.5
 	github.com/yuin/goldmark-meta v1.1.0
 	go.mongodb.org/mongo-driver/v2 v2.5.1
-	golang.org/x/crypto v0.52.0
-	golang.org/x/net v0.55.0
+	golang.org/x/crypto v0.54.0
+	golang.org/x/net v0.57.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.276.0
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7
@@ -74,8 +75,10 @@ require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/PuerkitoBio/goquery v1.12.0 // indirect
+	github.com/alecthomas/chroma/v2 v2.27.0 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.9 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.15 // indirect
@@ -98,11 +101,17 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
+	github.com/d2lang/dagro v0.2.1 // indirect
+	github.com/d2lang/elk-go v0.2.0 // indirect
+	github.com/d2lang/mathjax-go v0.1.0 // indirect
+	github.com/d2lang/rough-go v0.2.0 // indirect
+	github.com/d2lang/util-go v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.6.0 // indirect
 	github.com/docker/docker v27.1.1+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
@@ -126,6 +135,7 @@ require (
 	github.com/go-openapi/swag/typeutils v0.26.0 // indirect
 	github.com/go-openapi/swag/yamlutils v0.26.0 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
+	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
@@ -139,10 +149,12 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/labstack/gommon v0.5.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mazznoer/csscolorparser v0.1.8 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect
@@ -171,7 +183,7 @@ require (
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/spf13/pflag v1.0.6 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
 	github.com/sv-tools/openapi v0.4.0 // indirect
@@ -203,11 +215,13 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/image v0.25.0 // indirect
-	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/tools v0.45.0 // indirect
+	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
+	golang.org/x/image v0.45.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect

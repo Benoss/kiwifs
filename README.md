@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://github.com/kiwifs/kiwifs/actions/workflows/ci.yml"><img src="https://github.com/kiwifs/kiwifs/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL--1.1-blue" alt="License: BSL 1.1"></a>
-  <a href="https://github.com/kiwifs/kiwifs"><img src="https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white" alt="Go 1.25"></a>
+  <a href="https://github.com/kiwifs/kiwifs"><img src="https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white" alt="Go 1.27"></a>
   <a href="https://hub.docker.com/r/ameliaanhlam/kiwifs"><img src="https://img.shields.io/docker/pulls/ameliaanhlam/kiwifs" alt="Docker Pulls"></a>
   <a href="https://github.com/kiwifs/kiwifs"><img src="https://img.shields.io/badge/single_binary-yes-green" alt="Single Binary"></a>
   <a href="https://github.com/kiwifs/kiwifs"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs Welcome"></a>

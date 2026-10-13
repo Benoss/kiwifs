@@ -631,6 +631,8 @@ func (s *Server) setupRoutes() {
 	api.POST("/ingest", h.Ingest)
 	api.GET("/velocity", h.Velocity)
 	api.POST("/eval", h.Eval)
+	api.GET("/render/d2", h.RenderD2)
+	api.POST("/render/d2", h.RenderD2)
 	api.POST("/brief", h.Brief)
 	api.POST("/webhooks", h.CreateWebhook)
 	api.GET("/webhooks", h.ListWebhooks)

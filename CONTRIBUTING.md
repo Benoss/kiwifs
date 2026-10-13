@@ -6,7 +6,7 @@ Thanks for your interest in contributing to KiwiFS — the markdown filesystem f
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.27+
 - Node.js 20+ (for the web UI)
 - Git
 

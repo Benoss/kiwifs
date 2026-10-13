@@ -93,6 +93,14 @@ const builtinSlashCommands: MarkdownSlashCommand[] = [
     cursorOffset: "```\n".length,
   },
   {
+    name: "d2",
+    icon: "🔀",
+    label: "D2 diagram",
+    detail: "Insert a D2 diagram, rendered to SVG by the server",
+    insert: "```d2\nclient -> server: request\nserver -> db: query\n```\n",
+    cursorOffset: "```d2\n".length,
+  },
+  {
     name: "quote",
     icon: "💬",
     label: "Quote",

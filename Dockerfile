@@ -12,7 +12,7 @@ ENV NODE_OPTIONS=--max-old-space-size=3072
 RUN npm run build
 
 # Stage 2: Cross-compile Go binary on the build host for the target arch.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG TARGETARCH
 

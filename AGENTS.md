@@ -6,7 +6,7 @@ Instructions for AI agents (Codex, Claude Code, Cursor, etc.) working in this re
 
 KiwiFS is a single Go binary that turns a folder of markdown files into a searchable, versioned, multi-protocol knowledge server with an embedded React web UI. Files on disk are the source of truth; indexes are rebuildable derivatives.
 
-**Tech stack:** Go 1.25+ (backend), React 19 + TypeScript + Vite + Tailwind 4 + shadcn/ui (frontend), SQLite FTS5 (search), Git (versioning).
+**Tech stack:** Go 1.27+ (backend), React 19 + TypeScript + Vite + Tailwind 4 + shadcn/ui (frontend), SQLite FTS5 (search), Git (versioning).
 
 ## Repository Structure
 
