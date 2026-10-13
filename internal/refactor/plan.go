@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/kiwifs/kiwifs/internal/links"
@@ -77,17 +78,17 @@ type Stats struct {
 // Plan is a complete, unapplied restructuring. Errors non-empty means the
 // plan must not be applied; Ops is then empty.
 type Plan struct {
-	Digest      string       `json:"digest"`
-	Moves       []PathChange `json:"moves"`
-	Merges      []PathChange `json:"merges"`
-	Edits       []FileEdit   `json:"edits"`
+	Digest string       `json:"digest"`
+	Moves  []PathChange `json:"moves"`
+	Merges []PathChange `json:"merges"`
+	Edits  []FileEdit   `json:"edits"`
 	// ContentEdits lists the pages whose content the manifest's edits
 	// change, and how.
 	ContentEdits []ContentEdit `json:"content_edits,omitempty"`
-	Comments    []PathChange `json:"comments,omitempty"`
-	State       []StateEdit  `json:"state,omitempty"`
-	RemovedDirs []string     `json:"removed_dirs,omitempty"`
-	Errors      []string     `json:"errors,omitempty"`
+	Comments     []PathChange  `json:"comments,omitempty"`
+	State        []StateEdit   `json:"state,omitempty"`
+	RemovedDirs  []string      `json:"removed_dirs,omitempty"`
+	Errors       []string      `json:"errors,omitempty"`
 	// Base is HEAD when the plan was built (informational: drift is
 	// detected per file by ETag, not by HEAD). ManifestHash identifies the
 	// request. Neither is part of the digest.
@@ -97,6 +98,9 @@ type Plan struct {
 	Client string `json:"client,omitempty"`
 	// Reverts is the commit a revert plan undoes.
 	Reverts string `json:"reverts,omitempty"`
+	// Now is the clock the manifest's expressions saw. Pass it back as the
+	// manifest's now to apply exactly this plan.
+	Now *time.Time `json:"now,omitempty"`
 	// Rejected names the pages behind errors that are about one page only
 	// (a failed validation, an edit that cannot apply). A caller may drop
 	// those pages and plan again; any error not listed here is global.
@@ -198,6 +202,9 @@ type Options struct {
 	// Select resolves an edit's select.query. Without it, query selection
 	// is an error.
 	Select SelectFunc
+	// Now is the clock expressions see when the manifest pins none.
+	// Zero means the current time.
+	Now time.Time
 }
 
 type planner struct {
@@ -215,6 +222,11 @@ type planner struct {
 	// relinking; editNotes says what changed.
 	edited    map[string][]byte
 	editNotes map[string][]string
+	// steps are the manifest's compiled edits; envs caches expression
+	// environments; now is the clock expressions see.
+	steps []*editStep
+	envs  map[string]map[string]any
+	now   time.Time
 }
 
 func (p *planner) errorf(format string, args ...any) {
@@ -256,8 +268,24 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 	for _, f := range files {
 		p.exists[f] = true
 	}
+	p.pre = links.BuildPathIndex(files)
+	switch {
+	case m.Now != nil:
+		p.now = m.Now.UTC()
+	case !opts.Now.IsZero():
+		p.now = opts.Now.UTC()
+	default:
+		p.now = time.Now().UTC().Truncate(time.Second)
+	}
+	if usesExpressions(m) {
+		now := p.now
+		p.plan.Now = &now
+	}
 
 	p.expandMoves(m.Moves)
+	if err := p.selectEdits(ctx, m); err != nil {
+		return nil, err
+	}
 	p.expandMerges(m.Merges)
 	postFiles := p.checkDestinations()
 	p.checkClaims()
@@ -265,10 +293,10 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		return nil, err
 	}
 	if len(p.plan.Errors) > 0 {
+		p.plan.Ops = Ops{}
 		return p.plan, nil
 	}
 
-	p.pre = links.BuildPathIndex(files)
 	p.post = links.BuildPathIndex(postFiles)
 	if err := p.rewritePages(ctx); err != nil {
 		return nil, err
@@ -293,6 +321,15 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 	p.plan.ManifestHash = manifestHash(m)
 	p.plan.Client = opts.Client
 	return p.plan, nil
+}
+
+func usesExpressions(m *Manifest) bool {
+	for _, e := range m.Edits {
+		if e.When != "" || e.MoveTo != "" || len(e.Compute) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func manifestHash(m *Manifest) string {

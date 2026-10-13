@@ -88,6 +88,17 @@ workspace before any change. Frontmatter is edited line by line, so comments,
 key order and alignment survive and a retag is a one-line diff per page.
 `POST /refactor/plan?diffs=true` adds a unified diff per written page.
 
+Edits can also compute: `when:` keeps only pages for which an expression is
+true, `compute: {key: expr}` sets a value per page, and
+`move_to: "archive/{{year}}/{{slug}}.md"` moves each page to a templated path,
+with `on_conflict: suffix("-%d")` to number collisions deterministically
+(otherwise they are conflicts). Expressions are [expr](https://expr-lang.org)
+over the page as it was before the manifest — `path`, `dir`, `name`, `stem`,
+`title`, `tags`, `fm`, `links`, `date`, `modified`, `now` — with `slug()`,
+`year()`, `month()`, `day()`, `date(t, layout)`. A plan that uses expressions
+reports the `now` it used; put it in the manifest (`now:`) when applying so the
+digest still matches.
+
 Plans also cover typed-link frontmatter fields (`[links] typed_fields`),
 `**` globs, `from_regex` moves with `$1` captures, and task claims: a page
 claimed by another actor cannot be moved. Destinations that collide by case or

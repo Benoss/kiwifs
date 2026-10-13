@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/refactor"
@@ -22,6 +23,9 @@ const manifestHelp = `Restructuring manifest, as a YAML/JSON string or an object
                       set: {status: archived}, unset: [reviewer], add_tags: [x], remove_tags: [y],
                       replace: [{find: "Acme Corp", with: "Acme"}]}]
   rename_tags:      [{from: ml, to: machine-learning}]
+Edits may also take when: (a boolean expression), compute: {key: expression}, and move_to: "archive/{{year}}/{{slug}}.md"
+with on_conflict: suffix("-%d"). Expressions see path, dir, name, stem, title, tags, fm, links, date, modified, now and
+slug(), year(), month(), day(), date(t, layout).
 Selection sees the workspace before any change; select needs at least one criterion. Unknown keys are an error.`
 
 func registerRefactorTools(s *server.MCPServer, b Backend) {
@@ -50,6 +54,7 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 					"Show the plan to the user before applying anything large."),
 				mcp.WithAny("manifest", mcp.Required(), mcp.Description("The same manifest that was planned.")),
 				mcp.WithString("digest", mcp.Required(), mcp.Description("Digest from kiwi_refactor_plan."), mcp.MaxLength(64)),
+				mcp.WithString("now", mcp.Description("The plan's now, when it reports one (manifests with when/compute/move_to expressions): applying recomputes with that clock so the digest still matches.")),
 				mcp.WithString("actor", mcp.Description("Who is restructuring — defaults to mcp-agent")),
 				mcp.WithDestructiveHintAnnotation(true),
 				mcp.WithIdempotentHintAnnotation(false),
@@ -113,6 +118,7 @@ type planView struct {
 	Applicable bool                   `json:"applicable"`
 	Errors     []string               `json:"errors,omitempty"`
 	Warnings   []string               `json:"warnings,omitempty"`
+	Now        *time.Time             `json:"now,omitempty"`
 	Stats      refactor.Stats         `json:"stats"`
 	Counts     planCounts             `json:"counts"`
 	Moves      []refactor.PathChange  `json:"moves"`
@@ -167,6 +173,7 @@ func viewPlanDetail(plan *refactor.Plan, detail string, offset, limit int) planV
 		Applicable: len(plan.Errors) == 0,
 		Errors:     plan.Errors,
 		Warnings:   plan.Warnings,
+		Now:        plan.Now,
 		Stats:      plan.Stats,
 		Counts: planCounts{
 			Moves:        len(plan.Moves),
@@ -257,6 +264,13 @@ func handleRefactorApply(b Backend) server.ToolHandlerFunc {
 		digest, _ := args["digest"].(string)
 		if digest == "" {
 			return mcp.NewToolResultError("digest is required: run kiwi_refactor_plan first and pass its digest"), nil
+		}
+		if raw, _ := args["now"].(string); raw != "" && m.Now == nil {
+			now, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				return mcp.NewToolResultError("now: " + err.Error()), nil
+			}
+			m.Now = &now
 		}
 		actor, _ := args["actor"].(string)
 		if actor == "" {

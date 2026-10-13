@@ -3,11 +3,15 @@ package refactor
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 	"github.com/kiwifs/kiwifs/internal/markdown"
 )
 
@@ -32,39 +36,226 @@ func isInlineTagChar(b byte) bool {
 		b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
+// editStep is one manifest edit, compiled, with the pages it applies to.
+type editStep struct {
+	index   int
+	edit    *Edit
+	pages   map[string]bool
+	when    *vm.Program
+	compute map[string]*vm.Program
+	moveTo  *template
+	suffix  string // on_conflict suffix format; "" means report a conflict
+}
+
+var suffixRe = regexp.MustCompile(`^suffix(?:\(\s*"(.*)"\s*\))?$`)
+
+// selectEdits compiles every edit, resolves its selection and when:
+// against the workspace as it is now, and turns move_to templates into
+// moves. It runs before destinations are checked, so computed moves are
+// checked like any other.
+func (p *planner) selectEdits(ctx context.Context, m *Manifest) error {
+	for i := range m.Edits {
+		e := &m.Edits[i]
+		st, err := compileEdit(i, e)
+		if err != nil {
+			p.errorf("edits[%d]: %v", i, err)
+			continue
+		}
+		pages, err := p.selectPages(ctx, e.Select)
+		if err != nil {
+			p.errorf("edits[%d]: %v", i, err)
+			continue
+		}
+		if st.when != nil {
+			for _, f := range sortedKeys(pages) {
+				env, err := p.env(ctx, f)
+				if err != nil {
+					return err
+				}
+				ok, err := expr.Run(st.when, env)
+				if err != nil {
+					p.plan.Reject(f, fmt.Sprintf("%s: edits[%d] when: %v", f, i, err))
+					continue
+				}
+				if b, _ := ok.(bool); !b {
+					delete(pages, f)
+				}
+			}
+		}
+		if len(pages) == 0 {
+			p.plan.Warnings = append(p.plan.Warnings, fmt.Sprintf("edits[%d] selects no pages", i))
+		}
+		st.pages = pages
+		p.steps = append(p.steps, st)
+	}
+	for _, st := range p.steps {
+		if st.moveTo != nil {
+			if err := p.expandComputedMoves(ctx, st); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func compileEdit(i int, e *Edit) (*editStep, error) {
+	if err := validateEdit(e); err != nil {
+		return nil, err
+	}
+	st := &editStep{index: i, edit: e}
+	var err error
+	if e.When != "" {
+		if st.when, err = compileExpr(e.When, expr.AsBool()); err != nil {
+			return nil, fmt.Errorf("when: %w", err)
+		}
+	}
+	if len(e.Compute) > 0 {
+		st.compute = map[string]*vm.Program{}
+		for k, src := range e.Compute {
+			if strings.TrimSpace(k) == "" {
+				return nil, fmt.Errorf("compute: empty key")
+			}
+			if st.compute[k], err = compileExpr(src); err != nil {
+				return nil, fmt.Errorf("compute %s: %w", k, err)
+			}
+		}
+	}
+	if e.MoveTo != "" {
+		if st.moveTo, err = compileTemplate(e.MoveTo); err != nil {
+			return nil, fmt.Errorf("move_to: %w", err)
+		}
+	}
+	switch oc := strings.TrimSpace(e.OnConflict); {
+	case oc == "" || oc == "error":
+	default:
+		m := suffixRe.FindStringSubmatch(oc)
+		if m == nil {
+			return nil, fmt.Errorf(`on_conflict must be "error" or suffix("-%%d"), got %q`, oc)
+		}
+		st.suffix = m[1]
+		if st.suffix == "" {
+			st.suffix = "-%d"
+		}
+		if strings.Count(st.suffix, "%d") != 1 || strings.Count(st.suffix, "%") != 1 || strings.ContainsAny(st.suffix, "/\\") {
+			return nil, fmt.Errorf("on_conflict suffix needs exactly one %%d and no slashes")
+		}
+		if st.moveTo == nil {
+			return nil, fmt.Errorf("on_conflict only applies to move_to")
+		}
+	}
+	return st, nil
+}
+
+// expandComputedMoves renders move_to for each selected page, in source
+// order, and resolves collisions with the suffix policy when there is one.
+// A destination is taken when a page that stays, or another destination,
+// has the same NFC + case-folded path.
+func (p *planner) expandComputedMoves(ctx context.Context, st *editStep) error {
+	taken := map[string]bool{}
+	for _, f := range p.files {
+		if _, moving := p.moved[f]; !moving {
+			taken[FoldKey(f)] = true
+		}
+	}
+	for _, to := range p.moved {
+		taken[FoldKey(to)] = true
+	}
+	for _, f := range sortedKeys(st.pages) {
+		env, err := p.env(ctx, f)
+		if err != nil {
+			return err
+		}
+		raw, err := st.moveTo.render(env)
+		if err != nil {
+			p.plan.Reject(f, fmt.Sprintf("%s: edits[%d] move_to: %v", f, st.index, err))
+			continue
+		}
+		to, toDir, err := cleanPath(raw)
+		if err != nil {
+			p.plan.Reject(f, fmt.Sprintf("%s: edits[%d] move_to %q: %v", f, st.index, raw, err))
+			continue
+		}
+		if toDir || to == "" {
+			to = joinDir(to, path.Base(f))
+		}
+		if to == f {
+			continue
+		}
+		delete(taken, FoldKey(f))
+		if st.suffix != "" && taken[FoldKey(to)] {
+			ext := path.Ext(to)
+			base := strings.TrimSuffix(to, ext)
+			for n := 2; ; n++ {
+				if n > 10000 {
+					p.plan.Reject(f, fmt.Sprintf("%s: edits[%d]: no free name for %s", f, st.index, to))
+					break
+				}
+				cand := base + fmt.Sprintf(st.suffix, n) + ext
+				if !taken[FoldKey(cand)] {
+					to = cand
+					break
+				}
+			}
+		}
+		taken[FoldKey(to)] = true
+		p.addMove(f, to)
+	}
+	return nil
+}
+
+// env is the cached expression environment of a page, from disk.
+func (p *planner) env(ctx context.Context, f string) (map[string]any, error) {
+	if e, ok := p.envs[f]; ok {
+		return e, nil
+	}
+	content, err := p.read(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	var modified time.Time
+	if info, err := p.ws.Store.Stat(ctx, f); err == nil && info != nil {
+		modified = info.ModTime.UTC()
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range scanAll(content, p.ws.typedFields()) {
+		if r.Unsplicable {
+			continue
+		}
+		if target := resolve(p.pre, r.Kind, r.Path, f); target != "" && !seen[target] {
+			seen[target] = true
+			out = append(out, target)
+		}
+	}
+	if p.envs == nil {
+		p.envs = map[string]map[string]any{}
+	}
+	e := pageEnv(f, content, modified, p.now, out)
+	p.envs[f] = e
+	return e, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // planEdits applies every edit and tag rename to the pages they select,
 // against the content on disk now, and keeps the result for rewritePages
 // to relink and write. Selection never sees the effect of earlier edits or
 // of the moves in the same manifest: the whole manifest is evaluated
 // against one snapshot.
 func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
-	if len(m.Edits) == 0 && len(m.RenameTags) == 0 {
+	if len(p.steps) == 0 && len(m.RenameTags) == 0 {
 		return nil
 	}
 	p.edited = map[string][]byte{}
 	p.editNotes = map[string][]string{}
-
-	type step struct {
-		edit  *Edit
-		pages map[string]bool
-	}
-	var steps []step
-	for i := range m.Edits {
-		e := &m.Edits[i]
-		pages, err := p.selectPages(ctx, e.Select)
-		if err != nil {
-			p.errorf("edits[%d]: %v", i, err)
-			continue
-		}
-		if err := validateEdit(e); err != nil {
-			p.errorf("edits[%d]: %v", i, err)
-			continue
-		}
-		if len(pages) == 0 {
-			p.plan.Warnings = append(p.plan.Warnings, fmt.Sprintf("edits[%d] selects no pages", i))
-		}
-		steps = append(steps, step{edit: e, pages: pages})
-	}
+	steps := p.steps
 	for i, r := range m.RenameTags {
 		if strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" || strings.ContainsAny(r.From+r.To, "\n\r,") {
 			p.errorf("rename_tags[%d]: from and to must be single tags", i)
@@ -101,13 +292,19 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 		}
 		working := content
 		var notes []string
-		for si, st := range steps {
+		for _, st := range steps {
 			if !st.pages[f] {
 				continue
 			}
-			out, n, err := applyEdit(working, st.edit)
+			var env map[string]any
+			if st.compute != nil {
+				if env, err = p.env(ctx, f); err != nil {
+					return err
+				}
+			}
+			out, n, err := applyEdit(working, st, env)
 			if err != nil {
-				p.plan.Reject(f, fmt.Sprintf("%s: edits[%d]: %v", f, si, err))
+				p.plan.Reject(f, fmt.Sprintf("%s: edits[%d]: %v", f, st.index, err))
 				break
 			}
 			working, notes = out, append(notes, n...)
@@ -141,7 +338,7 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 }
 
 func validateEdit(e *Edit) error {
-	if len(e.Set) == 0 && len(e.Unset) == 0 && len(e.AddTags) == 0 && len(e.RemoveTags) == 0 && len(e.Replace) == 0 {
+	if len(e.Set) == 0 && len(e.Compute) == 0 && len(e.Unset) == 0 && len(e.AddTags) == 0 && len(e.RemoveTags) == 0 && len(e.Replace) == 0 && e.MoveTo == "" {
 		return fmt.Errorf("edit changes nothing")
 	}
 	for k := range e.Set {
@@ -228,8 +425,10 @@ func (p *planner) selectPages(ctx context.Context, sel Selector) (map[string]boo
 	return out, nil
 }
 
-// applyEdit runs one edit on one page's content.
-func applyEdit(content []byte, e *Edit) ([]byte, []string, error) {
+// applyEdit runs one edit on one page's content. env is the page's
+// expression environment (pre-change), needed only for compute.
+func applyEdit(content []byte, st *editStep, env map[string]any) ([]byte, []string, error) {
+	e := st.edit
 	var notes []string
 	keys := make([]string, 0, len(e.Set))
 	for k := range e.Set {
@@ -244,6 +443,24 @@ func applyEdit(content []byte, e *Edit) ([]byte, []string, error) {
 		}
 		if string(before) != string(content) {
 			notes = append(notes, "set "+k)
+		}
+	}
+	ckeys := make([]string, 0, len(st.compute))
+	for k := range st.compute {
+		ckeys = append(ckeys, k)
+	}
+	sort.Strings(ckeys)
+	for _, k := range ckeys {
+		v, err := expr.Run(st.compute[k], env)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compute %s: %w", k, err)
+		}
+		before := content
+		if content, err = markdown.SetFrontmatterField(content, k, normalizeNumber(v)); err != nil {
+			return nil, nil, err
+		}
+		if string(before) != string(content) {
+			notes = append(notes, "compute "+k)
 		}
 	}
 	for _, k := range e.Unset {

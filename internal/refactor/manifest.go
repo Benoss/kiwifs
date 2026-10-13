@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	yaml "go.yaml.in/yaml/v3"
 )
@@ -55,6 +56,9 @@ type Manifest struct {
 	DeleteEmptyDirs bool        `json:"delete_empty_dirs,omitempty" yaml:"delete_empty_dirs"`
 	Edits           []Edit      `json:"edits,omitempty" yaml:"edits"`
 	RenameTags      []TagRename `json:"rename_tags,omitempty" yaml:"rename_tags"`
+	// Now pins the clock expressions see. A plan records the time it used;
+	// pass it back to apply exactly what was reviewed.
+	Now *time.Time `json:"now,omitempty" yaml:"now"`
 }
 
 // Selector picks pages. Every criterion given narrows the selection; at
@@ -70,14 +74,31 @@ type Selector struct {
 }
 
 // Edit changes every selected page. Operations run in the order listed
-// here: set, unset, add_tags, remove_tags, replace.
+// here: set, compute, unset, add_tags, remove_tags, replace; move_to then
+// relocates the page. Every expression sees the page as it was before the
+// manifest, so one edit's result never feeds another's condition.
 type Edit struct {
-	Select     Selector       `json:"select" yaml:"select"`
-	Set        map[string]any `json:"set,omitempty" yaml:"set"`
-	Unset      []string       `json:"unset,omitempty" yaml:"unset"`
-	AddTags    []string       `json:"add_tags,omitempty" yaml:"add_tags"`
-	RemoveTags []string       `json:"remove_tags,omitempty" yaml:"remove_tags"`
-	Replace    []Replace      `json:"replace,omitempty" yaml:"replace"`
+	Select Selector `json:"select" yaml:"select"`
+	// When keeps only the selected pages for which this expression is
+	// true, e.g. `year(date) < "2024" and "draft" in tags`.
+	When string         `json:"when,omitempty" yaml:"when"`
+	Set  map[string]any `json:"set,omitempty" yaml:"set"`
+	// Compute sets keys to the value of an expression per page, e.g.
+	// {slug: "slug(title)", archived_on: "date(now)"}.
+	Compute map[string]string `json:"compute,omitempty" yaml:"compute"`
+	// MoveTo is a destination template: literal text with {{expressions}},
+	// and {{slug}}, {{year}}, {{month}}, {{day}} as shorthands, e.g.
+	// "archive/{{year}}/{{slug}}.md". Ending in "/" keeps the file name.
+	MoveTo string `json:"move_to,omitempty" yaml:"move_to"`
+	// OnConflict is what a computed destination that is taken does:
+	// "error" (default) or suffix("-%d"), which tries name-2.md, name-3.md…
+	// in source-path order, so the same workspace always gets the same
+	// names.
+	OnConflict string    `json:"on_conflict,omitempty" yaml:"on_conflict"`
+	Unset      []string  `json:"unset,omitempty" yaml:"unset"`
+	AddTags    []string  `json:"add_tags,omitempty" yaml:"add_tags"`
+	RemoveTags []string  `json:"remove_tags,omitempty" yaml:"remove_tags"`
+	Replace    []Replace `json:"replace,omitempty" yaml:"replace"`
 }
 
 // Replace rewrites body text outside frontmatter and code. With Regex,
