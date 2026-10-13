@@ -182,8 +182,10 @@ type Backend interface {
 	// WriteFileIfMatch is WriteFile that fails with pipeline.ErrConflict
 	// when the file exists and its ETag is not ifMatch.
 	WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (etag string, err error)
-	// PatchFrontmatter sets fields (nil removes) without touching the body.
-	PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (etag string, err error)
+	// PatchFrontmatter sets fields (nil removes) without touching the body,
+	// as field manager actor: keys another manager set are refused with
+	// pipeline.ErrFieldConflict unless force.
+	PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (etag string, err error)
 	// RefactorPlan previews a restructuring; nothing is written.
 	RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error)
 	// RefactorApply applies a restructuring as one commit. A non-empty

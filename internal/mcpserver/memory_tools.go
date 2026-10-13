@@ -130,7 +130,7 @@ func handleForget(b Backend) server.ToolHandlerFunc {
 		if reason != "" {
 			fields["superseded_reason"] = reason
 		}
-		etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, "mcp-agent")
+		etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, "mcp-agent", true)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to write %s: %v", path, err)), nil
 		}

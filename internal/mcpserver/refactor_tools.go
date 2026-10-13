@@ -174,10 +174,12 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_patch_frontmatter",
 				mcp.WithDescription("Set or remove frontmatter fields on one page without resending its body. A null value removes the key. "+
-					"Pass if_match (the ETag from kiwi_read) to fail instead of overwriting someone else's edit."),
+					"Pass if_match (the ETag from kiwi_read) to fail instead of overwriting someone else's edit. "+
+					"Keys you set are yours: another agent changing them gets a conflict unless it forces, so agents sharing a page can each manage their own fields."),
 				mcp.WithString("path", mcp.Required(), mcp.Description("Relative path like pages/auth.md"), mcp.MaxLength(500)),
 				mcp.WithObject("fields", mcp.Required(), mcp.Description(`Fields to set, e.g. {"status": "done", "tags": ["a", "b"], "draft": null}`)),
 				mcp.WithString("if_match", mcp.Description("ETag the page must still have")),
+				mcp.WithBoolean("force", mcp.Description("Change keys another agent set (and owns) anyway. Without it, such a patch fails and names the owner.")),
 				mcp.WithString("actor", mcp.Description("Who is editing — defaults to mcp-agent")),
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
@@ -573,8 +575,12 @@ func handlePatchFrontmatter(b Backend) server.ToolHandlerFunc {
 		if actor == "" {
 			actor = "mcp-agent"
 		}
-		etag, err := b.PatchFrontmatter(ctx, path, fields, ifMatch, actor)
+		force, _ := args["force"].(bool)
+		etag, err := b.PatchFrontmatter(ctx, path, fields, ifMatch, actor, force)
 		if err != nil {
+			if errors.Is(err, pipeline.ErrFieldConflict) {
+				return mcp.NewToolResultError(fmt.Sprintf("Nothing written: %v", err)), nil
+			}
 			if errors.Is(err, pipeline.ErrConflict) {
 				return mcp.NewToolResultError(fmt.Sprintf("%s changed since you read it (if_match did not match). Re-read it and retry.", path)), nil
 			}

@@ -451,3 +451,54 @@ func TestSplitIsPlanOnlyUntilConfirmedAndReverts(t *testing.T) {
 		t.Fatalf("revert left differences in %v", d)
 	}
 }
+
+func TestFrontmatterFieldOwnership(t *testing.T) {
+	p, dir := refactorFixture(t)
+	ctx := context.Background()
+	writeFixture(t, dir, map[string]string{"task.md": "---\ntitle: T\n---\nbody\n"})
+
+	if _, err := p.PatchFrontmatterAs(ctx, "task.md", map[string]any{"status": "doing"}, "", "a", "agent-a", false); err != nil {
+		t.Fatal(err)
+	}
+	// Another agent may set its own keys, and may restate A's value...
+	if _, err := p.PatchFrontmatterAs(ctx, "task.md", map[string]any{"reviewer": "bob", "status": "doing"}, "", "b", "agent-b", false); err != nil {
+		t.Fatal(err)
+	}
+	// ...but not change it.
+	_, err := p.PatchFrontmatterAs(ctx, "task.md", map[string]any{"status": "done"}, "", "b", "agent-b", false)
+	var fc *FieldConflictError
+	if !errors.As(err, &fc) || len(fc.Conflicts) != 1 || fc.Conflicts[0] != (FieldConflict{Key: "status", Manager: "agent-a"}) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readFile(t, dir, "task.md"); !strings.Contains(got, "status: doing") {
+		t.Fatalf("a refused patch wrote: %q", got)
+	}
+	// A manifest edit is held to the same rule unless it forces.
+	m := &refactor.Manifest{Edits: []refactor.Edit{{Select: refactor.Selector{Paths: []string{"task.md"}}, Set: map[string]any{"status": "blocked"}}}}
+	plan, _, err := p.Refactor(ctx, m, refactor.Options{Actor: "agent-b"}, "", "agent-b")
+	if !errors.Is(err, ErrPlanInvalid) || len(plan.Rejected) != 1 || !strings.Contains(plan.Rejected[0].Error, "managed by agent-a") {
+		t.Fatalf("err = %v rejected = %+v", err, plan.Rejected)
+	}
+	m.Edits[0].Force = true
+	if _, _, err := p.Refactor(ctx, m, refactor.Options{Actor: "agent-b"}, "", "agent-b"); err != nil {
+		t.Fatal(err)
+	}
+	owners, _ := p.FieldOwners(ctx, "task.md")
+	if owners["status"].Manager != "agent-b" || owners["reviewer"].Manager != "agent-b" {
+		t.Fatalf("owners = %+v", owners)
+	}
+	// A person rewrites the page: B's ownership of status is stale.
+	if _, err := p.Write(ctx, "task.md", []byte("---\ntitle: T\nstatus: review\nreviewer: bob\n---\nbody\n"), "human"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PatchFrontmatterAs(ctx, "task.md", map[string]any{"status": "done"}, "", "a", "agent-a", false); err != nil {
+		t.Fatalf("stale ownership must not block: %v", err)
+	}
+	// Ownership follows the page when it moves.
+	if _, _, err := p.RenameWithLinks(ctx, "task.md", "tasks/task.md", "t", true); err != nil {
+		t.Fatal(err)
+	}
+	if owners, _ := p.FieldOwners(ctx, "tasks/task.md"); owners["status"].Manager != "agent-a" || owners["reviewer"].Manager != "agent-b" {
+		t.Fatalf("owners after move = %+v", owners)
+	}
+}

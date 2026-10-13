@@ -1003,12 +1003,15 @@ func (r *RemoteBackend) WorkflowBoard(ctx context.Context, workflowName string) 
 func asConflict(err error) error {
 	var he *httpError
 	if errors.As(err, &he) && he.StatusCode == http.StatusConflict {
+		if strings.Contains(he.Message, "managed by") {
+			return fmt.Errorf("%w: %s", pipeline.ErrFieldConflict, he.Message)
+		}
 		return fmt.Errorf("%w: %s", pipeline.ErrConflict, he.Message)
 	}
 	return err
 }
 
-func (r *RemoteBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (string, error) {
+func (r *RemoteBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (string, error) {
 	body, err := json.Marshal(map[string]any{"fields": fields})
 	if err != nil {
 		return "", err
@@ -1020,7 +1023,14 @@ func (r *RemoteBackend) PatchFrontmatter(ctx context.Context, path string, field
 	if ifMatch != "" {
 		hdrs = append(hdrs, "If-Match", `"`+ifMatch+`"`)
 	}
-	resp, err := r.do(ctx, http.MethodPatch, r.apiPrefix+"/file/frontmatter?path="+url.QueryEscape(path), bytes.NewReader(body), hdrs...)
+	if actor != "" {
+		hdrs = append(hdrs, "X-Field-Manager", actor)
+	}
+	q := r.apiPrefix + "/file/frontmatter?path=" + url.QueryEscape(path)
+	if force {
+		q += "&force=true"
+	}
+	resp, err := r.do(ctx, http.MethodPatch, q, bytes.NewReader(body), hdrs...)
 	if err != nil {
 		return "", err
 	}

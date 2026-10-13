@@ -107,6 +107,9 @@ type Edit struct {
 	AddTags    []string  `json:"add_tags,omitempty" yaml:"add_tags"`
 	RemoveTags []string  `json:"remove_tags,omitempty" yaml:"remove_tags"`
 	Replace    []Replace `json:"replace,omitempty" yaml:"replace"`
+	// Force changes frontmatter keys other field managers own (see
+	// pipeline.PatchFrontmatterAs) instead of rejecting those pages.
+	Force bool `json:"force,omitempty" yaml:"force"`
 }
 
 // Replace rewrites body text outside frontmatter and code. With Regex,

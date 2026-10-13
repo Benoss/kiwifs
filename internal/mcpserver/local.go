@@ -301,11 +301,11 @@ func (b *LocalBackend) WriteFileIfMatch(ctx context.Context, path, content, acto
 	return res.ETag, nil
 }
 
-func (b *LocalBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (string, error) {
+func (b *LocalBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (string, error) {
 	if err := b.init(); err != nil {
 		return "", err
 	}
-	res, err := b.stack.Pipeline.PatchFrontmatter(ctx, path, fields, ifMatch, actor)
+	res, err := b.stack.Pipeline.PatchFrontmatterAs(ctx, path, fields, ifMatch, actor, actor, force)
 	if err != nil {
 		return "", err
 	}
@@ -2672,7 +2672,7 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 	}
 	// Pinned to the state the transition was validated against: if the
 	// page moved on in between, the advance fails instead of clobbering.
-	etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, actor)
+	etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, actor, true)
 	if err != nil {
 		return nil, err
 	}

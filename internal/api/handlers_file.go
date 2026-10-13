@@ -271,8 +271,14 @@ func (h *Handlers) patchFrontmatterFields(c echo.Context, path string, fields ma
 	}
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
 	ifMatch := strings.Trim(c.Request().Header.Get("If-Match"), `"`)
-	res, err := h.pipe.PatchFrontmatter(c.Request().Context(), path, fields, ifMatch, actor)
+	manager := pipeline.NormalizeActor(c.Request().Header.Get("X-Field-Manager"))
+	force := c.QueryParam("force") == "true"
+	res, err := h.pipe.PatchFrontmatterAs(c.Request().Context(), path, fields, ifMatch, actor, manager, force)
 	if err != nil {
+		var fc *pipeline.FieldConflictError
+		if errors.As(err, &fc) {
+			return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "conflicts": fc.Conflicts})
+		}
 		if errors.Is(err, storage.ErrPathDenied) {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}

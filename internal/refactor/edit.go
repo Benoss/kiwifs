@@ -318,6 +318,12 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 			}
 			working, notes = out, append(notes, n...)
 		}
+		if p.opts.FieldOwners != nil && string(working) != string(content) && !forced(steps, f) {
+			if owned := p.opts.FieldOwners(f, content, working, p.opts.Actor); len(owned) > 0 {
+				p.plan.Reject(f, fmt.Sprintf("%s: %s; add force: true to the edit to take them over", f, strings.Join(owned, ", ")))
+				continue
+			}
+		}
 		if string(working) != string(content) {
 			if _, split := p.sections[f]; split {
 				p.errorf("%s is both split and edited; split it in a manifest of its own", f)
@@ -337,6 +343,16 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 		}
 	}
 	return nil
+}
+
+// forced reports whether an edit that applies to f forces over field owners.
+func forced(steps []*editStep, f string) bool {
+	for _, st := range steps {
+		if st.pages[f] && st.edit.Force {
+			return true
+		}
+	}
+	return false
 }
 
 func validateEdit(e *Edit) error {

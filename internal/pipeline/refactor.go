@@ -131,6 +131,9 @@ func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts 
 		}
 	}
 	opts.Policy = p.RefactorPolicy
+	if opts.FieldOwners == nil {
+		opts.FieldOwners = p.fieldOwnerCheck()
+	}
 	if opts.Select == nil && p.SelectPages != nil {
 		opts.Select = func(ctx context.Context, query string) ([]string, error) {
 			// Pages written through the pipeline a moment ago may still
@@ -368,6 +371,19 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		}
 		if err := p.Claims.Rename(ctx, renames); err != nil {
 			log.Printf("pipeline: ApplyRefactor move claims: %v", err)
+		}
+	}
+	ownerRenames := map[string]string{}
+	for _, mv := range plan.Moves {
+		ownerRenames[mv.From] = mv.To
+	}
+	for _, mg := range plan.Merges {
+		ownerRenames[mg.From] = ""
+	}
+	p.moveFieldOwners(ownerRenames)
+	for _, w := range ops.Writes {
+		if w.Edited && w.Source != "" {
+			p.recordFieldOwners(w.Path, actor, w.Prior, w.Content)
 		}
 	}
 

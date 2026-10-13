@@ -99,6 +99,7 @@ type Pipeline struct {
 	// pendingApprovals: plan digest → PendingApproval an agent is waiting on.
 	pendingApprovals sync.Map
 	rawMoves         rawMoveTracker
+	fieldOwners      fieldOwnerStore
 
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so

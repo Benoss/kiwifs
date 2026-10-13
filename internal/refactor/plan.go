@@ -221,6 +221,10 @@ type Options struct {
 	// an approval recorded for the digest. Set for agent callers.
 	RequireApproval bool
 	Approved        bool
+	// FieldOwners, when set, names the managers other than manager who own
+	// frontmatter keys an edit would change; such pages are rejected unless
+	// the edit forces.
+	FieldOwners func(path string, before, after []byte, manager string) []string
 }
 
 type planner struct {
