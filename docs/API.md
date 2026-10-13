@@ -61,6 +61,9 @@ GET    /api/kiwi/changes?since=&limit=     → git-based change feed
 POST   /api/kiwi/refactor/plan             → preview a manifest of moves and merges (nothing written)
 POST   /api/kiwi/refactor/apply            → apply it as one commit ({"manifest":{...},"digest":"..."})
 POST   /api/kiwi/refactor/revert           → undo a commit as a plan ({"commit":"...","dry_run":true} to preview)
+POST   /api/kiwi/refactor/approve          → a person approves a plan for an agent ({"manifest":{...},"digest":"..."})
+GET    /api/kiwi/refactor/pending          → plans agents are waiting to have approved
+GET    /api/kiwi/refactor/raw-moves        → moves made without relinking, and the relinks manifest that repairs them
 POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
 ```
 
@@ -87,6 +90,21 @@ inline `#tags`; renaming into an existing tag is a warning). Selection sees the
 workspace before any change. Frontmatter is edited line by line, so comments,
 key order and alignment survive and a retag is a one-line diff per page.
 `POST /refactor/plan?diffs=true` adds a unified diff per written page.
+
+`[refactor]` in `.kiwi/config.toml` sets standing rules: `protect` (globs no
+plan may touch), `scope` (the only folder plans may touch), `folder_map` (a page
+listing where pages belong; moving elsewhere warns), and `approval_files` /
+`approval_links` (default 50 / 200; `-1` disables). An agent (MCP, or REST with
+`X-Kiwi-Client: mcp/…`) applying a bigger plan is asked to confirm through MCP
+elicitation when its client supports it; otherwise the request waits in
+`/refactor/pending` until a person approves it — in the web UI's **Restructure**
+view (sidebar) or with `/refactor/approve`. Plans also report `integrity`: links
+that point nowhere in the pages written, and pages a merge leaves unlinked.
+
+Moves that bypass the engine — WebDAV/NFS renames, `update_links=false`, files
+moved on disk while the watcher runs — are logged when anything referenced the
+old path. `relinks: [{from, to}]` repairs them without moving anything;
+`/refactor/raw-moves` builds that manifest for you.
 
 Edits can also compute: `when:` keeps only pages for which an expression is
 true, `compute: {key: expr}` sets a value per page, and

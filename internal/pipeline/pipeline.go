@@ -4,9 +4,9 @@ package pipeline
 
 import (
 	"bytes"
-	"errors"
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -96,7 +96,9 @@ type Pipeline struct {
 	// scope, folder map, and the size above which agents need approval.
 	RefactorPolicy refactor.Policy
 	approvals      sync.Map // plan digest → approval expiry (time.Time)
-	rawMoves       rawMoveTracker
+	// pendingApprovals: plan digest → PendingApproval an agent is waiting on.
+	pendingApprovals sync.Map
+	rawMoves         rawMoveTracker
 
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so

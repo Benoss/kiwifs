@@ -243,3 +243,19 @@ func (h *Handlers) RefactorRawMoves(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]any{"moves": moves, "manifest": m})
 }
+
+// RefactorPending godoc
+//
+//	@Summary		Restructurings waiting for approval
+//	@Description	Lists the plans agents tried to apply that exceed the workspace's [refactor] approval limits, with their manifests, so a human can review and approve them.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]any
+//	@Router			/api/kiwi/refactor/pending [get]
+func (h *Handlers) RefactorPending(c echo.Context) error {
+	pending := h.pipe.PendingApprovals()
+	if pending == nil {
+		pending = []pipeline.PendingApproval{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"pending": pending})
+}

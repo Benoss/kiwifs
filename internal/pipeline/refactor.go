@@ -3,11 +3,13 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +46,53 @@ const approvalTTL = time.Hour
 // agent may apply it once within the next hour.
 func (p *Pipeline) ApproveRefactor(digest string) {
 	p.approvals.Store(digest, time.Now().Add(approvalTTL))
+	p.pendingApprovals.Delete(digest)
+}
+
+// PendingApproval is a restructuring an agent tried to apply and that waits
+// for a human: the review UI lists these.
+type PendingApproval struct {
+	Digest   string             `json:"digest"`
+	Manifest *refactor.Manifest `json:"manifest"`
+	Actor    string             `json:"actor"`
+	Client   string             `json:"client,omitempty"`
+	Reason   string             `json:"reason"`
+	At       time.Time          `json:"at"`
+}
+
+// PendingApprovals lists the restructurings waiting for a human, newest
+// first, dropping the ones older than approvalTTL.
+func (p *Pipeline) PendingApprovals() []PendingApproval {
+	var out []PendingApproval
+	p.pendingApprovals.Range(func(k, v any) bool {
+		pa := v.(PendingApproval)
+		if time.Since(pa.At) > approvalTTL {
+			p.pendingApprovals.Delete(k)
+			return true
+		}
+		out = append(out, pa)
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	return out
+}
+
+func (p *Pipeline) requestApproval(m *refactor.Manifest, plan *refactor.Plan, opts refactor.Options, actor string) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	var copied refactor.Manifest
+	if json.Unmarshal(data, &copied) != nil {
+		return
+	}
+	if copied.Now == nil && plan.Now != nil {
+		copied.Now = plan.Now
+	}
+	p.pendingApprovals.Store(plan.Digest, PendingApproval{
+		Digest: plan.Digest, Manifest: &copied, Actor: coalesce(actor), Client: opts.Client,
+		Reason: plan.Approval.Reason, At: time.Now().UTC(),
+	})
 }
 
 // takeApproval consumes an approval for digest, if there is a live one.
@@ -168,6 +217,7 @@ func (p *Pipeline) Refactor(ctx context.Context, m *refactor.Manifest, opts refa
 			return plan, RefactorResult{}, ErrDigestMismatch
 		}
 		if opts.RequireApproval && plan.Approval != nil && plan.Approval.Required && !opts.Approved && !p.takeApproval(plan.Digest) {
+			p.requestApproval(m, plan, opts, actor)
 			return plan, RefactorResult{}, fmt.Errorf("%w: %s", ErrApprovalRequired, plan.Approval.Reason)
 		}
 		res, err := p.ApplyRefactor(ctx, plan, actor)

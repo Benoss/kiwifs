@@ -374,8 +374,15 @@ func TestRefactorApply_LargePlanNeedsHumanApproval(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "a.md")); err != nil {
 		t.Fatal("nothing may move before approval")
 	}
+	pending := b.stack.Pipeline.PendingApprovals()
+	if len(pending) != 1 || pending[0].Digest != plan.Digest || pending[0].Manifest == nil || len(pending[0].Manifest.Moves) != 1 {
+		t.Fatalf("the request should wait for a human: %+v", pending)
+	}
 	// A human approves the digest (the REST endpoint does exactly this).
 	b.stack.Pipeline.ApproveRefactor(plan.Digest)
+	if left := b.stack.Pipeline.PendingApprovals(); len(left) != 0 {
+		t.Fatalf("approved requests leave the queue: %+v", left)
+	}
 	res = callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
 	if res.IsError {
 		t.Fatalf("approved apply failed: %s", resultText(res))

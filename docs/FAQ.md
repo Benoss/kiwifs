@@ -107,7 +107,7 @@ Three ways, depending on what your agent has access to:
 
 ### What is MCP and why does KiwiFS support it?
 
-[Model Context Protocol](https://modelcontextprotocol.io) is a standard for connecting AI agents to external tools. KiwiFS's MCP server exposes 77 tools and 3 resources, so any MCP-compatible agent can read, write, search, query, create tasks, manage workflows, and remember observations without custom integration code. Call `kiwi_context` first to get the schema, playbook, and index in one shot.
+[Model Context Protocol](https://modelcontextprotocol.io) is a standard for connecting AI agents to external tools. KiwiFS's MCP server exposes 77 tools, 4 resources and a plan resource template, so any MCP-compatible agent can read, write, search, query, create tasks, manage workflows, and remember observations without custom integration code. Call `kiwi_context` first to get the schema, playbook, and index in one shot.
 
 ### Can agents use KiwiFS without a running server?
 
