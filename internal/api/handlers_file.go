@@ -209,7 +209,6 @@ func pageViewSource(c echo.Context) string {
 	return source
 }
 
-
 type patchFrontmatterRequest struct {
 	Fields map[string]any `json:"fields"`
 }

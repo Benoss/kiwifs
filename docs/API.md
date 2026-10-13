@@ -42,7 +42,7 @@ GET    /api/kiwi/tree?path=                → directory tree (JSON)
 GET    /api/kiwi/file?path=                → raw markdown + ETag
 PUT    /api/kiwi/file?path=                → write + git commit + re-index
 DELETE /api/kiwi/file?path=                → delete + git commit
-PATCH  /api/kiwi/file/frontmatter?path=    → set/remove frontmatter fields ({"fields":{...}}, null removes)
+PATCH  /api/kiwi/file/frontmatter?path=    → set/remove frontmatter fields ({"fields":{...}}, null removes; X-Field-Manager + ?force for ownership)
 POST   /api/kiwi/bulk                      → multi-file write, one commit (per-file "if_match")
 POST   /api/kiwi/rename                    → rename one file, relinking ({"from":"...","to":"..."})
 POST   /api/kiwi/rename-dir                → move a folder, relinking ({"from":"...","to":"..."})
@@ -113,6 +113,13 @@ LSP `WorkspaceEdit` (renames, minimal text edits, a `needsConfirmation`
 annotation); `kiwifs lsp` is a language server that answers
 `workspace/willRenameFiles`, so renaming a page in VS Code, Zed or Neovim
 relinks it through the same planner.
+
+Frontmatter keys have owners, as in Kubernetes server-side apply: a patch sent
+as a field manager (`X-Field-Manager`, or the actor of `kiwi_patch_frontmatter`
+and of manifest edits) owns the keys it changes, and another manager changing
+them gets `409` naming the owner unless it forces (`?force=true`,
+`force: true`). A person's edit that changes the value makes the ownership
+stale, so people always win. Ownership follows moved pages.
 
 When selection needs real logic, `POST /refactor/script` (MCP
 `kiwi_refactor_script`) runs a [Starlark](https://github.com/google/starlark-go)
