@@ -6,11 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yuin/goldmark"
-	meta "github.com/yuin/goldmark-meta"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2/ast"
 )
 
 // ClaimDirective is the directive name that marks a claim.
@@ -83,11 +79,7 @@ func nilIfEmpty(s string) any {
 // and keeping the raw string would corrupt every numeric comparison. Callers
 // should log the error and index what came back, as the kiwi-data path does.
 func ExtractClaims(content []byte) ([]Claim, error) {
-	md := goldmark.New(
-		goldmark.WithExtensions(meta.Meta, Directives),
-	)
-	ctx := parser.NewContext()
-	doc := md.Parser().Parse(text.NewReader(content), parser.WithContext(ctx))
+	doc, _ := parse(content, Directives)
 
 	var claims []Claim
 	var errs []error
@@ -191,20 +183,17 @@ func nodeText(source []byte, n ast.Node) string {
 		}
 		switch t := child.(type) {
 		case *ast.Text:
-			sb.Write(t.Segment.Value(source))
+			sb.WriteString(t.Value.Str(source))
 			if t.SoftLineBreak() || t.HardLineBreak() {
 				sb.WriteByte(' ')
 			}
-		case *ast.String:
-			sb.Write(t.Value)
+		case *directiveLabel:
+			sb.WriteString(t.Value)
 		case *ast.CodeSpan:
-			// Handled by its child Text nodes.
-			return ast.WalkContinue, nil
-		case *ast.FencedCodeBlock, *ast.CodeBlock:
-			lines := child.Lines()
-			for i := 0; i < lines.Len(); i++ {
-				seg := lines.At(i)
-				sb.Write(seg.Value(source))
+			sb.WriteString(t.Value.Value(source))
+		case *ast.CodeBlock:
+			for _, seg := range t.Value.Segments() {
+				sb.Write(seg.Bytes(source))
 			}
 			return ast.WalkSkipChildren, nil
 		}
