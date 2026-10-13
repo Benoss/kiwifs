@@ -6,9 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 // Format normalizes markdown content, fixing cosmetic issues.
@@ -391,8 +390,7 @@ func fixListMarkers(body string) string {
 	}
 
 	src := []byte(body)
-	md := goldmark.New()
-	doc := md.Parser().Parse(text.NewReader(src))
+	doc := parser.New().Parse(src)
 
 	// Collect list info from AST: for each list, gather the line numbers
 	// and whether it's ordered.
@@ -462,7 +460,8 @@ func fixListMarkers(body string) string {
 // isBlockNode reports whether n is a block-level node (has Lines() method
 // that won't panic). Inline nodes panic when Lines() is called.
 func isBlockNode(n ast.Node) bool {
-	return n.Type() == ast.TypeBlock || n.Type() == ast.TypeDocument
+	_, ok := n.(ast.BlockNode)
+	return ok || n.Kind() == ast.KindDocument
 }
 
 // nodeStartLine returns the 0-based line number of the first line of a node.
@@ -476,16 +475,16 @@ func nodeStartLine(src []byte, n ast.Node) int {
 		if !isBlockNode(child) {
 			return ast.WalkSkipChildren, nil
 		}
-		if child.Lines().Len() > 0 {
+		if len(BlockLines(child)) > 0 {
 			first = child
 			return ast.WalkStop, nil
 		}
 		return ast.WalkContinue, nil
 	})
-	if first == nil || first.Lines().Len() == 0 {
+	if first == nil {
 		return -1
 	}
-	seg := first.Lines().At(0)
+	seg := BlockLines(first)[0]
 	return countNewlines(src, seg.Start)
 }
 
@@ -499,8 +498,8 @@ func nodeEndLine(src []byte, n ast.Node) int {
 		if !isBlockNode(child) {
 			return ast.WalkSkipChildren, nil
 		}
-		if child.Lines().Len() > 0 {
-			seg := child.Lines().At(child.Lines().Len() - 1)
+		if lines := BlockLines(child); len(lines) > 0 {
+			seg := lines[len(lines)-1]
 			l := countNewlines(src, seg.Start)
 			if l > lastLine {
 				lastLine = l
@@ -578,8 +577,7 @@ func collapseBlankLines(body string) string {
 // ParseMarkdownAST returns the goldmark AST document for content. Shared by
 // both format and lint so each doesn't build its own parser.
 func ParseMarkdownAST(content []byte) ast.Node {
-	md := goldmark.New()
-	return md.Parser().Parse(text.NewReader(content))
+	return parser.New().Parse(content)
 }
 
 // CountNewlines is exported for lint to reuse.
