@@ -24,6 +24,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/importer"
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/memory"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/tracing"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -67,6 +68,7 @@ func New(opts Options) (*server.MCPServer, Backend, error) {
 
 	registerTools(s, backend, opts)
 	registerMemoryTools(s, backend)
+	registerRefactorTools(s, backend)
 	s.AddTools(widgetReferenceTool())
 	registerResources(s, backend, opts)
 
@@ -128,6 +130,7 @@ func registerTools(s *server.MCPServer, b Backend, opts Options) {
 				mcp.WithString("content", mcp.Required(), mcp.Description("Markdown content to write"), mcp.MaxLength(32*1024*1024)),
 				mcp.WithString("actor", mcp.Description("Who is writing — defaults to mcp-agent")),
 				mcp.WithString("provenance", mcp.Description("Link to source, format type:id, e.g. run:run-249")),
+				mcp.WithString("if_match", mcp.Description("ETag from kiwi_read. If the file has changed since, the write fails instead of overwriting another agent's edit.")),
 				mcp.WithDestructiveHintAnnotation(true),
 				mcp.WithIdempotentHintAnnotation(true),
 			),
@@ -205,11 +208,11 @@ func registerTools(s *server.MCPServer, b Backend, opts Options) {
 		},
 		server.ServerTool{
 			Tool: mcp.NewTool("kiwi_rename",
-				mcp.WithDescription("Atomically rename/move a file. The old path is removed and the new path is created in a single git commit. File history is preserved. By default, all [[wiki-links]] pointing to the old name are rewritten."),
+				mcp.WithDescription("Rename/move one file in a single git commit. By default every wiki and markdown link to it (and the page's own relative links) is respelled and verified to still resolve; the destination must not exist. For several moves, folders or merges use kiwi_refactor_plan + kiwi_refactor_apply."),
 				mcp.WithString("from", mcp.Required(), mcp.Description("Current file path"), mcp.MaxLength(500)),
 				mcp.WithString("to", mcp.Required(), mcp.Description("New file path"), mcp.MaxLength(500)),
 				mcp.WithString("actor", mcp.Description("Who is renaming")),
-				mcp.WithBoolean("update_links", mcp.Description("Rewrite [[wiki-links]] in other files that point to the old name (default true)")),
+				mcp.WithBoolean("update_links", mcp.Description("Rewrite links that point to the old path (default true)")),
 				mcp.WithDestructiveHintAnnotation(true),
 				mcp.WithIdempotentHintAnnotation(false),
 			),
@@ -221,12 +224,13 @@ func registerTools(s *server.MCPServer, b Backend, opts Options) {
 				mcp.WithArray(
 					"files",
 					mcp.Required(),
-					mcp.Description("Array of {path, content} objects"),
+					mcp.Description("Array of {path, content, if_match?} objects. A stale if_match fails the whole batch."),
 					mcp.Items(map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"path":    map[string]any{"type": "string"},
-							"content": map[string]any{"type": "string"},
+							"path":     map[string]any{"type": "string"},
+							"content":  map[string]any{"type": "string"},
+							"if_match": map[string]any{"type": "string"},
 						},
 						"required": []string{"path", "content"},
 					}),
@@ -1123,8 +1127,12 @@ func handleWrite(b Backend) server.ToolHandlerFunc {
 		if actor == "" {
 			actor = "mcp-agent"
 		}
-		etag, err := b.WriteFile(ctx, path, content, actor, provenance)
+		ifMatch, _ := args["if_match"].(string)
+		etag, err := b.WriteFileIfMatch(ctx, path, content, actor, provenance, ifMatch)
 		if err != nil {
+			if errors.Is(err, pipeline.ErrConflict) {
+				return mcp.NewToolResultError(fmt.Sprintf("%s changed since you read it (if_match did not match). Re-read it, merge, and retry.", path)), nil
+			}
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to write %s: %v", path, err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Written %s (ETag: %s)", path, etag)), nil
@@ -2035,13 +2043,14 @@ func handleBulkWrite(b Backend) server.ToolHandlerFunc {
 					if m, ok := item.(map[string]any); ok {
 						p, _ := m["path"].(string)
 						c, _ := m["content"].(string)
+						im, _ := m["if_match"].(string)
 						if p != "" {
 							argsForPath := map[string]any{"path": p}
 							resolvedPath, err := mutationPathArg(argsForPath, "path")
 							if err != nil {
 								return mcp.NewToolResultError(err.Error()), nil
 							}
-							files = append(files, BulkFile{Path: resolvedPath, Content: c})
+							files = append(files, BulkFile{Path: resolvedPath, Content: c, IfMatch: im})
 						}
 					}
 				}
@@ -2049,13 +2058,14 @@ func handleBulkWrite(b Backend) server.ToolHandlerFunc {
 				for _, m := range v {
 					p, _ := m["path"].(string)
 					c, _ := m["content"].(string)
+					im, _ := m["if_match"].(string)
 					if p != "" {
 						argsForPath := map[string]any{"path": p}
 						resolvedPath, err := mutationPathArg(argsForPath, "path")
 						if err != nil {
 							return mcp.NewToolResultError(err.Error()), nil
 						}
-						files = append(files, BulkFile{Path: resolvedPath, Content: c})
+						files = append(files, BulkFile{Path: resolvedPath, Content: c, IfMatch: im})
 					}
 				}
 			}
@@ -2065,6 +2075,9 @@ func handleBulkWrite(b Backend) server.ToolHandlerFunc {
 		}
 
 		etags, err := b.BulkWrite(ctx, files, actor, provenance)
+		if errors.Is(err, pipeline.ErrConflict) {
+			return mcp.NewToolResultError(fmt.Sprintf("Nothing written: %v. Re-read the file, merge, and retry.", err)), nil
+		}
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Bulk write failed: %v", err)), nil
 		}

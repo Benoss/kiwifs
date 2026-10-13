@@ -31,6 +31,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/memory"
 	"github.com/kiwifs/kiwifs/internal/pipeline"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/search"
 	"github.com/kiwifs/kiwifs/internal/similar"
 	"github.com/kiwifs/kiwifs/internal/storage"
@@ -277,6 +278,10 @@ func (b *LocalBackend) ReadFile(ctx context.Context, path string) (string, strin
 }
 
 func (b *LocalBackend) WriteFile(ctx context.Context, path, content, actor, provenance string) (string, error) {
+	return b.WriteFileIfMatch(ctx, path, content, actor, provenance, "")
+}
+
+func (b *LocalBackend) WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (string, error) {
 	if err := b.init(); err != nil {
 		return "", err
 	}
@@ -288,12 +293,39 @@ func (b *LocalBackend) WriteFile(ctx context.Context, path, content, actor, prov
 		}
 		body = injected
 	}
-	res, err := b.stack.Pipeline.Write(ctx, path, body, actor)
+	res, err := b.stack.Pipeline.WriteWithOpts(ctx, path, body, actor, pipeline.WriteOpts{IfMatch: ifMatch})
 	if err != nil {
 		return "", err
 	}
 	tracing.Record(ctx, tracing.Event{Kind: tracing.KindWrite, Path: path, ETag: res.ETag})
 	return res.ETag, nil
+}
+
+func (b *LocalBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (string, error) {
+	if err := b.init(); err != nil {
+		return "", err
+	}
+	res, err := b.stack.Pipeline.PatchFrontmatter(ctx, path, fields, ifMatch, actor)
+	if err != nil {
+		return "", err
+	}
+	tracing.Record(ctx, tracing.Event{Kind: tracing.KindWrite, Path: path, ETag: res.ETag, Detail: "frontmatter patch"})
+	return res.ETag, nil
+}
+
+func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest) (*refactor.Plan, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{})
+}
+
+func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, refactor.Options{}, digest, actor)
+	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 
 func (b *LocalBackend) DeleteFile(ctx context.Context, path, actor string) error {
@@ -670,7 +702,11 @@ func (b *LocalBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, p
 		Path    string
 		Content []byte
 	}, len(files))
+	ifMatch := map[string]string{}
 	for i, f := range files {
+		if f.IfMatch != "" {
+			ifMatch[f.Path] = f.IfMatch
+		}
 		body := []byte(f.Content)
 		if provType, provID, ok := pipeline.ParseProvenanceHeader(provenance); ok {
 			injected, perr := pipeline.InjectProvenance(body, provType, provID, actor)
@@ -682,7 +718,7 @@ func (b *LocalBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, p
 		pipeFiles[i].Path = f.Path
 		pipeFiles[i].Content = body
 	}
-	results, err := b.stack.Pipeline.BulkWrite(ctx, pipeFiles, actor, "")
+	results, err := b.stack.Pipeline.BulkWriteIfMatch(ctx, pipeFiles, ifMatch, actor, "")
 	if err != nil {
 		return nil, err
 	}

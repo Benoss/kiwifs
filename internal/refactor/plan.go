@@ -120,8 +120,18 @@ func ETag(content []byte) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
+// Options adjust how a plan is built. The zero value is what every caller
+// that restructures content wants.
+type Options struct {
+	// LeaveLinks moves files without respelling any reference to them. It
+	// exists for the legacy rename endpoints' update_links=false; the plan
+	// still carries ETags, side-file migration and a single commit.
+	LeaveLinks bool
+}
+
 type planner struct {
 	ws      Workspace
+	opts    Options
 	plan    *Plan
 	files   []string
 	exists  map[string]bool
@@ -149,12 +159,18 @@ func (p *planner) final(path string) string {
 
 // BuildPlan computes the restructuring m describes, without writing.
 func BuildPlan(ctx context.Context, ws Workspace, m *Manifest) (*Plan, error) {
+	return BuildPlanWith(ctx, ws, m, Options{})
+}
+
+// BuildPlanWith is BuildPlan with options.
+func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options) (*Plan, error) {
 	files, err := listFiles(ctx, ws.Store)
 	if err != nil {
 		return nil, err
 	}
 	p := &planner{
 		ws:      ws,
+		opts:    opts,
 		plan:    &Plan{Moves: []PathChange{}, Merges: []PathChange{}, Edits: []FileEdit{}},
 		files:   files,
 		exists:  make(map[string]bool, len(files)),
@@ -411,9 +427,22 @@ func relPath(fromDir, target string) string {
 
 // resolve finds the file a reference points to, the way the reader does.
 func resolve(idx *links.PathIndex, kind linkKind, ref, from string) string {
+	p, _ := resolveFirm(idx, kind, ref, from)
+	return p
+}
+
+// resolveFirm is resolve plus whether the match is firm (see
+// links.PathIndex.ResolveLinkFirm). Markdown links name a path outright, so
+// they are always firm.
+func resolveFirm(idx *links.PathIndex, kind linkKind, ref, from string) (string, bool) {
 	if kind == kindWiki {
-		return idx.ResolveLink(ref, from)
+		return idx.ResolveLinkFirm(ref, from)
 	}
+	p := resolveMarkdown(idx, ref, from)
+	return p, p != ""
+}
+
+func resolveMarkdown(idx *links.PathIndex, ref, from string) string {
 	p := decodeHref(ref)
 	switch {
 	case strings.HasPrefix(p, "/page/"):
@@ -474,15 +503,19 @@ func (p *planner) respell(r linkRef, oldTarget, target, from string) (string, bo
 		c := "/" + spell(target)
 		return c, ok(c)
 	}
-	// A bare name stays bare while it is unambiguous; a partial path stays
+	// A bare name stays bare while it is unambiguous (or the target sits next
+	// to the linking page, which wins every tie); a partial path stays
 	// relative to the page's folder while the target is still inside it.
-	// Anything else becomes the full path: suffix guesses like "sorting/x"
-	// read poorly and break as soon as another folder gains the same name.
+	// Anything else becomes the full path: a bare name that only resolves by
+	// tie-break, or a suffix guess like "sorting/x", breaks as soon as
+	// another folder gains the same name.
 	wasFull := strings.EqualFold(trimMD(orig), trimMD(oldTarget))
 	if !wasFull {
 		var c string
 		if !strings.Contains(orig, "/") {
-			c = spell(target[strings.LastIndex(target, "/")+1:])
+			if p.post.BasenameMatches(target) == 1 || dirOf(target) == dirOf(from) {
+				c = spell(target[strings.LastIndex(target, "/")+1:])
+			}
 		} else if dir := dirOf(from); dir == "" || strings.HasPrefix(target, dir+"/") {
 			c = spell(strings.TrimPrefix(target, dir+"/"))
 		}
@@ -551,6 +584,13 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if p.opts.LeaveLinks {
+			if moving {
+				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: content, Source: f, SourceETag: ETag(content)})
+				p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(content)})
+			}
+			continue
+		}
 		from := p.final(f)
 		refs := scanLinks(content)
 		expected := make([]string, len(refs))
@@ -558,14 +598,17 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		var report []LinkEdit
 		for i, r := range refs {
 			p.plan.Stats.Links++
-			before := resolve(p.pre, r.Kind, r.Path, f)
+			before, wasFirm := resolveFirm(p.pre, r.Kind, r.Path, f)
 			if before == "" {
 				p.plan.Stats.Unresolved++
 				continue
 			}
 			want := p.final(before)
 			expected[i] = want
-			if resolve(p.post, r.Kind, r.Path, from) == want {
+			// A link that still lands on the right page is left alone, unless
+			// it named the page outright before and now only finds it by a
+			// suffix or tie-break guess.
+			if got, firm := resolveFirm(p.post, r.Kind, r.Path, from); got == want && (firm || !wasFirm) {
 				continue
 			}
 			text, ok := p.respell(r, before, want, from)

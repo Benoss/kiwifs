@@ -9,7 +9,7 @@ export type FileSnapshot = {
 
 export type FileOp =
   | { type: "delete"; snapshots: FileSnapshot[] }
-  | { type: "move"; from: string; to: string; content: string }
+  | { type: "move"; from: string; to: string }
   | { type: "upload"; path: string };
 
 type FileOpsState = {
@@ -50,9 +50,7 @@ export async function undoFileOp(): Promise<string | null> {
       return `Restored ${op.snapshots.length} file(s)`;
 
     case "move":
-      await api.readFile(op.to).then(({ content }) =>
-        api.writeFile(op.from, content).then(() => api.deleteFile(op.to)),
-      );
+      await api.renameFile(op.to, op.from);
       return `Moved back to ${op.from}`;
 
     case "upload":

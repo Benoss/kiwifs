@@ -126,7 +126,9 @@ Run periodically or when asked to clean up:
    - Orphan page → add `[[wikilinks]]` from related pages or index
    - Broken link → `kiwi_search` for intended target, fix the link
    - Stale page → update content, bump `last-reviewed`
-   - Duplicate → merge into one, `kiwi_rename` + `kiwi_delete`
+   - Duplicate → write the combined page, then `kiwi_refactor_plan` with
+     `merges: [{from: dup.md, into: keeper.md}]` and `kiwi_refactor_apply`
+     (links, comments and state move to the keeper; never rename + delete)
 4. `kiwi_append` to `log.md` with what was fixed.
 
 ## Page Format

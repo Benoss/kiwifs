@@ -124,6 +124,12 @@ func (idx *PathIndex) LookupExact(p string) string {
 	return idx.lookupExact(p)
 }
 
+// BasenameMatches returns how many indexed files a bare [[name]] could mean.
+// More than one means the link resolves only by tie-break.
+func (idx *PathIndex) BasenameMatches(name string) int {
+	return len(idx.byStem[normalizeLinkPath(linkBase(name))])
+}
+
 // tieBreak picks deterministically among ambiguous candidates: a candidate in
 // the source directory wins; otherwise the shortest path; otherwise the
 // lexicographically smallest. Matches the UI's tieBreak.
@@ -172,9 +178,19 @@ func (idx *PathIndex) resolveSuffix(page, fromDir string) string {
 // file matches. fromPath is the page the link was written on; pass "" to
 // resolve from the vault root only.
 func (idx *PathIndex) ResolveLink(target, fromPath string) string {
+	p, _ := idx.ResolveLinkFirm(target, fromPath)
+	return p
+}
+
+// ResolveLinkFirm is ResolveLink plus whether the match is firm: an exact,
+// relative or absolute path, a bare name only one file has, or a name whose
+// tie is won by the file next to the linking page. A suffix match or any
+// other tie-break is a guess that breaks when another folder gains a file
+// with the same name.
+func (idx *PathIndex) ResolveLinkFirm(target, fromPath string) (string, bool) {
 	page := strings.TrimSpace(target)
 	if page == "" {
-		return ""
+		return "", false
 	}
 	// A #heading anchor does not affect which file the link points to.
 	if i := strings.IndexByte(page, '#'); i >= 0 {
@@ -182,38 +198,46 @@ func (idx *PathIndex) ResolveLink(target, fromPath string) string {
 	}
 	page = strings.TrimSpace(page)
 	if page == "" {
-		return ""
+		return "", false
 	}
 
 	fromDir := linkDir(fromPath)
+	firm := func(p string) (string, bool) { return p, p != "" }
 
 	switch {
 	case strings.HasPrefix(page, "./") || strings.HasPrefix(page, "../"):
-		return idx.lookupExact(cleanRelPath(joinPath(fromDir, page)))
+		return firm(idx.lookupExact(cleanRelPath(joinPath(fromDir, page))))
 
 	case strings.HasPrefix(page, "/"):
-		return idx.lookupExact(strings.TrimLeft(page, "/"))
+		return firm(idx.lookupExact(strings.TrimLeft(page, "/")))
 
 	case strings.Contains(page, "/"):
 		if hit := idx.lookupExact(page); hit != "" {
-			return hit
+			return hit, true
 		}
 		if fromDir != "" {
 			if hit := idx.lookupExact(cleanRelPath(joinPath(fromDir, page))); hit != "" {
-				return hit
+				return hit, true
 			}
 		}
-		return idx.resolveSuffix(page, fromDir)
+		return idx.resolveSuffix(page, fromDir), false
 
 	default:
 		cands := idx.byStem[normalizeLinkPath(page)]
 		switch len(cands) {
 		case 0:
-			return ""
+			return "", false
 		case 1:
-			return cands[0]
+			return cands[0], true
 		default:
-			return tieBreak(cands, fromDir)
+			best := tieBreak(cands, fromDir)
+			inDir := 0
+			for _, c := range cands {
+				if linkDir(c) == fromDir {
+					inDir++
+				}
+			}
+			return best, inDir == 1 && linkDir(best) == fromDir
 		}
 	}
 }

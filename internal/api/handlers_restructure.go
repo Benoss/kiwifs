@@ -24,7 +24,7 @@ type RefactorApplyRequest struct {
 }
 
 func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*refactor.Plan, error) {
-	plan, err := refactor.BuildPlan(c.Request().Context(), refactor.Workspace{Root: h.root, Store: h.store}, m)
+	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{})
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -85,21 +85,15 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 	if len(req.Manifest.Moves) == 0 && len(req.Manifest.Merges) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves or merges")
 	}
-	plan, err := h.buildRefactorPlan(c, &req.Manifest)
-	if err != nil {
-		return err
-	}
-	if len(plan.Errors) > 0 {
+	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, refactor.Options{}, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
+	switch {
+	case errors.Is(err, pipeline.ErrPlanInvalid):
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
-	}
-	if req.Digest != "" && req.Digest != plan.Digest {
-		return c.JSON(http.StatusConflict, map[string]any{"error": "the workspace changed since the plan was reviewed", "plan": plan})
-	}
-	res, err := h.pipe.ApplyRefactor(c.Request().Context(), plan, sanitizeActor(c.Request().Header.Get("X-Actor")))
-	if err != nil {
-		if errors.Is(err, pipeline.ErrPlanStale) {
-			return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
-		}
+	case errors.Is(err, pipeline.ErrDigestMismatch):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "plan": plan})
+	case errors.Is(err, pipeline.ErrPlanStale):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
+	case err != nil:
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(http.StatusOK, map[string]any{"applied": res, "plan": plan})

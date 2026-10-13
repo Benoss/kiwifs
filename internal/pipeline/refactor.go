@@ -18,6 +18,55 @@ import (
 // changed since. Nothing has been written; build the plan again.
 var ErrPlanStale = errors.New("plan is stale: a file changed since it was planned")
 
+// ErrPlanInvalid is returned by Refactor when the plan has errors (a
+// collision, a missing source, a link that cannot be kept). Nothing has been
+// written; the plan returned alongside says why.
+var ErrPlanInvalid = errors.New("refactor plan has errors")
+
+// ErrDigestMismatch is returned by Refactor when the caller reviewed a plan
+// whose digest no longer matches the workspace. Nothing has been written;
+// the plan returned alongside is the fresh one to review instead.
+var ErrDigestMismatch = errors.New("the workspace changed since the plan was reviewed")
+
+// staleRetries bounds how often Refactor replans after losing a race with
+// another writer when the caller did not pin a reviewed digest.
+const staleRetries = 3
+
+// RefactorWorkspace is what refactor.BuildPlan reads for this pipeline.
+func (p *Pipeline) RefactorWorkspace() refactor.Workspace {
+	return refactor.Workspace{Root: p.Root, Store: p.Store}
+}
+
+// PlanRefactor builds the plan for m without writing anything.
+func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts refactor.Options) (*refactor.Plan, error) {
+	return refactor.BuildPlanWith(ctx, p.RefactorWorkspace(), m, opts)
+}
+
+// Refactor plans m and applies it as one commit. With a digest, the plan
+// must be exactly the one the caller reviewed: if the workspace moved on,
+// nothing is applied and ErrDigestMismatch comes back with the fresh plan.
+// Without one (a single rename, say), a plan that goes stale while waiting
+// for the write lock is rebuilt and retried a few times.
+func (p *Pipeline) Refactor(ctx context.Context, m *refactor.Manifest, opts refactor.Options, digest, actor string) (*refactor.Plan, RefactorResult, error) {
+	for attempt := 0; ; attempt++ {
+		plan, err := p.PlanRefactor(ctx, m, opts)
+		if err != nil {
+			return nil, RefactorResult{}, err
+		}
+		if len(plan.Errors) > 0 {
+			return plan, RefactorResult{}, fmt.Errorf("%w: %s", ErrPlanInvalid, strings.Join(plan.Errors, "; "))
+		}
+		if digest != "" && digest != plan.Digest {
+			return plan, RefactorResult{}, ErrDigestMismatch
+		}
+		res, err := p.ApplyRefactor(ctx, plan, actor)
+		if errors.Is(err, ErrPlanStale) && digest == "" && attempt < staleRetries {
+			continue
+		}
+		return plan, res, err
+	}
+}
+
 // RefactorResult reports what ApplyRefactor changed.
 type RefactorResult struct {
 	Written int `json:"written"`
@@ -120,8 +169,7 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		}
 	}
 
-	msg := fmt.Sprintf("%s: refactor %d moves, %d merges, %d pages relinked",
-		actor, len(plan.Moves), len(plan.Merges), len(plan.Edits))
+	msg := refactorMessage(plan, actor)
 	if err := p.Versioner.BulkCommit(ctx, paths, actor, msg); err != nil {
 		log.Printf("pipeline: ApplyRefactor BulkCommit: %v", err)
 		for _, pa := range paths {
@@ -146,6 +194,19 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 	}
 
 	return RefactorResult{Written: len(ops.Writes), Deleted: len(ops.Deletes), Side: side, Dirs: dirs}, nil
+}
+
+func refactorMessage(plan *refactor.Plan, actor string) string {
+	if len(plan.Moves) == 1 && len(plan.Merges) == 0 {
+		mv := plan.Moves[0]
+		msg := fmt.Sprintf("%s: rename %s → %s", actor, mv.From, mv.To)
+		if relinked := len(plan.Edits); relinked > 0 {
+			msg += fmt.Sprintf(" (updated links in %d pages)", relinked)
+		}
+		return msg
+	}
+	return fmt.Sprintf("%s: refactor %d moves, %d merges, %d pages relinked",
+		actor, len(plan.Moves), len(plan.Merges), len(plan.Edits))
 }
 
 // applySideWrite writes or removes a comment or personal-state file. The

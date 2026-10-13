@@ -147,10 +147,11 @@ kiwi_query("TABLE parent, count(_path) AS total, count(CASE WHEN status = 'done'
 
 ### Archive completed tasks
 
-Move done tasks to keep the board clean:
+Move done tasks to keep the board clean — one plan, one commit, links kept:
 
 ```
-kiwi_rename("tasks/done-task.md", "tasks/done/done-task.md")
+kiwi_refactor_plan(manifest: "moves: [{from: tasks/done-task.md, to: tasks/done/}]")
+kiwi_refactor_apply(manifest: <same>, digest: <from the plan>)
 ```
 
 ## Maintain

@@ -8,6 +8,8 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/brief"
 	"github.com/kiwifs/kiwifs/internal/claims"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/similar"
 )
 
@@ -65,6 +67,14 @@ type Backlink struct {
 type BulkFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	IfMatch string `json:"if_match,omitempty"`
+}
+
+// RefactorApplyResult is what applying a restructuring did, with the plan
+// that was applied (or, on ErrDigestMismatch, the fresh plan to review).
+type RefactorApplyResult struct {
+	Applied pipeline.RefactorResult `json:"applied"`
+	Plan    *refactor.Plan          `json:"plan"`
 }
 
 var (
@@ -161,6 +171,17 @@ type Backend interface {
 	Changes(ctx context.Context, since string, limit int) (*ChangesResult, error)
 	ReadFile(ctx context.Context, path string) (content string, etag string, err error)
 	WriteFile(ctx context.Context, path, content, actor string, provenance string) (etag string, err error)
+	// WriteFileIfMatch is WriteFile that fails with pipeline.ErrConflict
+	// when the file exists and its ETag is not ifMatch.
+	WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (etag string, err error)
+	// PatchFrontmatter sets fields (nil removes) without touching the body.
+	PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (etag string, err error)
+	// RefactorPlan previews a restructuring; nothing is written.
+	RefactorPlan(ctx context.Context, m *refactor.Manifest) (*refactor.Plan, error)
+	// RefactorApply applies a restructuring as one commit. A non-empty
+	// digest must match the reviewed plan, else pipeline.ErrDigestMismatch
+	// comes back with the fresh plan in the result.
+	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error)
 	DeleteFile(ctx context.Context, path, actor string) error
 	Tree(ctx context.Context, path string) (json.RawMessage, error)
 	Search(ctx context.Context, query string, limit, offset int, pathPrefix string) ([]SearchResult, error)

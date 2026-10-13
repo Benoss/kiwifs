@@ -466,10 +466,8 @@ export const KiwiTree = forwardRef<KiwiTreeHandle, Props>(function KiwiTree(
           return;
         }
 
-        const { content } = await api.readFile(cleanSrc);
-        await api.writeFile(dest, content);
-        await api.deleteFile(cleanSrc);
-        pushOp({ type: "move", from: cleanSrc, to: dest, content });
+        await api.renameFile(cleanSrc, dest);
+        pushOp({ type: "move", from: cleanSrc, to: dest });
         onMoved?.(dest);
       } catch (e) {
         setRootPreservingScroll(previousRoot);
@@ -496,10 +494,8 @@ export const KiwiTree = forwardRef<KiwiTreeHandle, Props>(function KiwiTree(
         if (isMarkdown(oldPath) && !newName.endsWith(".md")) newName += ".md";
         const newPath = dir ? `${dir}/${newName}` : newName;
         if (newPath === oldPath) return;
-        const { content } = await api.readFile(oldPath);
-        await api.writeFile(newPath, content);
-        await api.deleteFile(oldPath);
-        pushOp({ type: "move", from: oldPath, to: newPath, content });
+        await api.renameFile(oldPath, newPath);
+        pushOp({ type: "move", from: oldPath, to: newPath });
         onMoved?.(newPath);
       }
     },
@@ -785,9 +781,10 @@ export const KiwiTree = forwardRef<KiwiTreeHandle, Props>(function KiwiTree(
             } catch {
               /* destination free */
             }
-            await api.writeFile(dest, entry.content);
             if (clip.mode === "cut") {
-              await api.deleteFile(entry.path).catch(() => {});
+              await api.renameFile(entry.path, dest);
+            } else {
+              await api.writeFile(dest, entry.content);
             }
           }
         }
@@ -1328,10 +1325,8 @@ function TreeNode({
               onConfirm: async (newPath) => {
                 if (newPath === path) return;
                 try {
-                  const { content } = await api.readFile(path);
-                  await api.writeFile(newPath, content);
-                  await api.deleteFile(path);
-                  pushOp({ type: "move", from: path, to: newPath, content });
+                  await api.renameFile(path, newPath);
+                  pushOp({ type: "move", from: path, to: newPath });
                   onMoved?.(newPath);
                 } catch {}
               },
@@ -1398,10 +1393,8 @@ function TreeNode({
               onConfirm: async (newPath) => {
                 if (newPath === path) return;
                 try {
-                  const { content } = await api.readFile(path);
-                  await api.writeFile(newPath, content);
-                  await api.deleteFile(path);
-                  pushOp({ type: "move", from: path, to: newPath, content });
+                  await api.renameFile(path, newPath);
+                  pushOp({ type: "move", from: path, to: newPath });
                   onMoved?.(newPath);
                 } catch {}
               },
@@ -1473,10 +1466,8 @@ function TreeNode({
                 onConfirm: async (newPath) => {
                   if (newPath === path) return;
                   try {
-                    const { content } = await api.readFile(path);
-                    await api.writeFile(newPath, content);
-                    await api.deleteFile(path);
-                    pushOp({ type: "move", from: path, to: newPath, content });
+                    await api.renameFile(path, newPath);
+                    pushOp({ type: "move", from: path, to: newPath });
                     onMoved?.(newPath);
                   } catch {}
                 },
@@ -1631,10 +1622,8 @@ function TreeNode({
                 if (newPath === path) return;
                 const finalPath = newPath.endsWith(".md") ? newPath : newPath + ".md";
                 try {
-                  const { content } = await api.readFile(path);
-                  await api.writeFile(finalPath, content);
-                  await api.deleteFile(path);
-                  pushOp({ type: "move", from: path, to: finalPath, content });
+                  await api.renameFile(path, finalPath);
+                  pushOp({ type: "move", from: path, to: finalPath });
                   onMoved?.(finalPath);
                 } catch {}
               },

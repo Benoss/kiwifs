@@ -14,6 +14,7 @@ For the full interactive API reference, see [docs.kiwifs.com/api-reference](http
 
 - [Health](#health)
 - [Files](#files)
+- [Restructuring](#restructuring)
 - [Rendering](#rendering)
 - [Search](#search)
 - [Versioning](#versioning)
@@ -41,14 +42,40 @@ GET    /api/kiwi/tree?path=                → directory tree (JSON)
 GET    /api/kiwi/file?path=                → raw markdown + ETag
 PUT    /api/kiwi/file?path=                → write + git commit + re-index
 DELETE /api/kiwi/file?path=                → delete + git commit
-POST   /api/kiwi/bulk                      → multi-file write, one commit
-POST   /api/kiwi/rename                    → atomic rename ({"from":"...","to":"..."})
+PATCH  /api/kiwi/file/frontmatter?path=    → set/remove frontmatter fields ({"fields":{...}}, null removes)
+POST   /api/kiwi/bulk                      → multi-file write, one commit (per-file "if_match")
+POST   /api/kiwi/rename                    → rename one file, relinking ({"from":"...","to":"..."})
+POST   /api/kiwi/rename-dir                → move a folder, relinking ({"from":"...","to":"..."})
 POST   /api/kiwi/file/append?path=         → append content to file
 GET    /api/kiwi/toc?path=                 → heading outline
 GET    /api/kiwi/backlinks?path=           → pages that link to this page
 GET    /api/kiwi/context                   → schema + playbook + index in one call
 GET    /api/kiwi/changes?since=&limit=     → git-based change feed
 ```
+
+---
+
+## Restructuring
+
+```
+POST   /api/kiwi/refactor/plan             → preview a manifest of moves and merges (nothing written)
+POST   /api/kiwi/refactor/apply            → apply it as one commit ({"manifest":{...},"digest":"..."})
+POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
+```
+
+Every reorganization — a single rename, a folder move, a glob move, a merge —
+runs through one engine (`internal/refactor`). The plan is computed from disk:
+each wiki and markdown link to a moved page is respelled in its original style
+and re-resolved to prove it still lands on the same page; comments and personal
+state move with the page. Apply re-checks every file's ETag inside the write
+lock and lands everything in a single commit, rolling back on failure.
+
+`apply` with a `digest` applies only the plan that was reviewed: if the
+workspace changed since, it answers `409` with the fresh plan. A plan with
+errors (a taken destination, a link that cannot be kept) answers `422`.
+`rename` and `rename-dir` answer `409` for the same reasons and never
+overwrite an existing destination. Agents get the same engine through
+`kiwi_refactor_plan` / `kiwi_refactor_apply`.
 
 ---
 

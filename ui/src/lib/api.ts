@@ -806,14 +806,17 @@ export const api = {
     return request(`${kiwiBase()}/views/${encodeURIComponent(name)}/execute`);
   },
 
+  // Moves one file in a single commit. The server rewrites every link to it
+  // and refuses (409) to overwrite an existing destination.
   async renameFile(
     oldPath: string,
     newPath: string,
-  ): Promise<{ path: string; etag: string }> {
-    const { content } = await this.readFile(oldPath);
-    const result = await this.writeFile(newPath, content);
-    await this.deleteFile(oldPath);
-    return result;
+  ): Promise<{ from: string; to: string; etag: string; updated_links?: string[] }> {
+    return request(`${kiwiBase()}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: oldPath, to: newPath }),
+    });
   },
 
   async renameDir(

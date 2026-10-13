@@ -69,3 +69,33 @@ func TestRefactorApplyRejectsAPlanWithErrors(t *testing.T) {
 		t.Fatalf("want 422, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRenameRefusesToOverwriteAndRelinksMarkdown(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "# A\n")
+	mustPutFile(t, s, "b.md", "# B\n")
+	mustPutFile(t, s, "index.md", "[a](a.md)\n")
+
+	if rec := postJSON(t, s, "/api/kiwi/rename", `{"from":"a.md","to":"b.md"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto existing: want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	rec := postJSON(t, s, "/api/kiwi/rename", `{"from":"a.md","to":"docs/a.md"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"updated_links":["index.md"]`) {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/kiwi/file?path=index.md", nil)
+	got := httptest.NewRecorder()
+	s.echo.ServeHTTP(got, req)
+	if body := got.Body.String(); body != "[a](docs/a.md)\n" {
+		t.Fatalf("index.md = %q", body)
+	}
+}
+
+func TestBulkWriteIfMatchConflict(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "# A\n")
+	rec := postJSON(t, s, "/api/kiwi/bulk", `{"files":[{"path":"a.md","content":"# A2\n","if_match":"stale"}]}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+}
