@@ -116,7 +116,7 @@ func typedRef(content []byte, n *yaml.Node, at int) (linkRef, bool) {
 		return linkRef{}, false
 	}
 	s := start + lo + lead
-	return linkRef{Kind: kindWiki, Start: s, End: s + len(page), Path: page, Typed: true}, true
+	return linkRef{Kind: kindWiki, Start: s, End: s + len(page), FragEnd: s + len(page), Path: page, Typed: true}, true
 }
 
 // unfixed is a typed reference the planner can resolve but not rewrite.

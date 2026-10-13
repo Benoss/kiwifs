@@ -253,8 +253,6 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 	if len(p.steps) == 0 && len(m.RenameTags) == 0 {
 		return nil
 	}
-	p.edited = map[string][]byte{}
-	p.editNotes = map[string][]string{}
 	steps := p.steps
 	for i, r := range m.RenameTags {
 		if strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" || strings.ContainsAny(r.From+r.To, "\n\r,") {
@@ -321,6 +319,10 @@ func (p *planner) planEdits(ctx context.Context, m *Manifest) error {
 			working, notes = out, append(notes, n...)
 		}
 		if string(working) != string(content) {
+			if _, split := p.sections[f]; split {
+				p.errorf("%s is both split and edited; split it in a manifest of its own", f)
+				continue
+			}
 			if _, merged := p.merged[f]; merged {
 				p.plan.Warnings = append(p.plan.Warnings, fmt.Sprintf("%s is merged away; its edits are dropped", f))
 				continue

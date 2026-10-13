@@ -138,6 +138,27 @@ func (p *planner) checkDestinations() []string {
 		post[to] = from
 	}
 
+	created := make([]string, 0, len(p.created))
+	for to := range p.created {
+		created = append(created, to)
+	}
+	sort.Strings(created)
+	for _, to := range created {
+		from := p.created[to]
+		for _, c := range nameProblems(to) {
+			c.From = from
+			conflict(c)
+		}
+		if why, ok := post[to]; ok {
+			if why == "" {
+				why = "an existing file"
+			}
+			conflict(Conflict{Code: ConflictExists, Path: to, From: from, With: to, Detail: "a split section would replace " + why})
+			continue
+		}
+		post[to] = from
+	}
+
 	out := make([]string, 0, len(post))
 	for f := range post {
 		out = append(out, f)

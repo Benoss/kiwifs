@@ -24,6 +24,7 @@ const manifestHelp = `Restructuring manifest, as a YAML/JSON string or an object
                       set: {status: archived}, unset: [reviewer], add_tags: [x], remove_tags: [y],
                       replace: [{find: "Acme Corp", with: "Acme"}]}]
   rename_tags:      [{from: ml, to: machine-learning}]
+  split:            [{from: guides/big.md, level: 2, into: guides/big/, confirm: true}]   (a page per heading; preview until confirm: true)
   relinks:          [{from: old/path.md, to: new/path.md}]   (repair references after a move made outside KiwiFS; see resource kiwi://refactor/raw-moves)
 Edits may also take when: (a boolean expression), compute: {key: expression}, and move_to: "archive/{{year}}/{{slug}}.md"
 with on_conflict: suffix("-%d"). Expressions see path, dir, name, stem, title, tags, fm, links, date, modified, now and
@@ -201,6 +202,8 @@ type planView struct {
 	Applicable bool                   `json:"applicable"`
 	Errors     []string               `json:"errors,omitempty"`
 	Warnings   []string               `json:"warnings,omitempty"`
+	PlanOnly   []string               `json:"plan_only,omitempty"`
+	Splits     []refactor.SplitView   `json:"splits,omitempty"`
 	Now        *time.Time             `json:"now,omitempty"`
 	Stats      refactor.Stats         `json:"stats"`
 	Counts     planCounts             `json:"counts"`
@@ -255,10 +258,12 @@ func viewPlanDetail(plan *refactor.Plan, detail string, offset, limit int) planV
 	full := detail == "full" || detail == "diff"
 	v := planView{
 		Digest:     plan.Digest,
-		Applicable: len(plan.Errors) == 0,
+		Applicable: len(plan.Errors) == 0 && len(plan.PlanOnly) == 0,
 		Errors:     plan.Errors,
 		Warnings:   plan.Warnings,
 		Now:        plan.Now,
+		PlanOnly:   plan.PlanOnly,
+		Splits:     plan.Splits,
 		Stats:      plan.Stats,
 		Counts: planCounts{
 			Moves:        len(plan.Moves),

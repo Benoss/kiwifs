@@ -254,6 +254,9 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 	if plan == nil || len(plan.Errors) > 0 {
 		return RefactorResult{}, fmt.Errorf("plan has errors; nothing applied")
 	}
+	if len(plan.PlanOnly) > 0 {
+		return RefactorResult{}, fmt.Errorf("%w: %s", ErrPlanInvalid, strings.Join(plan.PlanOnly, "; "))
+	}
 	ops := plan.Ops
 	actor = coalesce(actor)
 

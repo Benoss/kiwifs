@@ -101,6 +101,11 @@ elicitation when its client supports it; otherwise the request waits in
 view (sidebar) or with `/refactor/approve`. Plans also report `integrity`: links
 that point nowhere in the pages written, and pages a merge leaves unlinked.
 
+`split: [{from: page.md, level: 2, into: folder/, confirm: true}]` breaks a
+page into a page per heading: the original becomes an index linking to them,
+references to `page#heading` follow their section, and the section's own links
+are re-resolved from its new folder. A split is a preview until `confirm: true`.
+
 Moves that bypass the engine — WebDAV/NFS renames, `update_links=false`, files
 moved on disk while the watcher runs — are logged when anything referenced the
 old path. `relinks: [{from, to}]` repairs them without moving anything;

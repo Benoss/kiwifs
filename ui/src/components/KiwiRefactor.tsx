@@ -206,7 +206,8 @@ export function KiwiRefactor({ onClose, onApplied, initialManifest }: Props) {
     }
   };
 
-  const blocked = !plan || (plan.errors?.length ?? 0) > 0 || busy !== null || applied !== null;
+  const blocked =
+    !plan || (plan.errors?.length ?? 0) > 0 || (plan.plan_only?.length ?? 0) > 0 || busy !== null || applied !== null;
   const writes =
     (plan?.moves.length ?? 0) + (plan?.edits.length ?? 0) + (plan?.content_edits?.length ?? 0) + (plan?.merges.length ?? 0);
 
@@ -367,6 +368,23 @@ export function PlanView({
               <li key={w}>{w}</li>
             ))}
           </ul>
+        </section>
+      )}
+      {(plan.plan_only?.length ?? 0) > 0 && (
+        <ul aria-label="Preview only" className="text-xs rounded-md border border-border p-2 space-y-0.5">
+          {plan.plan_only!.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      )}
+      {(plan.splits?.length ?? 0) > 0 && (
+        <section aria-label="Splits" className="text-xs space-y-1">
+          {plan.splits!.map((sp) => (
+            <p key={sp.from}>
+              <span className="font-mono">{sp.from}</span> becomes an index of {sp.pages.length} pages:{" "}
+              <span className="font-mono">{sp.pages.join(", ")}</span>
+            </p>
+          ))}
         </section>
       )}
       {plan.approval?.required && (

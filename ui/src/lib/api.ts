@@ -306,6 +306,8 @@ export type RefactorPlan = {
   now?: string;
   reverts?: string;
   diffs?: RefactorFileDiff[];
+  splits?: { from: string; pages: string[] }[];
+  plan_only?: string[];
 };
 export type RefactorManifest = Record<string, unknown>;
 export type RefactorApplied = {

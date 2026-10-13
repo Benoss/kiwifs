@@ -105,6 +105,11 @@ type Plan struct {
 	Approval *Approval `json:"approval,omitempty"`
 	// Integrity is the link health the plan leaves behind.
 	Integrity *Integrity `json:"integrity,omitempty"`
+	// Splits lists the pages split and the pages they become.
+	Splits []SplitView `json:"splits,omitempty"`
+	// PlanOnly says why the plan, though valid, may not be applied yet
+	// (an unconfirmed split).
+	PlanOnly []string `json:"plan_only,omitempty"`
 	// Rejected names the pages behind errors that are about one page only
 	// (a failed validation, an edit that cannot apply). A caller may drop
 	// those pages and plan again; any error not listed here is global.
@@ -241,6 +246,13 @@ type planner struct {
 	// relinked maps a path that no longer exists to where its file went
 	// (manifest relinks); the pre-change index still knows the old path.
 	relinked map[string]string
+	// created maps a page a split creates to the page it comes from;
+	// splitPages are their contents before relinking.
+	created    map[string]string
+	splitPages []splitSection
+	// sections maps a page being split to its heading anchors (anchorKey)
+	// and the new page each section becomes.
+	sections map[string]map[string]string
 	// Link tallies for the integrity report.
 	inboundBefore   map[string]int
 	inboundAfter    map[string]int
@@ -253,6 +265,15 @@ func (p *planner) errorf(format string, args ...any) {
 }
 
 // final is where a page's references should point after the refactor.
+// sectionTarget is the page a page#heading reference reaches after its
+// section was split out of target, or "".
+func (p *planner) sectionTarget(target string, r linkRef) string {
+	if r.Frag == "" || p.sections == nil {
+		return ""
+	}
+	return p.sections[target][anchorKey(r.Frag)]
+}
+
 func (p *planner) final(path string) string {
 	if to, ok := p.moved[path]; ok {
 		return to
@@ -316,6 +337,14 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		return nil, err
 	}
 	p.expandMerges(m.Merges)
+	p.created = map[string]string{}
+	if p.edited == nil {
+		p.edited = map[string][]byte{}
+		p.editNotes = map[string][]string{}
+	}
+	if err := p.expandSplits(ctx, m.Split); err != nil {
+		return nil, err
+	}
 	postFiles := p.checkDestinations()
 	p.checkClaims()
 	if err := p.planEdits(ctx, m); err != nil {
@@ -813,7 +842,7 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		}
 
 		_, isEdited := p.edited[f]
-		if !moving && !isEdited && len(p.moved) == 0 && len(p.merged) == 0 && len(p.relinked) == 0 {
+		if !moving && !isEdited && len(p.moved) == 0 && len(p.merged) == 0 && len(p.relinked) == 0 && len(p.sections) == 0 {
 			// Nothing moves, so no link can change: only edited pages
 			// need reading.
 			p.partial = true
@@ -840,73 +869,11 @@ func (p *planner) rewritePages(ctx context.Context) error {
 			continue
 		}
 		from := p.final(f)
-		refs := scanAll(content, p.ws.typedFields())
-		expected := make([]string, len(refs))
-		var edits []splice
-		var report []LinkEdit
-		for i, r := range refs {
-			p.plan.Stats.Links++
-			before, wasFirm := resolveFirm(p.pre, r.Kind, r.Path, f)
-			if before == "" {
-				p.plan.Stats.Unresolved++
-				continue
-			}
-			if before != f {
-				p.inboundBefore[before]++
-			}
-			want := p.final(before)
-			expected[i] = want
-			// A link that still lands on the right page is left alone, unless
-			// it named the page outright before and now only finds it by a
-			// suffix or tie-break guess.
-			if got, firm := resolveFirm(p.post, r.Kind, r.Path, from); got == want && (firm || !wasFirm) {
-				continue
-			}
-			if r.Unsplicable {
-				p.errorf("%s:%d: frontmatter reference %q to %s is written in a YAML style that cannot be rewritten in place; quote it plainly or edit it first", f, r.Line, r.Path, before)
-				continue
-			}
-			text, ok := p.respell(r, before, want, from)
-			if !ok {
-				p.errorf("%s:%d: no way to write a link to %s from %s", f, r.Line, want, from)
-				continue
-			}
-			edits = append(edits, splice{start: r.Start, end: r.End, text: text})
-			report = append(report, LinkEdit{Line: r.Line, Old: r.Path, New: text})
-		}
-		updated := content
-		if len(edits) > 0 {
-			updated = applySplices(content, edits)
-			p.plan.Stats.Rewritten += len(edits)
-		}
-
-		after := scanAll(updated, p.ws.typedFields())
+		res := p.relink(f, from, content)
+		updated := res.updated
+		edits := res.report
 		written := moving || len(edits) > 0 || edited
-		for _, r := range after {
-			if r.Unsplicable {
-				continue
-			}
-			switch got := resolve(p.post, r.Kind, r.Path, from); {
-			case got == "":
-				if written {
-					p.unresolvedAfter++
-				}
-			case got != from:
-				p.inboundAfter[got]++
-			}
-		}
-		if len(after) != len(refs) {
-			p.errorf("%s: rewriting changed the number of links (%d → %d)", f, len(refs), len(after))
-		} else {
-			for i, r := range after {
-				if expected[i] == "" {
-					continue
-				}
-				if got := resolve(p.post, r.Kind, r.Path, from); got != expected[i] {
-					p.errorf("%s:%d: %q would point to %q instead of %q", f, r.Line, r.Path, got, expected[i])
-				}
-			}
-		}
+		p.tally(res, from, written)
 
 		switch {
 		case moving:
@@ -916,15 +883,122 @@ func (p *planner) rewritePages(ctx context.Context) error {
 			p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: f, Content: updated, Source: f, SourceETag: ETag(disk), Prior: disk, Edited: edited})
 		}
 		p.noteContentEdit(f, to, moving)
-		if len(report) > 0 {
-			fe := FileEdit{Path: from, Links: report}
+		if len(edits) > 0 {
+			fe := FileEdit{Path: from, Links: edits}
 			if moving {
 				fe.From = f
 			}
 			p.plan.Edits = append(p.plan.Edits, fe)
 		}
 	}
+	p.writeSplitPages()
 	return nil
+}
+
+// relinked is what relinking one page's content produced.
+type relinked struct {
+	updated []byte
+	report  []LinkEdit
+	// targets are where the page's links point afterwards ("" for a link
+	// that points nowhere), for the integrity tallies.
+	targets []string
+}
+
+// relink respells every reference in content so it keeps reaching the
+// same page after the restructuring, and checks that it does. src is
+// where the content was written (references resolve from there, against
+// the workspace before); dst is where it lives afterwards. A reference to
+// a section of a page being split (page#heading) follows the section to
+// its new page.
+func (p *planner) relink(src, dst string, content []byte) relinked {
+	refs := scanAll(content, p.ws.typedFields())
+	expected := make([]string, len(refs))
+	var edits []splice
+	var report []LinkEdit
+	for i, r := range refs {
+		p.plan.Stats.Links++
+		before, wasFirm := resolveFirm(p.pre, r.Kind, r.Path, src)
+		if before == "" {
+			p.plan.Stats.Unresolved++
+			continue
+		}
+		if before != src {
+			p.inboundBefore[before]++
+		}
+		want := p.final(before)
+		section := p.sectionTarget(before, r)
+		if section != "" {
+			want = section
+		}
+		expected[i] = want
+		// A link that still lands on the right page is left alone, unless
+		// it named the page outright before and now only finds it by a
+		// suffix or tie-break guess.
+		if got, firm := resolveFirm(p.post, r.Kind, r.Path, dst); section == "" && got == want && (firm || !wasFirm) {
+			continue
+		}
+		if r.Unsplicable {
+			p.errorf("%s:%d: frontmatter reference %q to %s is written in a YAML style that cannot be rewritten in place; quote it plainly or edit it first", src, r.Line, r.Path, before)
+			continue
+		}
+		text, ok := p.respell(r, before, want, dst)
+		if !ok {
+			p.errorf("%s:%d: no way to write a link to %s from %s", src, r.Line, want, dst)
+			continue
+		}
+		end := r.End
+		if section != "" {
+			// The section is a page now: the fragment goes with it.
+			end = r.FragEnd
+		}
+		edits = append(edits, splice{start: r.Start, end: end, text: text})
+		old := r.Path
+		if section != "" && r.Frag != "" {
+			old += "#" + r.Frag
+		}
+		report = append(report, LinkEdit{Line: r.Line, Old: old, New: text})
+	}
+	updated := content
+	if len(edits) > 0 {
+		updated = applySplices(content, edits)
+		p.plan.Stats.Rewritten += len(edits)
+	}
+
+	after := scanAll(updated, p.ws.typedFields())
+	out := relinked{updated: updated, report: report}
+	for _, r := range after {
+		if r.Unsplicable {
+			continue
+		}
+		out.targets = append(out.targets, resolve(p.post, r.Kind, r.Path, dst))
+	}
+	if len(after) != len(refs) {
+		p.errorf("%s: rewriting changed the number of links (%d → %d)", src, len(refs), len(after))
+		return out
+	}
+	for i, r := range after {
+		if expected[i] == "" {
+			continue
+		}
+		if got := resolve(p.post, r.Kind, r.Path, dst); got != expected[i] {
+			p.errorf("%s:%d: %q would point to %q instead of %q", src, r.Line, r.Path, got, expected[i])
+		}
+	}
+	return out
+}
+
+// tally counts a relinked page's links for the integrity report.
+func (p *planner) tally(res relinked, dst string, written bool) {
+	for _, got := range res.targets {
+		switch {
+		case got == "":
+			if written {
+				p.unresolvedAfter++
+			}
+		case got != dst:
+			p.inboundAfter[got]++
+		}
+	}
 }
 
 // dropOverwrittenDeletes removes the delete of a moved-away source that

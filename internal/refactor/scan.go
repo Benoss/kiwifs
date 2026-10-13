@@ -25,6 +25,10 @@ type linkRef struct {
 	End   int
 	Path  string // the raw path bytes, content[Start:End]
 	Line  int    // 1-based, for reports
+	// Frag is the #fragment after the path (without "#"), and FragEnd the
+	// offset just past it; FragEnd == End when there is none.
+	Frag    string
+	FragEnd int
 	// Typed marks a reference held in a typed-link frontmatter field.
 	Typed bool
 	// Unsplicable marks a typed reference whose YAML spelling (a block or
@@ -202,7 +206,9 @@ func scanLinks(content []byte) []linkRef {
 			}
 		}
 		target := inner[:targetEnd]
+		frag, hasFrag := "", false
 		if h := strings.IndexByte(target, '#'); h >= 0 {
+			frag, hasFrag = target[h+1:], true
 			target = target[:h]
 		}
 		lead := len(target) - len(strings.TrimLeft(target, " \t"))
@@ -211,7 +217,13 @@ func scanLinks(content []byte) []linkRef {
 			continue
 		}
 		start := innerStart + lead
-		refs = append(refs, linkRef{Kind: kindWiki, Start: start, End: start + len(page), Path: page})
+		ref := linkRef{Kind: kindWiki, Start: start, End: start + len(page), Path: page}
+		ref.FragEnd = ref.End
+		if hasFrag {
+			ref.Frag = strings.TrimSpace(frag)
+			ref.FragEnd = innerStart + targetEnd
+		}
+		refs = append(refs, ref)
 	}
 
 	for _, m := range markdownRe.FindAllSubmatchIndex(masked, -1) {
@@ -222,13 +234,22 @@ func scanLinks(content []byte) []linkRef {
 			continue
 		}
 		page := href
+		ref := linkRef{Kind: kindMarkdown, Start: hrefStart}
 		if i := strings.IndexAny(page, "#?"); i >= 0 {
+			if page[i] == '#' {
+				ref.Frag = decodeHref(page[i+1:])
+				ref.FragEnd = hrefEnd
+			}
 			page = page[:i]
 		}
 		if page == "" {
 			continue
 		}
-		refs = append(refs, linkRef{Kind: kindMarkdown, Start: hrefStart, End: hrefStart + len(page), Path: page})
+		ref.End, ref.Path = hrefStart+len(page), page
+		if ref.FragEnd == 0 {
+			ref.FragEnd = ref.End
+		}
+		refs = append(refs, ref)
 	}
 
 	sortRefs(refs)

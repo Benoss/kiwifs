@@ -617,3 +617,35 @@ func TestRelinksRepairAMoveMadeOutsideTheEngine(t *testing.T) {
 		t.Fatal("relinking from a path that exists must be refused")
 	}
 }
+
+func TestSplitPageByHeadings(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"guides/big.md": "---\ntitle: Big\n---\n# Big guide\n\nIntro, see [install](#install) and [up](../index.md).\n\n" +
+			"## Install\n\nRun it.\n\n### On Linux\n\nUse apt. Back to [usage](#usage).\n\n" +
+			"## Usage\n\n```\n## not a heading\n```\nSee [[guides/big#Install|install]].\n",
+		"index.md": "[[guides/big]] [[guides/big#Usage]] [u](guides/big.md#usage) [i](guides/big.md#nope)\n",
+	})
+	p := plan(t, dir, "split: [{from: guides/big.md}]")
+	requireNoErrors(t, p)
+	if len(p.PlanOnly) != 1 || len(p.Splits) != 1 || strings.Join(p.Splits[0].Pages, ",") != "guides/big/install.md,guides/big/usage.md" {
+		t.Fatalf("plan only = %v, splits = %+v", p.PlanOnly, p.Splits)
+	}
+	if got := written(t, p, "guides/big.md"); got != "---\ntitle: Big\n---\n# Big guide\n\nIntro, see [install](big/install.md) and [up](../index.md).\n\n"+
+		"- [[guides/big/install|Install]]\n- [[guides/big/usage|Usage]]\n" {
+		t.Fatalf("index page =\n%s", got)
+	}
+	if got := written(t, p, "guides/big/install.md"); got != "# Install\n\nRun it.\n\n## On Linux\n\nUse apt. Back to [usage](usage.md).\n\n" {
+		t.Fatalf("install =\n%q", got)
+	}
+	if got := written(t, p, "guides/big/usage.md"); got != "# Usage\n\n```\n## not a heading\n```\nSee [[guides/big/install|install]].\n" {
+		t.Fatalf("usage =\n%q", got)
+	}
+	if got := written(t, p, "index.md"); got != "[[guides/big]] [[guides/big/usage]] [u](guides/big/usage.md) [i](guides/big.md#nope)\n" {
+		t.Fatalf("index.md = %q", got)
+	}
+	confirmed := plan(t, dir, "split: [{from: guides/big.md, confirm: true}]")
+	requireNoErrors(t, confirmed)
+	if len(confirmed.PlanOnly) != 0 || confirmed.Digest == "" {
+		t.Fatalf("confirmed split = %+v", confirmed.PlanOnly)
+	}
+}

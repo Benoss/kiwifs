@@ -423,3 +423,31 @@ func TestWatcherPairsAMoveMadeOnDisk(t *testing.T) {
 		t.Fatalf("the fix should relink index.md: %v", plan.Edits)
 	}
 }
+
+func TestSplitIsPlanOnlyUntilConfirmedAndReverts(t *testing.T) {
+	p, dir := gitPipeline(t, false)
+	ctx := context.Background()
+	writeFixture(t, dir, map[string]string{"guides/intro.md": "# Intro\n\n## One\n\nfirst\n\n## Two\n\nsecond\n"})
+	if err := p.Versioner.BulkCommit(ctx, []string{"guides/intro.md"}, "seed", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, dir)
+	m := &refactor.Manifest{Split: []refactor.Split{{From: "guides/intro.md"}}}
+	if _, _, err := p.Refactor(ctx, m, refactor.Options{}, "", "t"); !errors.Is(err, ErrPlanInvalid) || !strings.Contains(err.Error(), "confirm: true") {
+		t.Fatalf("an unconfirmed split must not apply: %v", err)
+	}
+	m.Split[0].Confirm = true
+	_, res, err := p.Refactor(ctx, m, refactor.Options{}, "", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readFile(t, dir, "guides/intro/two.md") != "# Two\n\nsecond\n" {
+		t.Fatalf("two.md = %q", readFile(t, dir, "guides/intro/two.md"))
+	}
+	if _, _, err := p.Revert(ctx, res.Commit, "", "t", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if d := diffTrees(before, snapshotTree(t, dir)); len(d) > 0 {
+		t.Fatalf("revert left differences in %v", d)
+	}
+}
