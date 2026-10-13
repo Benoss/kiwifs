@@ -10,10 +10,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.5
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.2
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/bluuewhale/loom v0.0.0-20260402142357-ae7e94ccfead
 	github.com/bmatcuk/doublestar/v4 v4.10.3
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/d2lang/d2 v0.9.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fvbommel/sortorder v1.1.0
 	github.com/go-git/go-billy/v5 v5.6.0
@@ -27,7 +29,7 @@ require (
 	github.com/johannesboyne/gofakes3 v0.0.0-20260208201424-4c385a1f6a73
 	github.com/jomei/notionapi v1.13.3
 	github.com/labstack/echo/v4 v4.15.2
-	github.com/mark3labs/mcp-go v0.49.0
+	github.com/mark3labs/mcp-go v1.1.1
 	github.com/nickng/bibtex v1.1.0
 	github.com/parquet-go/parquet-go v0.29.0
 	github.com/piprate/json-gold v0.8.0
@@ -96,7 +98,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.20 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.0 // indirect
 	github.com/aws/smithy-go v1.25.0 // indirect
-	github.com/aymanbagabas/go-udiff v0.4.1 // indirect
 	github.com/cayleygraph/quad v1.3.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -120,7 +121,6 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/flopp/go-findfont v0.1.0 // indirect
 	github.com/fogleman/gg v1.3.0 // indirect
