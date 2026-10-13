@@ -2610,8 +2610,7 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		actor = "mcp-agent"
 	}
 
-	// Read current page
-	content, _, err := b.ReadFile(ctx, path)
+	content, readETag, err := b.ReadFile(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -2639,10 +2638,7 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		return nil, err
 	}
 
-	updated, err := markdown.SetFrontmatterField([]byte(content), "state", targetState)
-	if err != nil {
-		return nil, fmt.Errorf("update state: %w", err)
-	}
+	fields := map[string]any{"state": targetState}
 	syncStatus := false
 	if _, hasStatus := fm["status"]; hasStatus {
 		if typ, _ := fm["type"].(string); typ == "adr" {
@@ -2652,13 +2648,11 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		}
 	}
 	if syncStatus {
-		updated, err = markdown.SetFrontmatterField(updated, "status", targetState)
-		if err != nil {
-			return nil, fmt.Errorf("update status: %w", err)
-		}
+		fields["status"] = targetState
 	}
-
-	etag, err := b.WriteFile(ctx, path, string(updated), actor, "")
+	// Pinned to the state the transition was validated against: if the
+	// page moved on in between, the advance fails instead of clobbering.
+	etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, actor)
 	if err != nil {
 		return nil, err
 	}

@@ -16,7 +16,7 @@ import (
 	"path"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // Manifest is the requested restructuring, usually written as YAML:
@@ -36,10 +36,68 @@ import (
 //	  - from: faq/duplicate.md            # deleted; its links, comments and
 //	    into: faq/canonical.md            # state now belong to the target
 //	delete_empty_dirs: true
+//
+// Content edits select pages and change them; selection always sees the
+// workspace as it was before this manifest (paths are pre-move paths):
+//
+//	edits:
+//	  - select: {query: 'status = "draft"', glob: 'notes/**'}
+//	    set: {status: archived}
+//	    unset: [reviewer]
+//	    add_tags: [archived]
+//	    remove_tags: [wip]
+//	    replace: [{find: 'Acme Corp', with: 'Acme'}]
+//	rename_tags:
+//	  - {from: ml, to: machine-learning}
 type Manifest struct {
-	Moves           []Move  `json:"moves,omitempty" yaml:"moves"`
-	Merges          []Merge `json:"merges,omitempty" yaml:"merges"`
-	DeleteEmptyDirs bool    `json:"delete_empty_dirs,omitempty" yaml:"delete_empty_dirs"`
+	Moves           []Move      `json:"moves,omitempty" yaml:"moves"`
+	Merges          []Merge     `json:"merges,omitempty" yaml:"merges"`
+	DeleteEmptyDirs bool        `json:"delete_empty_dirs,omitempty" yaml:"delete_empty_dirs"`
+	Edits           []Edit      `json:"edits,omitempty" yaml:"edits"`
+	RenameTags      []TagRename `json:"rename_tags,omitempty" yaml:"rename_tags"`
+}
+
+// Selector picks pages. Every criterion given narrows the selection; at
+// least one is required, so an edit never reaches the whole workspace by
+// accident (use glob: "**" to mean that).
+type Selector struct {
+	// Paths lists pages by their current path.
+	Paths []string `json:"paths,omitempty" yaml:"paths"`
+	// Glob matches current paths (** spans folders).
+	Glob string `json:"glob,omitempty" yaml:"glob"`
+	// Query is a DQL query or WHERE expression over frontmatter.
+	Query string `json:"query,omitempty" yaml:"query"`
+}
+
+// Edit changes every selected page. Operations run in the order listed
+// here: set, unset, add_tags, remove_tags, replace.
+type Edit struct {
+	Select     Selector       `json:"select" yaml:"select"`
+	Set        map[string]any `json:"set,omitempty" yaml:"set"`
+	Unset      []string       `json:"unset,omitempty" yaml:"unset"`
+	AddTags    []string       `json:"add_tags,omitempty" yaml:"add_tags"`
+	RemoveTags []string       `json:"remove_tags,omitempty" yaml:"remove_tags"`
+	Replace    []Replace      `json:"replace,omitempty" yaml:"replace"`
+}
+
+// Replace rewrites body text outside frontmatter and code. With Regex,
+// Find is an RE2 expression and With may use $1 or ${name}.
+type Replace struct {
+	Find  string `json:"find" yaml:"find"`
+	With  string `json:"with" yaml:"with"`
+	Regex bool   `json:"regex,omitempty" yaml:"regex"`
+}
+
+// TagRename renames a tag on every page: the frontmatter tags list and
+// inline #tags in the body.
+type TagRename struct {
+	From string `json:"from" yaml:"from"`
+	To   string `json:"to" yaml:"to"`
+}
+
+// Empty reports whether the manifest asks for nothing.
+func (m *Manifest) Empty() bool {
+	return len(m.Moves) == 0 && len(m.Merges) == 0 && len(m.Edits) == 0 && len(m.RenameTags) == 0
 }
 
 // Move relocates a file, a folder, or the files matching a glob. A To that
@@ -75,8 +133,8 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}
-	if len(m.Moves) == 0 && len(m.Merges) == 0 {
-		return nil, fmt.Errorf("manifest has no moves or merges")
+	if m.Empty() {
+		return nil, fmt.Errorf("manifest has no moves, merges, edits or tag renames")
 	}
 	return &m, nil
 }

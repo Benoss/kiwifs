@@ -21,7 +21,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/storage"
 	"github.com/kiwifs/kiwifs/internal/workflow"
 	"github.com/labstack/echo/v4"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // ordinalStep is the default gap between card ordinals when assigning new

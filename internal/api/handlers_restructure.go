@@ -41,6 +41,7 @@ func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*ref
 //	@Security		BearerAuth
 //	@Accept			json
 //	@Param			body	body		refactor.Manifest	true	"Manifest"
+//	@Param			diffs	query		bool				false	"Include a unified diff for every written page"
 //	@Success		200		{object}	refactor.Plan
 //	@Failure		400		{object}	map[string]string
 //	@Router			/api/kiwi/refactor/plan [post]
@@ -56,6 +57,12 @@ func (h *Handlers) RefactorPlan(c echo.Context) error {
 	plan, err := h.buildRefactorPlan(c, m)
 	if err != nil {
 		return err
+	}
+	if c.QueryParam("diffs") == "true" {
+		return c.JSON(http.StatusOK, struct {
+			*refactor.Plan
+			Diffs []refactor.FileDiff `json:"diffs"`
+		}{plan, plan.FileDiffs()})
 	}
 	return c.JSON(http.StatusOK, plan)
 }
@@ -84,8 +91,8 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 	if err := dec.Decode(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body: "+err.Error())
 	}
-	if len(req.Manifest.Moves) == 0 && len(req.Manifest.Merges) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves or merges")
+	if req.Manifest.Empty() {
+		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves, merges, edits or tag renames")
 	}
 	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, refactor.Options{Client: requestClient(c)}, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
 	switch {

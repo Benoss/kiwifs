@@ -48,8 +48,15 @@ Manifest (YAML or JSON):
     - from: faq/duplicate.md        # deleted; links, comments, state go to into
       into: faq/canonical.md
   delete_empty_dirs: true
+  edits:                            # change frontmatter and text of selected pages
+    - select: {query: 'status = "draft"', glob: "notes/**"}
+      set: {status: archived}
+      add_tags: [archived]
+      replace: [{find: "Acme Corp", with: "Acme"}]
+  rename_tags:
+    - {from: ml, to: machine-learning}
 
-Applying lands everything in one commit whose trailers record the actor and
+Selection sees the workspace before any change. Applying lands everything in one commit whose trailers record the actor and
 the plan's digest; "kiwifs refactor revert COMMIT" undoes it.`,
 }
 
@@ -89,6 +96,7 @@ func init() {
 		c.Flags().StringP("root", "r", "./knowledge", "knowledge root directory")
 		c.Flags().Bool("json", false, "print the plan as JSON")
 		c.Flags().BoolP("verbose", "v", false, "list every rewritten link")
+		c.Flags().Bool("diff", false, "print a unified diff for every written page")
 	}
 	for _, c := range []*cobra.Command{refactorApplyCmd, refactorRevertCmd} {
 		c.Flags().BoolP("yes", "y", false, "apply without asking")
@@ -139,6 +147,13 @@ func showPlan(cmd *cobra.Command, plan *refactor.Plan) error {
 		return enc.Encode(plan)
 	}
 	printPlan(out, plan, verbose)
+	if diff, _ := cmd.Flags().GetBool("diff"); diff && len(plan.Errors) == 0 {
+		for _, d := range plan.FileDiffs() {
+			if d.Diff != "" {
+				fmt.Fprint(out, d.Diff)
+			}
+		}
+	}
 	return nil
 }
 
@@ -178,6 +193,12 @@ func printPlan(w io.Writer, plan *refactor.Plan, verbose bool) {
 					fmt.Fprintf(w, "    %d: %s → %s\n", l.Line, l.Old, l.New)
 				}
 			}
+		}
+	}
+	if len(plan.ContentEdits) > 0 {
+		fmt.Fprintf(w, "Edit %d pages:\n", len(plan.ContentEdits))
+		for _, e := range plan.ContentEdits {
+			fmt.Fprintf(w, "  %s: %s\n", e.Path, strings.Join(e.Changes, ", "))
 		}
 	}
 	if len(plan.Comments) > 0 {

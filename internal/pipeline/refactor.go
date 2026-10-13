@@ -60,6 +60,16 @@ func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts 
 			opts.Claims[c.Path] = c.ClaimedBy
 		}
 	}
+	if opts.Select == nil && p.SelectPages != nil {
+		opts.Select = func(ctx context.Context, query string) ([]string, error) {
+			// Pages written through the pipeline a moment ago may still
+			// be queued for indexing; let them land before selecting.
+			if p.AsyncIdx != nil {
+				p.AsyncIdx.Flush()
+			}
+			return p.SelectPages(ctx, query)
+		}
+	}
 	plan, err := refactor.BuildPlanWith(ctx, p.RefactorWorkspace(), m, opts)
 	if err != nil {
 		return nil, err
@@ -89,11 +99,23 @@ func (p *Pipeline) checkRefactorGuards(ctx context.Context, plan *refactor.Plan)
 			continue
 		}
 		if isAppendOnly(prior) && !bytes.Equal(prior, w.Content) {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("%s is append-only, so its links cannot be rewritten; move or merge the pages it links to separately, or lift append_only first", w.Source))
+			plan.Reject(w.Source, fmt.Sprintf("%s is append-only, so its content cannot be rewritten; move or merge the pages it links to separately, or lift append_only first", w.Source))
 		}
-		if w.Source != w.Path && p.ValidateWrite != nil && storage.IsKnowledgeFile(w.Path) {
+		if (w.Edited || w.Source != w.Path) && p.ValidateWrite != nil && storage.IsKnowledgeFile(w.Path) {
 			if err := p.ValidateWrite(ctx, w.Path, w.Content, WriteKindPut); err != nil {
-				plan.Errors = append(plan.Errors, fmt.Sprintf("moving %s to %s: %v", w.Source, w.Path, err))
+				what := "editing " + w.Source
+				if w.Source != w.Path {
+					what = fmt.Sprintf("moving %s to %s", w.Source, w.Path)
+				}
+				plan.Reject(w.Source, fmt.Sprintf("%s: %v", what, err))
+			}
+		}
+		if w.Edited && p.ValidateTransition != nil {
+			from, to := extractStatus(prior), extractStatus(w.Content)
+			if from != "" && to != "" && from != to {
+				if err := p.ValidateTransition(w.Path, from, to); err != nil {
+					plan.Reject(w.Source, fmt.Sprintf("%s: status %s → %s: %v", w.Source, from, to, err))
+				}
 			}
 		}
 	}
@@ -283,6 +305,16 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 	for _, w := range ops.Writes {
 		p.broadcast(events.Event{Op: "write", Path: w.Path, Actor: actor, ETag: ETag(w.Content)})
 	}
+	if p.OnTransition != nil {
+		for _, w := range ops.Writes {
+			if !w.Edited {
+				continue
+			}
+			if from, to := extractStatus(w.Prior), extractStatus(w.Content); from != "" && to != "" && from != to {
+				p.OnTransition(w.Path, "status", from, to, actor)
+			}
+		}
+	}
 
 	return RefactorResult{Written: len(ops.Writes), Deleted: len(ops.Deletes), Side: len(ops.Side), Dirs: dirs, Commit: sha}, nil
 }
@@ -358,4 +390,65 @@ func applySideWrite(root string, s refactor.SideWrite) error {
 		return err
 	}
 	return os.Rename(tmp, abs)
+}
+
+// RefactorDropping is Refactor for bulk edits that should skip the pages
+// that fail rather than fail the batch: while every error in the plan is
+// about a single page (plan.Rejected), those pages are taken out of each
+// edit's select.paths and the manifest is planned again. The pages left
+// out come back with the reason; everything else lands in one commit.
+// Only edits that select by paths can drop pages; any other error fails.
+func (p *Pipeline) RefactorDropping(ctx context.Context, m *refactor.Manifest, opts refactor.Options, actor string) (*refactor.Plan, RefactorResult, map[string]string, error) {
+	dropped := map[string]string{}
+	for {
+		plan, err := p.PlanRefactor(ctx, m, opts)
+		if err != nil {
+			return nil, RefactorResult{}, dropped, err
+		}
+		if len(plan.Errors) == 0 {
+			break
+		}
+		if len(plan.Rejected) != len(plan.Errors) {
+			return plan, RefactorResult{}, dropped, fmt.Errorf("%w: %s", ErrPlanInvalid, strings.Join(plan.Errors, "; "))
+		}
+		for _, r := range plan.Rejected {
+			dropped[r.Path] = r.Error
+		}
+		if !dropPaths(m, dropped) {
+			return plan, RefactorResult{}, dropped, fmt.Errorf("%w: %s", ErrPlanInvalid, strings.Join(plan.Errors, "; "))
+		}
+		if m.Empty() {
+			return plan, RefactorResult{}, dropped, nil
+		}
+	}
+	plan, res, err := p.Refactor(ctx, m, opts, "", actor)
+	return plan, res, dropped, err
+}
+
+// dropPaths removes dropped pages from every edit's select.paths, and
+// edits left selecting nothing. It reports whether anything was removed.
+func dropPaths(m *refactor.Manifest, dropped map[string]string) bool {
+	removed := false
+	kept := m.Edits[:0]
+	for _, e := range m.Edits {
+		if len(e.Select.Paths) == 0 {
+			kept = append(kept, e)
+			continue
+		}
+		var paths []string
+		for _, path := range e.Select.Paths {
+			if _, ok := dropped[path]; ok {
+				removed = true
+				continue
+			}
+			paths = append(paths, path)
+		}
+		if len(paths) == 0 {
+			continue
+		}
+		e.Select.Paths = paths
+		kept = append(kept, e)
+	}
+	m.Edits = kept
+	return removed
 }

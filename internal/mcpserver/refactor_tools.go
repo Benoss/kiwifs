@@ -14,10 +14,15 @@ import (
 )
 
 const manifestHelp = `Restructuring manifest, as a YAML/JSON string or an object:
-  moves:            [{from: guides/old.md, to: guides/new.md}, {from: drafts/, to: archive/drafts/}, {from: "notes/*-meeting.md", to: meetings/}]
+  moves:            [{from: guides/old.md, to: guides/new.md}, {from: drafts/, to: archive/drafts/}, {from: "notes/**/*-meeting.md", to: meetings/},
+                     {from_regex: 'journal/(\d{4})-.*\.md', to: 'journal/$1/'}]
   merges:           [{from: faq/dup.md, into: faq/canonical.md}]
   delete_empty_dirs: true
-Unknown keys are an error.`
+  edits:            [{select: {query: 'status = "draft"', glob: "notes/**", paths: [a.md]},
+                      set: {status: archived}, unset: [reviewer], add_tags: [x], remove_tags: [y],
+                      replace: [{find: "Acme Corp", with: "Acme"}]}]
+  rename_tags:      [{from: ml, to: machine-learning}]
+Selection sees the workspace before any change; select needs at least one criterion. Unknown keys are an error.`
 
 func registerRefactorTools(s *server.MCPServer, b Backend) {
 	s.AddTools(
@@ -28,7 +33,7 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 					"comments and personal state follow the page. Returns the digest to pass to kiwi_refactor_apply, the errors that block it, counts, and a page of moves and link edits. "+
 					"Prefer this over looping kiwi_rename: one plan, one review, one commit."),
 				mcp.WithAny("manifest", mcp.Required(), mcp.Description(manifestHelp)),
-				mcp.WithString("detail", mcp.Description("summary (default): moves and per-page link counts. full: every rewritten link with line numbers."), mcp.Enum("summary", "full")),
+				mcp.WithString("detail", mcp.Description("summary (default): moves and per-page link counts. full: every rewritten link with line numbers. diff: a unified diff per written page."), mcp.Enum("summary", "full", "diff")),
 				mcp.WithNumber("offset", mcp.Description("Skip this many moves and edited pages (paging). Default 0.")),
 				mcp.WithNumber("limit", mcp.Description("Moves and edited pages per page. Default 25, max 200.")),
 				mcp.WithString("actor", mcp.Description("Who will apply it — pages claimed by anyone else cannot be moved. Defaults to mcp-agent")),
@@ -104,18 +109,20 @@ func manifestArg(args map[string]any) (*refactor.Manifest, error) {
 // planView is a plan cut down to what an agent can read in one tool result:
 // counts, errors, and one page of moves and edited pages.
 type planView struct {
-	Digest     string                `json:"digest,omitempty"`
-	Applicable bool                  `json:"applicable"`
-	Errors     []string              `json:"errors,omitempty"`
-	Warnings   []string              `json:"warnings,omitempty"`
-	Stats      refactor.Stats        `json:"stats"`
-	Counts     planCounts            `json:"counts"`
-	Moves      []refactor.PathChange `json:"moves"`
-	Merges     []refactor.PathChange `json:"merges,omitempty"`
-	Edits      []editView            `json:"edits"`
-	Removed    []string              `json:"removed_dirs,omitempty"`
-	Offset     int                   `json:"offset"`
-	NextOffset int                   `json:"next_offset,omitempty"`
+	Digest     string                 `json:"digest,omitempty"`
+	Applicable bool                   `json:"applicable"`
+	Errors     []string               `json:"errors,omitempty"`
+	Warnings   []string               `json:"warnings,omitempty"`
+	Stats      refactor.Stats         `json:"stats"`
+	Counts     planCounts             `json:"counts"`
+	Moves      []refactor.PathChange  `json:"moves"`
+	Merges     []refactor.PathChange  `json:"merges,omitempty"`
+	Edits      []editView             `json:"edits"`
+	Content    []refactor.ContentEdit `json:"content_edits,omitempty"`
+	Diffs      []refactor.FileDiff    `json:"diffs,omitempty"`
+	Removed    []string               `json:"removed_dirs,omitempty"`
+	Offset     int                    `json:"offset"`
+	NextOffset int                    `json:"next_offset,omitempty"`
 }
 
 type planCounts struct {
@@ -125,6 +132,10 @@ type planCounts struct {
 	Comments    int `json:"comment_files"`
 	StateFiles  int `json:"state_files"`
 	RemovedDirs int `json:"removed_dirs"`
+	// ContentEdits counts pages whose content (not just links) changes.
+	ContentEdits int `json:"content_edits"`
+	// Writes counts every file the plan writes.
+	Writes int `json:"writes"`
 }
 
 type editView struct {
@@ -146,6 +157,11 @@ func pageOf[T any](items []T, offset, limit int) []T {
 }
 
 func viewPlan(plan *refactor.Plan, full bool, offset, limit int) planView {
+	return viewPlanDetail(plan, map[bool]string{true: "full", false: "summary"}[full], offset, limit)
+}
+
+func viewPlanDetail(plan *refactor.Plan, detail string, offset, limit int) planView {
+	full := detail == "full" || detail == "diff"
 	v := planView{
 		Digest:     plan.Digest,
 		Applicable: len(plan.Errors) == 0,
@@ -153,12 +169,14 @@ func viewPlan(plan *refactor.Plan, full bool, offset, limit int) planView {
 		Warnings:   plan.Warnings,
 		Stats:      plan.Stats,
 		Counts: planCounts{
-			Moves:       len(plan.Moves),
-			Merges:      len(plan.Merges),
-			EditedPages: len(plan.Edits),
-			Comments:    len(plan.Comments),
-			StateFiles:  len(plan.State),
-			RemovedDirs: len(plan.RemovedDirs),
+			Moves:        len(plan.Moves),
+			Merges:       len(plan.Merges),
+			EditedPages:  len(plan.Edits),
+			Comments:     len(plan.Comments),
+			StateFiles:   len(plan.State),
+			RemovedDirs:  len(plan.RemovedDirs),
+			ContentEdits: len(plan.ContentEdits),
+			Writes:       len(plan.Ops.Writes),
 		},
 		Moves:   pageOf(plan.Moves, offset, limit),
 		Merges:  plan.Merges,
@@ -175,7 +193,12 @@ func viewPlan(plan *refactor.Plan, full bool, offset, limit int) planView {
 	if v.Edits == nil {
 		v.Edits = []editView{}
 	}
-	if next := offset + limit; next < len(plan.Moves) || next < len(plan.Edits) {
+	v.Content = pageOf(plan.ContentEdits, offset, limit)
+	if detail == "diff" {
+		v.Diffs = pageOf(plan.FileDiffs(), offset, limit)
+	}
+	next := offset + limit
+	if next < len(plan.Moves) || next < len(plan.Edits) || next < len(plan.ContentEdits) || detail == "diff" && next < len(plan.Ops.Writes) {
 		v.NextOffset = next
 	}
 	return v
@@ -220,7 +243,7 @@ func handleRefactorPlan(b Backend) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Plan failed: %v", err)), nil
 		}
-		return structured(viewPlan(plan, detail == "full", offset, limit)), nil
+		return structured(viewPlanDetail(plan, detail, offset, limit)), nil
 	}
 }
 

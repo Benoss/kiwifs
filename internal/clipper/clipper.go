@@ -11,7 +11,7 @@ import (
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-shiori/go-readability"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // ClipRequest holds parameters for clipping a web page.

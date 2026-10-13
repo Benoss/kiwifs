@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // scanTypedLinks finds the page references held in typed-link frontmatter

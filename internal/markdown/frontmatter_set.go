@@ -5,16 +5,31 @@ import (
 	"fmt"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // SetFrontmatterField sets a single key/value pair in the YAML frontmatter
 // of a markdown document. If no frontmatter exists, one is created. The rest
 // of the document body is preserved byte-for-byte.
 //
-// Supported value types: string, bool, int, float64, time.Time, nil (removes key).
-// Returns the modified document content.
+// Only the lines of the changed key are rewritten: every other line keeps
+// its bytes, comments and ordering, so retagging five hundred pages gives
+// five hundred one-line diffs. The key keeps its flow or quote style and
+// its inline comment. When the frontmatter is too unusual to splice safely
+// (not a mapping, comments inside the value) the whole block is re-encoded.
+//
+// Supported value types: string, bool, int, float64, time.Time, slices and
+// maps, nil (removes key). Returns the modified document content.
 func SetFrontmatterField(content []byte, key string, value any) ([]byte, error) {
+	if out, ok := spliceFrontmatterField(content, key, value); ok {
+		return out, nil
+	}
+	return reencodeFrontmatterField(content, key, value)
+}
+
+// reencodeFrontmatterField is the fallback: parse, set, and encode the
+// whole frontmatter block.
+func reencodeFrontmatterField(content []byte, key string, value any) ([]byte, error) {
 	fm, body, err := SplitFrontmatter(content)
 	if err != nil {
 		// Unterminated frontmatter — treat as no frontmatter.

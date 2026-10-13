@@ -99,3 +99,33 @@ func TestBulkWriteIfMatchConflict(t *testing.T) {
 		t.Fatalf("want 409, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPublishBulkDropsRejectedPagesAndEditsLineByLine(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "---\ntitle:  Aligned   # keep\n---\nA\n")
+	mustPutFile(t, s, "log.md", "---\nappend_only: true\n---\nlog\n")
+	rec := postJSON(t, s, "/api/kiwi/publish/bulk", `{"paths":["a.md","log.md","missing.md"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("publish/bulk: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Changed int `json:"changed"`
+		Errors  []struct {
+			Path  string `json:"path"`
+			Error string `json:"error"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Changed != 1 || len(out.Errors) != 2 || out.Errors[0].Path != "log.md" || !strings.Contains(out.Errors[0].Error, "append-only") {
+		t.Fatalf("response = %s", rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/kiwi/file?path=a.md", nil)
+	got := httptest.NewRecorder()
+	s.echo.ServeHTTP(got, req)
+	body := got.Body.String()
+	if !strings.HasPrefix(body, "---\ntitle:  Aligned   # keep\npublished: true\npublished_at: ") {
+		t.Fatalf("a.md = %q", body)
+	}
+}

@@ -10,7 +10,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/links"
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/storage"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // Report summarizes episodic and consolidation coverage for a knowledge root.

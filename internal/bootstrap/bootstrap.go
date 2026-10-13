@@ -15,6 +15,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/comments"
 	"github.com/kiwifs/kiwifs/internal/config"
 	"github.com/kiwifs/kiwifs/internal/draft"
+	"github.com/kiwifs/kiwifs/internal/dataview"
 	"github.com/kiwifs/kiwifs/internal/events"
 	"github.com/kiwifs/kiwifs/internal/janitor"
 	"github.com/kiwifs/kiwifs/internal/links"
@@ -106,6 +107,19 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 	hub := events.NewHub()
 	pipe := pipeline.New(store, ver, searcher, linker, hub, vectors, root)
 	pipe.TypedLinkFields = cfg.Links.TypedLinkFields()
+	if sq, ok := searcher.(*search.SQLite); ok {
+		selector := dataview.NewExecutor(sq.ReadDB())
+		maxRows := 10000
+		if cfg.Dataview.MaxScanRows > 0 {
+			maxRows = cfg.Dataview.MaxScanRows
+		}
+		timeout := 30 * time.Second
+		if t, err := time.ParseDuration(cfg.Dataview.QueryTimeout); err == nil && t > 0 {
+			timeout = t
+		}
+		selector.SetLimits(maxRows, timeout)
+		pipe.SelectPages = selector.SelectPaths
+	}
 	pipe.SequenceDirs = cfg.Sequences.Directories
 	if err := pipe.RecoverRefactor(context.Background()); err != nil {
 		log.Printf("%srefactor recovery: %v", prefix, err)

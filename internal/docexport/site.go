@@ -13,7 +13,7 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/storage"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // SiteExporter generates a static documentation site using MkDocs.

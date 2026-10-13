@@ -428,3 +428,126 @@ func TestMergeKeepsAnchorsLabelsAndEmbeds(t *testing.T) {
 		t.Fatalf("page.md = %q", got)
 	}
 }
+
+func planWith(t *testing.T, dir, manifest string, opts Options) *Plan {
+	t.Helper()
+	m, err := ParseManifest([]byte(manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.NewLocal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildPlanWith(context.Background(), Workspace{Root: dir, Store: store}, m, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestEditsKeepYAMLAndSelectByGlob(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"notes/a.md": "---\n# owner: docs\ntitle:  A   # aligned\ntags: [wip, ml]\nstatus: draft\n---\nBody about Acme Corp and `Acme Corp`.\n",
+		"notes/b.md": "---\ntags:\n  - ml\n---\nB\n",
+		"other.md":   "---\nstatus: draft\n---\nO\n",
+	})
+	p := plan(t, dir, `edits:
+  - select: {glob: "notes/**"}
+    set: {status: archived, priority: 2}
+    add_tags: [archived]
+    remove_tags: [wip]
+    replace: [{find: "Acme Corp", with: "Acme"}]
+`)
+	requireNoErrors(t, p)
+	want := "---\n# owner: docs\ntitle:  A   # aligned\ntags: [ml, archived]\nstatus: archived\npriority: 2\n---\nBody about Acme and `Acme Corp`.\n"
+	if got := written(t, p, "notes/a.md"); got != want {
+		t.Fatalf("notes/a.md =\n%s\nwant\n%s", got, want)
+	}
+	if got := written(t, p, "notes/b.md"); got != "---\ntags:\n  - ml\n  - archived\npriority: 2\nstatus: archived\n---\nB\n" {
+		t.Fatalf("notes/b.md = %q", got)
+	}
+	for _, w := range p.Ops.Writes {
+		if w.Path == "other.md" {
+			t.Fatal("other.md is not selected")
+		}
+	}
+	if len(p.ContentEdits) != 2 || len(p.FileDiffs()) != 2 || !strings.Contains(p.FileDiffs()[0].Diff, "+status: archived") {
+		t.Fatalf("content edits = %+v diffs = %+v", p.ContentEdits, p.FileDiffs())
+	}
+}
+
+func TestEditSelectionSeesThePreMoveSnapshot(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"drafts/x.md": "---\nstatus: draft\n---\nX\n",
+		"index.md":    "[[drafts/x]]\n",
+	})
+	p := plan(t, dir, `moves: [{from: drafts/, to: archive/}]
+edits: [{select: {glob: "drafts/*.md"}, set: {status: archived}}]`)
+	requireNoErrors(t, p)
+	if got := written(t, p, "archive/x.md"); got != "---\nstatus: archived\n---\nX\n" {
+		t.Fatalf("archive/x.md = %q", got)
+	}
+	if got := written(t, p, "index.md"); got != "[[archive/x]]\n" {
+		t.Fatalf("index.md = %q", got)
+	}
+	if len(p.ContentEdits) != 1 || p.ContentEdits[0].From != "drafts/x.md" || p.ContentEdits[0].Path != "archive/x.md" {
+		t.Fatalf("content edits = %+v", p.ContentEdits)
+	}
+}
+
+func TestSelectByQueryIntersectsAndIgnoresMissingPages(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"a.md": "---\nstatus: draft\n---\n",
+		"b.md": "---\nstatus: draft\n---\n",
+	})
+	var asked string
+	opts := Options{Select: func(_ context.Context, q string) ([]string, error) {
+		asked = q
+		// The index still lists a deleted page: it must be ignored.
+		return []string{"a.md", "b.md", "gone.md"}, nil
+	}}
+	p := planWith(t, dir, `edits: [{select: {query: 'status = "draft"', paths: [b.md]}, set: {status: done}}]`, opts)
+	requireNoErrors(t, p)
+	if asked != `status = "draft"` || len(p.Ops.Writes) != 1 || p.Ops.Writes[0].Path != "b.md" {
+		t.Fatalf("asked %q, writes %v", asked, writePaths(p))
+	}
+	noSelect := plan(t, dir, `edits: [{select: {query: 'x = 1'}, set: {y: 1}}]`)
+	if len(noSelect.Errors) == 0 {
+		t.Fatal("a query without a selector must be an error")
+	}
+	empty := plan(t, dir, `edits: [{select: {}, set: {y: 1}}]`)
+	if len(empty.Errors) == 0 {
+		t.Fatal("an empty selection must be an error")
+	}
+}
+
+func TestRenameTagsMergesAndWarns(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"a.md": "---\ntags: [ML, python]\n---\nUses #ml and #mlops; `#ml` in code; see page#ml.\n",
+		"b.md": "---\ntags: [machine-learning, ml]\n---\n",
+		"c.md": "---\ntags: machine-learning\n---\n",
+	})
+	p := plan(t, dir, "rename_tags: [{from: ml, to: machine-learning}]")
+	requireNoErrors(t, p)
+	if got := written(t, p, "a.md"); got != "---\ntags: [machine-learning, python]\n---\nUses #machine-learning and #mlops; `#ml` in code; see page#ml.\n" {
+		t.Fatalf("a.md = %q", got)
+	}
+	if got := written(t, p, "b.md"); got != "---\ntags: [machine-learning]\n---\n" {
+		t.Fatalf("b.md = %q", got)
+	}
+	if len(p.Warnings) != 1 || !strings.Contains(p.Warnings[0], `"machine-learning" already exists on 2 pages`) {
+		t.Fatalf("warnings = %v", p.Warnings)
+	}
+}
+
+func TestRegexReplaceSkipsCode(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"a.md": "v1.2 and v3.4\n```\nv5.6\n```\n",
+	})
+	p := plan(t, dir, `edits: [{select: {paths: [a.md]}, replace: [{find: 'v(\d+)\.(\d+)', with: 'version $1.$2', regex: true}]}]`)
+	requireNoErrors(t, p)
+	if got := written(t, p, "a.md"); got != "version 1.2 and version 3.4\n```\nv5.6\n```\n" {
+		t.Fatalf("a.md = %q", got)
+	}
+}

@@ -672,3 +672,48 @@ func (e *Executor) execSelect(ctx context.Context, sqlStr string, args []any, pl
 
 	return result, rows.Err()
 }
+
+// ErrSelectionTooLarge is returned by SelectPaths when more pages match
+// than the executor's scan limit allows.
+var ErrSelectionTooLarge = fmt.Errorf("selection matches too many pages")
+
+// SelectPaths returns every page path a query selects, unpaged: what a
+// bulk edit needs, where a query result normally stops at LIMIT. query is a
+// full DQL query (LIST/TABLE … WHERE …) or just a WHERE expression. Only
+// page-grain queries select pages.
+func (e *Executor) SelectPaths(ctx context.Context, query string) ([]string, error) {
+	q := strings.TrimSpace(query)
+	upper := strings.ToUpper(q)
+	if !strings.HasPrefix(upper, "LIST") && !strings.HasPrefix(upper, "TABLE") {
+		q = "LIST WHERE " + q
+	}
+	plan, err := ParseQuery(q)
+	if err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	if isRecordGrain(plan.Source) || plan.WithoutID {
+		return nil, fmt.Errorf("a selection must return pages, not records")
+	}
+	limit := e.maxScanRows
+	if limit <= 0 {
+		limit = 10000
+	}
+	plan.Fields = nil
+	plan.GroupBy = ""
+	plan.Limit = limit
+	plan.Offset = 0
+	res, err := e.Execute(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+	if res.HasMore {
+		return nil, fmt.Errorf("%w (more than %d); narrow the query", ErrSelectionTooLarge, limit)
+	}
+	out := make([]string, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		if p, ok := row["_path"].(string); ok && p != "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}

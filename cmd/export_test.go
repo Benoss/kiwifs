@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/kiwifs/kiwifs/internal/webhooks"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func TestExportFiresWebhookAfterDataExport(t *testing.T) {

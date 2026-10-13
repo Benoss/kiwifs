@@ -87,6 +87,10 @@ type Pipeline struct {
 	// restructuring moves, and lets plans refuse to move claimed pages.
 	Claims ClaimTracker
 
+	// SelectPages, when set, resolves a restructuring edit's select.query
+	// (a DQL query) to page paths.
+	SelectPages refactor.SelectFunc
+
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so
 	// the final atomic rename stays on the same filesystem. Empty when

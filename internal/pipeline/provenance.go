@@ -10,7 +10,7 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/yamlutil"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // ProvenanceEntry is the shape written into the `derived-from` list. The

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -40,11 +41,11 @@ func (m *memStore) Write(_ context.Context, path string, content []byte) error {
 	return nil
 }
 
-func (m *memStore) Delete(context.Context, string) error                           { return nil }
-func (m *memStore) List(context.Context, string) ([]storage.Entry, error)          { return nil, nil }
-func (m *memStore) Stat(context.Context, string) (*storage.Entry, error)           { return nil, nil }
-func (m *memStore) Exists(_ context.Context, _ string) bool                        { return false }
-func (m *memStore) AbsPath(path string) string                                     { return path }
+func (m *memStore) Delete(context.Context, string) error                  { return nil }
+func (m *memStore) List(context.Context, string) ([]storage.Entry, error) { return nil, nil }
+func (m *memStore) Stat(context.Context, string) (*storage.Entry, error)  { return nil, nil }
+func (m *memStore) Exists(_ context.Context, _ string) bool               { return false }
+func (m *memStore) AbsPath(path string) string                            { return path }
 
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -69,17 +70,17 @@ func setupTestDB(t *testing.T) *sql.DB {
 		{"students/priya.md", map[string]any{
 			"name": "Priya Sharma", "status": "active", "phone": "919999999999",
 			"mastery": map[string]any{"derivatives": 0.1},
-			"tags": []any{"math", "calculus"}, "last_active": "2026-04-24",
+			"tags":    []any{"math", "calculus"}, "last_active": "2026-04-24",
 		}},
 		{"students/amit.md", map[string]any{
 			"name": "Amit Patel", "status": "active", "phone": "918888888888",
 			"mastery": map[string]any{"derivatives": 0.7},
-			"tags": []any{"physics", "math"}, "last_active": "2026-04-20",
+			"tags":    []any{"physics", "math"}, "last_active": "2026-04-20",
 		}},
 		{"students/chen.md", map[string]any{
 			"name": "Chen Wei", "status": "inactive", "phone": "8612345678",
 			"mastery": map[string]any{"derivatives": 0.9},
-			"tags": []any{"physics"}, "last_active": "2026-03-15",
+			"tags":    []any{"physics"}, "last_active": "2026-03-15",
 		}},
 		{"concepts/derivatives.md", map[string]any{
 			"name": "Derivatives", "status": "published", "difficulty": 3,
@@ -1354,5 +1355,26 @@ func TestIntegration_TaskWhereBetween(t *testing.T) {
 	// line 3 ("Buy groceries") and line 4 ("Send email")
 	if len(result.Rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(result.Rows))
+	}
+}
+
+func TestSelectPathsIsUnpagedAndBounded(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	exec := NewExecutor(db)
+	all, err := exec.SelectPaths(context.Background(), `LIST FROM "students/"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	some, err := exec.SelectPaths(context.Background(), `status = "active"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) == 0 || len(some) == 0 || len(some) > len(all)+1 {
+		t.Fatalf("all = %v, active = %v", all, some)
+	}
+	exec.SetLimits(1, 0)
+	if _, err := exec.SelectPaths(context.Background(), `LIST`); !errors.Is(err, ErrSelectionTooLarge) {
+		t.Fatalf("err = %v, want ErrSelectionTooLarge", err)
 	}
 }

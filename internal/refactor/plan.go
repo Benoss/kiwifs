@@ -81,6 +81,9 @@ type Plan struct {
 	Moves       []PathChange `json:"moves"`
 	Merges      []PathChange `json:"merges"`
 	Edits       []FileEdit   `json:"edits"`
+	// ContentEdits lists the pages whose content the manifest's edits
+	// change, and how.
+	ContentEdits []ContentEdit `json:"content_edits,omitempty"`
 	Comments    []PathChange `json:"comments,omitempty"`
 	State       []StateEdit  `json:"state,omitempty"`
 	RemovedDirs []string     `json:"removed_dirs,omitempty"`
@@ -94,6 +97,10 @@ type Plan struct {
 	Client string `json:"client,omitempty"`
 	// Reverts is the commit a revert plan undoes.
 	Reverts string `json:"reverts,omitempty"`
+	// Rejected names the pages behind errors that are about one page only
+	// (a failed validation, an edit that cannot apply). A caller may drop
+	// those pages and plan again; any error not listed here is global.
+	Rejected []PathError `json:"rejected,omitempty"`
 	// Conflicts explains, by code, the destinations that cannot be used.
 	// Each one is also in Errors.
 	Conflicts []Conflict `json:"conflicts,omitempty"`
@@ -102,6 +109,18 @@ type Plan struct {
 	Stats    Stats    `json:"stats"`
 
 	Ops Ops `json:"-"`
+}
+
+// PathError is an error that concerns one page.
+type PathError struct {
+	Path  string `json:"path"`
+	Error string `json:"error"`
+}
+
+// Reject records an error about one page, in Errors and in Rejected.
+func (p *Plan) Reject(path, msg string) {
+	p.Errors = append(p.Errors, msg)
+	p.Rejected = append(p.Rejected, PathError{Path: path, Error: msg})
 }
 
 // Ops is everything applying the plan does, fully materialized.
@@ -125,6 +144,11 @@ type FileWrite struct {
 	Content    []byte
 	Source     string
 	SourceETag string
+	// Prior is Source's content at plan time, for diffs. Edited marks a
+	// page whose content the manifest's edits changed (not just links),
+	// which is validated like any content write.
+	Prior  []byte
+	Edited bool
 }
 
 type FileDelete struct {
@@ -171,6 +195,9 @@ type Options struct {
 	Claims map[string]string
 	// Client is recorded on the plan and in the commit trailers.
 	Client string
+	// Select resolves an edit's select.query. Without it, query selection
+	// is an error.
+	Select SelectFunc
 }
 
 type planner struct {
@@ -184,6 +211,10 @@ type planner struct {
 	pre     *links.PathIndex
 	post    *links.PathIndex
 	content map[string][]byte
+	// edited is a page's content after the manifest's edits, before
+	// relinking; editNotes says what changed.
+	edited    map[string][]byte
+	editNotes map[string][]string
 }
 
 func (p *planner) errorf(format string, args ...any) {
@@ -230,6 +261,9 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 	p.expandMerges(m.Merges)
 	postFiles := p.checkDestinations()
 	p.checkClaims()
+	if err := p.planEdits(ctx, m); err != nil {
+		return nil, err
+	}
 	if len(p.plan.Errors) > 0 {
 		return p.plan, nil
 	}
@@ -630,22 +664,36 @@ func (p *planner) rewritePages(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: c, Source: f, SourceETag: ETag(c)})
+				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: c, Source: f, SourceETag: ETag(c), Prior: c})
 				p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(c)})
 			}
 			continue
 		}
 
+		_, isEdited := p.edited[f]
+		if !moving && !isEdited && len(p.moved) == 0 && len(p.merged) == 0 {
+			// Nothing moves, so no link can change: only edited pages
+			// need reading.
+			continue
+		}
 		p.plan.Stats.Pages++
-		content, err := p.read(ctx, f)
+		disk, err := p.read(ctx, f)
 		if err != nil {
 			return err
 		}
+		content, edited := disk, false
+		if e, ok := p.edited[f]; ok {
+			content, edited = e, true
+		}
 		if p.opts.LeaveLinks {
-			if moving {
-				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: content, Source: f, SourceETag: ETag(content)})
-				p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(content)})
+			switch {
+			case moving:
+				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: content, Source: f, SourceETag: ETag(disk), Prior: disk, Edited: edited})
+				p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(disk)})
+			case edited:
+				p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: f, Content: content, Source: f, SourceETag: ETag(disk), Prior: disk, Edited: true})
 			}
+			p.noteContentEdit(f, to, moving)
 			continue
 		}
 		from := p.final(f)
@@ -702,11 +750,12 @@ func (p *planner) rewritePages(ctx context.Context) error {
 
 		switch {
 		case moving:
-			p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: updated, Source: f, SourceETag: ETag(content)})
-			p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(content)})
-		case len(edits) > 0:
-			p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: f, Content: updated, Source: f, SourceETag: ETag(content)})
+			p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: to, Content: updated, Source: f, SourceETag: ETag(disk), Prior: disk, Edited: edited})
+			p.plan.Ops.Deletes = append(p.plan.Ops.Deletes, FileDelete{Path: f, ETag: ETag(disk)})
+		case len(edits) > 0 || edited:
+			p.plan.Ops.Writes = append(p.plan.Ops.Writes, FileWrite{Path: f, Content: updated, Source: f, SourceETag: ETag(disk), Prior: disk, Edited: edited})
 		}
+		p.noteContentEdit(f, to, moving)
 		if len(report) > 0 {
 			fe := FileEdit{Path: from, Links: report}
 			if moving {
@@ -733,6 +782,18 @@ func (p *planner) dropOverwrittenDeletes() {
 		}
 	}
 	p.plan.Ops.Deletes = kept
+}
+
+func (p *planner) noteContentEdit(f, to string, moving bool) {
+	notes, ok := p.editNotes[f]
+	if !ok {
+		return
+	}
+	ce := ContentEdit{Path: f, Changes: notes}
+	if moving {
+		ce.Path, ce.From = to, f
+	}
+	p.plan.ContentEdits = append(p.plan.ContentEdits, ce)
 }
 
 // planEmptyDirs removes the folders that held moved or merged files and

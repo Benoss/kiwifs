@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func TestInjectProvenanceCreatesFrontmatter(t *testing.T) {

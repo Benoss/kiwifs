@@ -14,7 +14,7 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/piprate/json-gold/ld"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // Croissant (https://mlcommons.org/croissant/) describes an ML dataset as

@@ -79,6 +79,15 @@ overwrite an existing destination (protocol clients that need rename(2)
 semantics pass `?overwrite=true`). Agents get the same engine through
 `kiwi_refactor_plan` / `kiwi_refactor_apply` / `kiwi_refactor_revert`.
 
+Beyond moves and merges, a manifest can carry `edits` — `select` pages by
+`paths`, `glob` and/or a DQL `query` (all criteria narrow; at least one is
+required), then `set`/`unset` frontmatter keys, `add_tags`/`remove_tags`, and
+`replace` body text outside code — and `rename_tags` (frontmatter lists and
+inline `#tags`; renaming into an existing tag is a warning). Selection sees the
+workspace before any change. Frontmatter is edited line by line, so comments,
+key order and alignment survive and a retag is a one-line diff per page.
+`POST /refactor/plan?diffs=true` adds a unified diff per written page.
+
 Plans also cover typed-link frontmatter fields (`[links] typed_fields`),
 `**` globs, `from_regex` moves with `$1` captures, and task claims: a page
 claimed by another actor cannot be moved. Destinations that collide by case or

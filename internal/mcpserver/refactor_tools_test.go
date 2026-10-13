@@ -324,3 +324,29 @@ func TestRefactorTools_ApplyThenRevertWithGit(t *testing.T) {
 		t.Fatal("the folder the refactor created should be gone")
 	}
 }
+
+func TestRefactorTools_EditsSelectByQueryRightAfterAWrite(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	ctx := context.Background()
+	if _, err := b.WriteFile(ctx, "fresh.md", "---\nstatus: review\ntags: [x]\n---\n# Fresh\n", "agent", ""); err != nil {
+		t.Fatal(err)
+	}
+	// No sleep: the async indexer is flushed before selecting.
+	manifest := map[string]any{"edits": []any{map[string]any{
+		"select":   map[string]any{"query": `status = "review"`},
+		"set":      map[string]any{"status": "done"},
+		"add_tags": []any{"reviewed"},
+	}}}
+	plan := planOf(t, callTool(t, handleRefactorPlan(b), "kiwi_refactor_plan", map[string]any{"manifest": manifest, "detail": "diff"}))
+	if !plan.Applicable || plan.Counts.ContentEdits != 1 || len(plan.Diffs) != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply: %s", resultText(res))
+	}
+	if got := readTree(t, root, "fresh.md"); got != "---\nstatus: done\ntags: [x, reviewed]\n---\n# Fresh\n" {
+		t.Fatalf("fresh.md = %q", got)
+	}
+}
