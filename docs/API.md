@@ -64,6 +64,7 @@ POST   /api/kiwi/refactor/revert           → undo a commit as a plan ({"commit
 POST   /api/kiwi/refactor/approve          → a person approves a plan for an agent ({"manifest":{...},"digest":"..."})
 GET    /api/kiwi/refactor/pending          → plans agents are waiting to have approved
 GET    /api/kiwi/refactor/raw-moves        → moves made without relinking, and the relinks manifest that repairs them
+POST   /api/kiwi/refactor/from-workspace-edit → an editor's LSP WorkspaceEdit renames as a manifest + plan
 POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
 ```
 
@@ -105,6 +106,12 @@ that point nowhere in the pages written, and pages a merge leaves unlinked.
 page into a page per heading: the original becomes an index linking to them,
 references to `page#heading` follow their section, and the section's own links
 are re-resolved from its new folder. A split is a preview until `confirm: true`.
+
+Editors: `POST /refactor/plan?format=workspace-edit` answers with the plan as an
+LSP `WorkspaceEdit` (renames, minimal text edits, a `needsConfirmation`
+annotation); `kiwifs lsp` is a language server that answers
+`workspace/willRenameFiles`, so renaming a page in VS Code, Zed or Neovim
+relinks it through the same planner.
 
 Moves that bypass the engine — WebDAV/NFS renames, `update_links=false`, files
 moved on disk while the watcher runs — are logged when anything referenced the

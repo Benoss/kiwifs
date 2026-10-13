@@ -52,6 +52,7 @@ func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*ref
 //	@Accept			json
 //	@Param			body	body		refactor.Manifest	true	"Manifest"
 //	@Param			diffs	query		bool				false	"Include a unified diff for every written page"
+//	@Param			format	query		string				false	"workspace-edit: answer with the plan as an LSP WorkspaceEdit"
 //	@Success		200		{object}	refactor.Plan
 //	@Failure		400		{object}	map[string]string
 //	@Router			/api/kiwi/refactor/plan [post]
@@ -67,6 +68,12 @@ func (h *Handlers) RefactorPlan(c echo.Context) error {
 	plan, err := h.buildRefactorPlan(c, m)
 	if err != nil {
 		return err
+	}
+	if c.QueryParam("format") == "workspace-edit" {
+		if len(plan.Errors) > 0 {
+			return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
+		}
+		return c.JSON(http.StatusOK, plan.WorkspaceEdit(h.root))
 	}
 	if c.QueryParam("diffs") == "true" {
 		return c.JSON(http.StatusOK, struct {
@@ -258,4 +265,31 @@ func (h *Handlers) RefactorPending(c echo.Context) error {
 		pending = []pipeline.PendingApproval{}
 	}
 	return c.JSON(http.StatusOK, map[string]any{"pending": pending})
+}
+
+// RefactorFromWorkspaceEdit godoc
+//
+//	@Summary		Plan an editor's file renames
+//	@Description	Takes an LSP WorkspaceEdit (an editor's rename refactoring), keeps its file renames as a manifest — its text edits are recomputed by the planner, not trusted — and answers with that manifest and its plan.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		refactor.WorkspaceEdit	true	"LSP WorkspaceEdit"
+//	@Success		200		{object}	map[string]any
+//	@Failure		400		{object}	map[string]string
+//	@Router			/api/kiwi/refactor/from-workspace-edit [post]
+func (h *Handlers) RefactorFromWorkspaceEdit(c echo.Context) error {
+	var we refactor.WorkspaceEdit
+	if err := bindJSON(c, &we); err != nil {
+		return err
+	}
+	m, ignored, err := refactor.ManifestFromWorkspaceEdit(h.root, we)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	plan, err := h.buildRefactorPlan(c, m)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]any{"manifest": m, "plan": plan, "ignored": ignored})
 }
