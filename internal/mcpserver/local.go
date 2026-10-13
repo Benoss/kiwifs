@@ -313,11 +313,11 @@ func (b *LocalBackend) PatchFrontmatter(ctx context.Context, path string, fields
 	return res.ETag, nil
 }
 
-func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest) (*refactor.Plan, error) {
+func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error) {
 	if err := b.init(); err != nil {
 		return nil, err
 	}
-	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{})
+	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor})
 }
 
 func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string) (*RefactorApplyResult, error) {

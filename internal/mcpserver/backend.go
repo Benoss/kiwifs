@@ -177,7 +177,7 @@ type Backend interface {
 	// PatchFrontmatter sets fields (nil removes) without touching the body.
 	PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string) (etag string, err error)
 	// RefactorPlan previews a restructuring; nothing is written.
-	RefactorPlan(ctx context.Context, m *refactor.Manifest) (*refactor.Plan, error)
+	RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error)
 	// RefactorApply applies a restructuring as one commit. A non-empty
 	// digest must match the reviewed plan, else pipeline.ErrDigestMismatch
 	// comes back with the fresh plan in the result.

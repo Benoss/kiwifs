@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kiwifs/kiwifs/internal/claims"
 	"github.com/kiwifs/kiwifs/internal/events"
 	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/storage"
@@ -34,11 +35,29 @@ const staleRetries = 3
 
 // RefactorWorkspace is what refactor.BuildPlan reads for this pipeline.
 func (p *Pipeline) RefactorWorkspace() refactor.Workspace {
-	return refactor.Workspace{Root: p.Root, Store: p.Store}
+	return refactor.Workspace{Root: p.Root, Store: p.Store, TypedFields: p.TypedLinkFields}
 }
 
-// PlanRefactor builds the plan for m without writing anything.
+// ClaimTracker is the part of the claims store restructuring needs: who
+// holds which page, and moving those leases along with the pages.
+type ClaimTracker interface {
+	ListActive(ctx context.Context) ([]claims.Claim, error)
+	Rename(ctx context.Context, renames map[string]string) error
+}
+
+// PlanRefactor builds the plan for m without writing anything. Active
+// claims are loaded unless opts already carries them.
 func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts refactor.Options) (*refactor.Plan, error) {
+	if opts.Claims == nil && p.Claims != nil {
+		active, err := p.Claims.ListActive(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list claims: %w", err)
+		}
+		opts.Claims = make(map[string]string, len(active))
+		for _, c := range active {
+			opts.Claims[c.Path] = c.ClaimedBy
+		}
+	}
 	return refactor.BuildPlanWith(ctx, p.RefactorWorkspace(), m, opts)
 }
 
@@ -48,6 +67,9 @@ func (p *Pipeline) PlanRefactor(ctx context.Context, m *refactor.Manifest, opts 
 // Without one (a single rename, say), a plan that goes stale while waiting
 // for the write lock is rebuilt and retried a few times.
 func (p *Pipeline) Refactor(ctx context.Context, m *refactor.Manifest, opts refactor.Options, digest, actor string) (*refactor.Plan, RefactorResult, error) {
+	if opts.Actor == "" {
+		opts.Actor = actor
+	}
 	for attempt := 0; ; attempt++ {
 		plan, err := p.PlanRefactor(ctx, m, opts)
 		if err != nil {
@@ -131,7 +153,39 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		}
 	}
 
+	// A delete whose path folds to the same key as a write (Foo.md → foo.md,
+	// or NFD → NFC) names the same file on case- or normalization-
+	// insensitive filesystems (APFS, NTFS). It must go first, or deleting
+	// the old spelling after writing the new one removes the page.
+	writeKeys := make(map[string]bool, len(ops.Writes))
+	for _, w := range ops.Writes {
+		writeKeys[refactor.FoldKey(w.Path)] = true
+	}
+	var early, late []refactor.FileDelete
+	for _, d := range ops.Deletes {
+		if writeKeys[refactor.FoldKey(d.Path)] {
+			early = append(early, d)
+		} else {
+			late = append(late, d)
+		}
+	}
 	var paths []string
+	deleteFile := func(d refactor.FileDelete) error {
+		snapshot(d.Path)
+		p.markInflight(d.Path)
+		p.tryPreDelete(d.Path)
+		if err := p.Store.Delete(ctx, d.Path); err != nil {
+			restore()
+			return fmt.Errorf("delete %s: %w", d.Path, err)
+		}
+		paths = append(paths, d.Path)
+		return nil
+	}
+	for _, d := range early {
+		if err := deleteFile(d); err != nil {
+			return RefactorResult{}, err
+		}
+	}
 	for _, w := range ops.Writes {
 		snapshot(w.Path)
 		p.markInflightEtag(w.Path, ETag(w.Content))
@@ -141,15 +195,10 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		}
 		paths = append(paths, w.Path)
 	}
-	for _, d := range ops.Deletes {
-		snapshot(d.Path)
-		p.markInflight(d.Path)
-		p.tryPreDelete(d.Path)
-		if err := p.Store.Delete(ctx, d.Path); err != nil {
-			restore()
-			return RefactorResult{}, fmt.Errorf("delete %s: %w", d.Path, err)
+	for _, d := range late {
+		if err := deleteFile(d); err != nil {
+			return RefactorResult{}, err
 		}
-		paths = append(paths, d.Path)
 	}
 
 	side := 0
@@ -174,6 +223,19 @@ func (p *Pipeline) ApplyRefactor(ctx context.Context, plan *refactor.Plan, actor
 		log.Printf("pipeline: ApplyRefactor BulkCommit: %v", err)
 		for _, pa := range paths {
 			p.trackUncommitted(pa)
+		}
+	}
+
+	if p.Claims != nil {
+		renames := map[string]string{}
+		for _, mv := range plan.Moves {
+			renames[mv.From] = mv.To
+		}
+		for _, mg := range plan.Merges {
+			renames[mg.From] = ""
+		}
+		if err := p.Claims.Rename(ctx, renames); err != nil {
+			log.Printf("pipeline: ApplyRefactor move claims: %v", err)
 		}
 	}
 

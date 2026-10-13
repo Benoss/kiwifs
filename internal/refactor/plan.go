@@ -8,9 +8,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/kiwifs/kiwifs/internal/links"
 	"github.com/kiwifs/kiwifs/internal/storage"
 )
@@ -20,6 +22,16 @@ import (
 type Workspace struct {
 	Root  string
 	Store storage.Storage
+	// TypedFields are the frontmatter keys whose values are page references
+	// ([links] typed_fields). Nil means links.DefaultTypedLinkFields.
+	TypedFields []string
+}
+
+func (ws Workspace) typedFields() []string {
+	if ws.TypedFields == nil {
+		return links.DefaultTypedLinkFields()
+	}
+	return ws.TypedFields
 }
 
 // PathChange is one path that changes, for reports.
@@ -72,7 +84,12 @@ type Plan struct {
 	State       []StateEdit  `json:"state,omitempty"`
 	RemovedDirs []string     `json:"removed_dirs,omitempty"`
 	Errors      []string     `json:"errors,omitempty"`
-	Stats       Stats        `json:"stats"`
+	// Conflicts explains, by code, the destinations that cannot be used.
+	// Each one is also in Errors.
+	Conflicts []Conflict `json:"conflicts,omitempty"`
+	// Warnings do not block the plan but deserve a look before applying.
+	Warnings []string `json:"warnings,omitempty"`
+	Stats    Stats    `json:"stats"`
 
 	Ops Ops `json:"-"`
 }
@@ -127,6 +144,11 @@ type Options struct {
 	// exists for the legacy rename endpoints' update_links=false; the plan
 	// still carries ETags, side-file migration and a single commit.
 	LeaveLinks bool
+	// Actor is who will apply the plan. Claims held by anyone else block
+	// moving or merging the claimed page and warn when only its links change.
+	Actor string
+	// Claims maps a page path to the actor holding an active claim on it.
+	Claims map[string]string
 }
 
 type planner struct {
@@ -185,6 +207,7 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 	p.expandMoves(m.Moves)
 	p.expandMerges(m.Merges)
 	postFiles := p.checkDestinations()
+	p.checkClaims()
 	if len(p.plan.Errors) > 0 {
 		return p.plan, nil
 	}
@@ -198,12 +221,14 @@ func BuildPlanWith(ctx context.Context, ws Workspace, m *Manifest, opts Options)
 		p.plan.Ops = Ops{}
 		return p.plan, nil
 	}
+	p.dropOverwrittenDeletes()
 	if err := p.migrateSideFiles(); err != nil {
 		return nil, err
 	}
 	if m.DeleteEmptyDirs {
 		p.planEmptyDirs(postFiles)
 	}
+	p.warnClaimedEdits()
 	if len(p.plan.Errors) > 0 {
 		p.plan.Ops = Ops{}
 		return p.plan, nil
@@ -246,6 +271,14 @@ func (p *planner) addMove(from, to string) {
 
 func (p *planner) expandMoves(moves []Move) {
 	for _, mv := range moves {
+		if mv.FromRegex != "" {
+			if mv.From != "" {
+				p.errorf("move %q: give from or from_regex, not both", mv.From)
+				continue
+			}
+			p.expandRegexMove(mv)
+			continue
+		}
 		from, _, err := cleanPath(mv.From)
 		if err != nil || from == "" {
 			p.errorf("move from %q: invalid path", mv.From)
@@ -257,15 +290,30 @@ func (p *planner) expandMoves(moves []Move) {
 			continue
 		}
 		switch {
-		case strings.ContainsAny(from, "*?["):
+		case strings.ContainsAny(from, "*?[{"):
 			if !toDir {
 				p.errorf("move %s: a glob needs a destination folder ending in /", from)
 				continue
 			}
+			if !doublestar.ValidatePattern(from) {
+				p.errorf("move %s: invalid glob", from)
+				continue
+			}
+			// Each match keeps its path below the glob's fixed prefix, so
+			// notes/**/*.md → archive/ keeps subfolders instead of
+			// flattening them into collisions.
+			base, _ := doublestar.SplitPattern(from)
+			if base == "." {
+				base = ""
+			}
 			n := 0
 			for _, f := range p.files {
-				if ok, _ := path.Match(from, f); ok {
-					p.addMove(f, joinDir(to, path.Base(f)))
+				if ok, _ := doublestar.Match(from, f); ok {
+					rel := f
+					if base != "" {
+						rel = strings.TrimPrefix(f, base+"/")
+					}
+					p.addMove(f, joinDir(to, rel))
 					n++
 				}
 			}
@@ -279,6 +327,7 @@ func (p *planner) expandMoves(moves []Move) {
 			}
 			p.addMove(from, dest)
 		default:
+			p.checkFolderMove(from, to)
 			prefix := from + "/"
 			n := 0
 			for _, f := range p.files {
@@ -291,6 +340,43 @@ func (p *planner) expandMoves(moves []Move) {
 				p.errorf("move %s: no such file or folder", from)
 			}
 		}
+	}
+}
+
+// regexMaxLen bounds a from_regex. Go's RE2 engine is linear-time, so the
+// limit only keeps manifests readable and compile cost trivial.
+const regexMaxLen = 1024
+
+func (p *planner) expandRegexMove(mv Move) {
+	if len(mv.FromRegex) > regexMaxLen {
+		p.errorf("move from_regex: longer than %d bytes", regexMaxLen)
+		return
+	}
+	re, err := regexp.Compile(`^(?:` + mv.FromRegex + `)$`)
+	if err != nil {
+		p.errorf("move from_regex %q: %v", mv.FromRegex, err)
+		return
+	}
+	n := 0
+	for _, f := range p.files {
+		m := re.FindStringSubmatchIndex(f)
+		if m == nil {
+			continue
+		}
+		n++
+		expanded := string(re.ExpandString(nil, mv.To, f, m))
+		to, toDir, err := cleanPath(expanded)
+		if err != nil {
+			p.errorf("move %s: destination %q: %v", f, expanded, err)
+			continue
+		}
+		if toDir || to == "" {
+			to = joinDir(to, path.Base(f))
+		}
+		p.addMove(f, to)
+	}
+	if n == 0 {
+		p.errorf("move from_regex %q: no file matches", mv.FromRegex)
 	}
 }
 
@@ -319,64 +405,6 @@ func (p *planner) expandMerges(merges []Merge) {
 		}
 		p.merged[from] = into
 	}
-}
-
-// checkDestinations builds the file list after the refactor and rejects
-// collisions, including ones that differ only by case.
-func (p *planner) checkDestinations() []string {
-	post := map[string]string{} // path → why it exists
-	for _, f := range p.files {
-		if _, ok := p.moved[f]; ok {
-			continue
-		}
-		if _, ok := p.merged[f]; ok {
-			continue
-		}
-		post[f] = "existing file"
-	}
-	froms := make([]string, 0, len(p.moved))
-	for from := range p.moved {
-		froms = append(froms, from)
-	}
-	sort.Strings(froms)
-	for _, from := range froms {
-		to := p.moved[from]
-		if why, ok := post[to]; ok {
-			p.errorf("%s cannot move to %s: destination is taken (%s)", from, to, why)
-			continue
-		}
-		post[to] = "moved from " + from
-	}
-	byLower := map[string]string{}
-	out := make([]string, 0, len(post))
-	for f := range post {
-		out = append(out, f)
-	}
-	sort.Strings(out)
-	for _, f := range out {
-		l := strings.ToLower(f)
-		if other, ok := byLower[l]; ok {
-			p.errorf("%s and %s differ only by case", other, f)
-		}
-		byLower[l] = f
-	}
-	for from, into := range p.merged {
-		if _, ok := post[into]; !ok {
-			p.errorf("merge %s into %s: target does not exist after the moves", from, into)
-		}
-	}
-	for _, from := range froms {
-		p.plan.Moves = append(p.plan.Moves, PathChange{From: from, To: p.moved[from]})
-	}
-	mfroms := make([]string, 0, len(p.merged))
-	for from := range p.merged {
-		mfroms = append(mfroms, from)
-	}
-	sort.Strings(mfroms)
-	for _, from := range mfroms {
-		p.plan.Merges = append(p.plan.Merges, PathChange{From: from, To: p.merged[from]})
-	}
-	return out
 }
 
 func isMarkdown(p string) bool {
@@ -592,7 +620,7 @@ func (p *planner) rewritePages(ctx context.Context) error {
 			continue
 		}
 		from := p.final(f)
-		refs := scanLinks(content)
+		refs := scanAll(content, p.ws.typedFields())
 		expected := make([]string, len(refs))
 		var edits []splice
 		var report []LinkEdit
@@ -611,6 +639,10 @@ func (p *planner) rewritePages(ctx context.Context) error {
 			if got, firm := resolveFirm(p.post, r.Kind, r.Path, from); got == want && (firm || !wasFirm) {
 				continue
 			}
+			if r.Unsplicable {
+				p.errorf("%s:%d: frontmatter reference %q to %s is written in a YAML style that cannot be rewritten in place; quote it plainly or edit it first", f, r.Line, r.Path, before)
+				continue
+			}
 			text, ok := p.respell(r, before, want, from)
 			if !ok {
 				p.errorf("%s:%d: no way to write a link to %s from %s", f, r.Line, want, from)
@@ -625,7 +657,7 @@ func (p *planner) rewritePages(ctx context.Context) error {
 			p.plan.Stats.Rewritten += len(edits)
 		}
 
-		after := scanLinks(updated)
+		after := scanAll(updated, p.ws.typedFields())
 		if len(after) != len(refs) {
 			p.errorf("%s: rewriting changed the number of links (%d → %d)", f, len(refs), len(after))
 		} else {
@@ -655,6 +687,23 @@ func (p *planner) rewritePages(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// dropOverwrittenDeletes removes the delete of a moved-away source that
+// another move writes into (a swap, or a chain a→b→c): the write replaces
+// it, and deleting it after the writes would destroy the incoming page.
+func (p *planner) dropOverwrittenDeletes() {
+	written := make(map[string]bool, len(p.plan.Ops.Writes))
+	for _, w := range p.plan.Ops.Writes {
+		written[w.Path] = true
+	}
+	kept := p.plan.Ops.Deletes[:0]
+	for _, d := range p.plan.Ops.Deletes {
+		if !written[d.Path] {
+			kept = append(kept, d)
+		}
+	}
+	p.plan.Ops.Deletes = kept
 }
 
 // planEmptyDirs removes the folders that held moved or merged files and
@@ -714,6 +763,49 @@ func (p *planner) onlyJunkLeft(d string, going map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// claimedByOther returns who else holds path, or "".
+func (p *planner) claimedByOther(path string) string {
+	if holder, ok := p.opts.Claims[path]; ok && holder != p.opts.Actor {
+		return holder
+	}
+	return ""
+}
+
+// checkClaims refuses to move or merge a page someone else has claimed:
+// their next write would land at a path that no longer exists.
+func (p *planner) checkClaims() {
+	if len(p.opts.Claims) == 0 {
+		return
+	}
+	for _, mv := range p.plan.Moves {
+		if who := p.claimedByOther(mv.From); who != "" {
+			p.errorf("%s is claimed by %s; release the claim or wait for it to expire", mv.From, who)
+		}
+	}
+	for _, mg := range p.plan.Merges {
+		if who := p.claimedByOther(mg.From); who != "" {
+			p.errorf("%s is claimed by %s; release the claim or wait for it to expire", mg.From, who)
+		}
+	}
+}
+
+// warnClaimedEdits flags claimed pages whose links the plan rewrites. The
+// holder's next If-Match write fails and re-reads, so nothing is lost, but
+// they should know.
+func (p *planner) warnClaimedEdits() {
+	if len(p.opts.Claims) == 0 {
+		return
+	}
+	for _, e := range p.plan.Edits {
+		if e.From != "" {
+			continue
+		}
+		if who := p.claimedByOther(e.Path); who != "" {
+			p.plan.Warnings = append(p.plan.Warnings, fmt.Sprintf("%s is claimed by %s; its links will change under them", e.Path, who))
+		}
+	}
 }
 
 func (p *planner) digest() string {

@@ -25,6 +25,11 @@ type linkRef struct {
 	End   int
 	Path  string // the raw path bytes, content[Start:End]
 	Line  int    // 1-based, for reports
+	// Typed marks a reference held in a typed-link frontmatter field.
+	Typed bool
+	// Unsplicable marks a typed reference whose YAML spelling (a block or
+	// escaped scalar) cannot be rewritten byte for byte; Start and End are -1.
+	Unsplicable bool
 }
 
 // maskCode returns a copy of content in which YAML frontmatter, fenced code
@@ -157,6 +162,26 @@ var (
 	markdownRe = regexp.MustCompile(`\]\(([^()\s<>]+)(?:\s+"[^"\n]*")?\)`)
 	schemeRe   = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 )
+
+// scanAll returns the references in the body (scanLinks) and in the
+// typed-link frontmatter fields, in document order.
+func scanAll(content []byte, typedFields []string) []linkRef {
+	refs := scanTypedLinks(content, typedFields)
+	if len(refs) == 0 {
+		return scanLinks(content)
+	}
+	lineAt := newLineIndex(content)
+	for i := range refs {
+		if !refs[i].Unsplicable {
+			refs[i].Line = lineAt(refs[i].Start)
+		}
+	}
+	refs = append(refs, scanLinks(content)...)
+	sort.SliceStable(refs, func(i, j int) bool {
+		return refs[i].Line < refs[j].Line || refs[i].Line == refs[j].Line && refs[i].Start < refs[j].Start
+	})
+	return refs
+}
 
 // scanLinks returns every wiki and markdown reference outside code, in
 // document order.

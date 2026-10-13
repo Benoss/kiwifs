@@ -270,3 +270,131 @@ func TestBrokenLinksAreLeftAlone(t *testing.T) {
 		t.Fatalf("unresolved = %d", p.Stats.Unresolved)
 	}
 }
+
+func TestFrontmatterTypedLinksFollowAMove(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"old/x.md": "# X\n",
+		"y.md":     "# Y\n",
+		"note.md": "---\ntitle: Tïtle\n" +
+			"supersedes: [[old/x]]\n" +
+			"contradicts: \"[[old/x|the x]]\"\n" +
+			"superseded_by:\n  - 'old/x.md'\n  - y\n" +
+			"related: [[old/x]]\n" +
+			"---\nBody [[old/x]]\n",
+	})
+	p := plan(t, dir, "moves: [{from: old/x.md, to: new/x.md}]")
+	requireNoErrors(t, p)
+	want := "---\ntitle: Tïtle\n" +
+		"supersedes: [[new/x]]\n" +
+		"contradicts: \"[[new/x|the x]]\"\n" +
+		"superseded_by:\n  - 'new/x.md'\n  - y\n" +
+		"related: [[old/x]]\n" + // not a typed field: frontmatter text, left alone
+		"---\nBody [[new/x]]\n"
+	if got := written(t, p, "note.md"); got != want {
+		t.Fatalf("note.md =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestUnsplicableTypedLinkBlocksTheMove(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"x.md":    "# X\n",
+		"note.md": "---\nsupersedes: >\n  x\n---\n",
+	})
+	p := plan(t, dir, "moves: [{from: x.md, to: z.md}]")
+	if len(p.Errors) == 0 || !strings.Contains(p.Errors[0], "cannot be rewritten") {
+		t.Fatalf("errors = %v", p.Errors)
+	}
+}
+
+func TestDoubleStarGlobKeepsSubfolders(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"notes/a/x.md":   "# x\n",
+		"notes/a/b/y.md": "# y\n[[x]]\n",
+		"notes/z.txt":    "z\n",
+		"index.md":       "[[notes/a/b/y]]\n",
+	})
+	p := plan(t, dir, "moves: [{from: 'notes/**/*.md', to: archive/}]")
+	requireNoErrors(t, p)
+	got := map[string]string{}
+	for _, mv := range p.Moves {
+		got[mv.From] = mv.To
+	}
+	if len(got) != 2 || got["notes/a/x.md"] != "archive/a/x.md" || got["notes/a/b/y.md"] != "archive/a/b/y.md" {
+		t.Fatalf("moves = %v", got)
+	}
+	if s := written(t, p, "index.md"); s != "[[archive/a/b/y]]\n" {
+		t.Fatalf("index.md = %q", s)
+	}
+}
+
+func TestRegexMoveExpandsCaptures(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"journal/2026-03-01-standup.md": "# s\n",
+		"journal/2026-04-02-retro.md":   "# r\n",
+		"journal/readme.md":             "[[2026-03-01-standup]]\n",
+	})
+	p := plan(t, dir, `moves: [{from_regex: 'journal/(?P<y>\d{4})-(\d{2})-.*\.md', to: 'journal/${y}/$2/'}]`)
+	requireNoErrors(t, p)
+	got := map[string]string{}
+	for _, mv := range p.Moves {
+		got[mv.From] = mv.To
+	}
+	if got["journal/2026-03-01-standup.md"] != "journal/2026/03/2026-03-01-standup.md" ||
+		got["journal/2026-04-02-retro.md"] != "journal/2026/04/2026-04-02-retro.md" || len(got) != 2 {
+		t.Fatalf("moves = %v", got)
+	}
+
+	bad := plan(t, dir, `moves: [{from_regex: 'journal/(.*)\.md', to: '../$1.md'}]`)
+	if len(bad.Errors) == 0 {
+		t.Fatal("a capture that escapes the workspace must be rejected")
+	}
+	both := plan(t, dir, `moves: [{from: journal/readme.md, from_regex: x, to: y.md}]`)
+	if len(both.Errors) == 0 {
+		t.Fatal("from and from_regex together must be rejected")
+	}
+}
+
+func TestConflictCodes(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"a.md":        "a\n",
+		"b.md":        "b\n",
+		"café.md":     "c\n", // NFC
+		"docs/x.md":   "x\n",
+		"file.md":     "f\n",
+		"folder/y.md": "y\n",
+	})
+	cases := []struct {
+		manifest string
+		code     ConflictCode
+	}{
+		{"moves: [{from: a.md, to: b.md}]", ConflictExists},
+		{"moves: [{from: a.md, to: c.md}, {from: b.md, to: c.md}]", ConflictManyToOne},
+		{"moves: [{from: a.md, to: B.md}]", ConflictCaseOrNormalization},
+		{"moves: [{from: a.md, to: \"café.md\"}]", ConflictCaseOrNormalization}, // NFD
+		{"moves: [{from: a.md, to: \"x\\ty.md\"}]", ConflictForbiddenChars},
+		{"moves: [{from: a.md, to: \"trailing./a.md\"}]", ConflictTrailingDotOrSpace},
+		{"moves: [{from: a.md, to: " + strings.Repeat("n", 256) + ".md}]", ConflictTooLong},
+		{"moves: [{from: docs, to: docs/inner}]", ConflictDirCycle},
+		{"moves: [{from: a.md, to: file.md/a.md}]", ConflictParentIsFile},
+		{"moves: [{from: a.md, to: folder}]", ConflictIsFolder},
+	}
+	for _, tc := range cases {
+		p := plan(t, dir, tc.manifest)
+		found := false
+		for _, c := range p.Conflicts {
+			found = found || c.Code == tc.code
+		}
+		if !found || len(p.Errors) == 0 || len(p.Ops.Writes) != 0 {
+			t.Errorf("%s: want conflict %s, got %+v / %v", tc.manifest, tc.code, p.Conflicts, p.Errors)
+		}
+	}
+}
+
+func TestSwapIsNotAConflict(t *testing.T) {
+	dir := writeTree(t, map[string]string{"a.md": "a\n", "b.md": "b\n", "i.md": "[[a]] [[b]]\n"})
+	p := plan(t, dir, "moves: [{from: a.md, to: b.md}, {from: b.md, to: a.md}]")
+	requireNoErrors(t, p)
+	if got := written(t, p, "i.md"); got != "[[b]] [[a]]\n" {
+		t.Fatalf("i.md = %q", got)
+	}
+}

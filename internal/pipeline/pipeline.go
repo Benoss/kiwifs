@@ -78,6 +78,15 @@ type Pipeline struct {
 	Hub       *events.Hub          // may be nil (tests / protocols that don't broadcast)
 	Vectors   *vectorstore.Service // may be nil when vector search is disabled
 
+	// TypedLinkFields are the frontmatter keys whose values are page
+	// references ([links] typed_fields); restructuring rewrites them like
+	// body links. Nil means links.DefaultTypedLinkFields.
+	TypedLinkFields []string
+
+	// Claims, when set, keeps task claims attached to pages that a
+	// restructuring moves, and lets plans refuse to move claimed pages.
+	Claims ClaimTracker
+
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so
 	// the final atomic rename stays on the same filesystem. Empty when

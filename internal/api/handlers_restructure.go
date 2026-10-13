@@ -24,7 +24,8 @@ type RefactorApplyRequest struct {
 }
 
 func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*refactor.Plan, error) {
-	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{})
+	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
+	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{Actor: actor})
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

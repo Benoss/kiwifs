@@ -1037,9 +1037,21 @@ func (r *RemoteBackend) PatchFrontmatter(ctx context.Context, path string, field
 	return result.ETag, nil
 }
 
-func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest) (*refactor.Plan, error) {
+func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error) {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/plan", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor)
+	if err != nil {
+		return nil, err
+	}
+	data, err := r.readBody(resp)
+	if err != nil {
+		return nil, err
+	}
 	var plan refactor.Plan
-	if err := r.postJSON(ctx, r.apiPrefix+"/refactor/plan", m, &plan); err != nil {
+	if err := json.Unmarshal(data, &plan); err != nil {
 		return nil, err
 	}
 	return &plan, nil

@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.5
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.2
 	github.com/bluuewhale/loom v0.0.0-20260402142357-ae7e94ccfead
+	github.com/bmatcuk/doublestar/v4 v4.10.3
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/d2lang/d2 v0.9.0
 	github.com/fsnotify/fsnotify v1.10.1
@@ -56,6 +57,7 @@ require (
 	golang.org/x/net v0.57.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.276.0
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7
@@ -219,7 +221,6 @@ require (
 	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect

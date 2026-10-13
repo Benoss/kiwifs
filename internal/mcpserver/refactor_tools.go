@@ -30,6 +30,7 @@ func registerRefactorTools(s *server.MCPServer, b Backend) {
 				mcp.WithString("detail", mcp.Description("summary (default): moves and per-page link counts. full: every rewritten link with line numbers."), mcp.Enum("summary", "full")),
 				mcp.WithNumber("offset", mcp.Description("Skip this many moves and edited pages (paging). Default 0.")),
 				mcp.WithNumber("limit", mcp.Description("Moves and edited pages per page. Default 25, max 200.")),
+				mcp.WithString("actor", mcp.Description("Who will apply it — pages claimed by anyone else cannot be moved. Defaults to mcp-agent")),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
@@ -93,6 +94,7 @@ type planView struct {
 	Digest     string                `json:"digest,omitempty"`
 	Applicable bool                  `json:"applicable"`
 	Errors     []string              `json:"errors,omitempty"`
+	Warnings   []string              `json:"warnings,omitempty"`
 	Stats      refactor.Stats        `json:"stats"`
 	Counts     planCounts            `json:"counts"`
 	Moves      []refactor.PathChange `json:"moves"`
@@ -135,6 +137,7 @@ func viewPlan(plan *refactor.Plan, full bool, offset, limit int) planView {
 		Digest:     plan.Digest,
 		Applicable: len(plan.Errors) == 0,
 		Errors:     plan.Errors,
+		Warnings:   plan.Warnings,
 		Stats:      plan.Stats,
 		Counts: planCounts{
 			Moves:       len(plan.Moves),
@@ -186,7 +189,11 @@ func handleRefactorPlan(b Backend) server.ToolHandlerFunc {
 			limit = 25
 		}
 		detail, _ := args["detail"].(string)
-		plan, err := b.RefactorPlan(ctx, m)
+		actor, _ := args["actor"].(string)
+		if actor == "" {
+			actor = "mcp-agent"
+		}
+		plan, err := b.RefactorPlan(ctx, m, actor)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Plan failed: %v", err)), nil
 		}

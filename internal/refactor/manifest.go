@@ -26,8 +26,12 @@ import (
 //	    to:   guides/new-name.md
 //	  - from: drafts/                     # a folder and everything in it
 //	    to:   archive/drafts/
-//	  - from: notes/*-meeting.md          # a glob, into a folder
-//	    to:   meetings/
+//	  - from: notes/*-meeting.md          # a glob, into a folder; ** spans
+//	    to:   meetings/                   # folders, {a,b} alternates, and
+//	                                      # paths below the glob's fixed
+//	                                      # prefix (notes/) are kept
+//	  - from_regex: ^journal/(\d{4})-(\d{2})-.*\.md$ # every path the regex
+//	    to: journal/$1/$2/                # matches; $1, ${name} expand
 //	merges:
 //	  - from: faq/duplicate.md            # deleted; its links, comments and
 //	    into: faq/canonical.md            # state now belong to the target
@@ -39,10 +43,17 @@ type Manifest struct {
 }
 
 // Move relocates a file, a folder, or the files matching a glob. A To that
-// ends in "/" names a destination folder that keeps each file's name.
+// ends in "/" names a destination folder that keeps each file's name (for
+// a glob, its path below the pattern's fixed prefix).
+//
+// FromRegex instead selects every path the regular expression matches in
+// full and builds each destination from To, where $1 or ${name} expand to
+// the captured groups (Dendron's "refactor hierarchy"). A To that expands
+// to a folder (ends in "/") keeps the file's name.
 type Move struct {
-	From string `json:"from" yaml:"from"`
-	To   string `json:"to" yaml:"to"`
+	From      string `json:"from,omitempty" yaml:"from"`
+	FromRegex string `json:"from_regex,omitempty" yaml:"from_regex"`
+	To        string `json:"to" yaml:"to"`
 }
 
 // Merge deletes From and sends everything that pointed at it to Into.

@@ -105,6 +105,7 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 
 	hub := events.NewHub()
 	pipe := pipeline.New(store, ver, searcher, linker, hub, vectors, root)
+	pipe.TypedLinkFields = cfg.Links.TypedLinkFields()
 	pipe.SequenceDirs = cfg.Sequences.Directories
 
 	asyncIdxEnabled := cfg.Search.AsyncIndex == nil || *cfg.Search.AsyncIndex
@@ -341,6 +342,7 @@ func Build(name, root string, cfg *config.Config) (*Stack, error) {
 		log.Printf("%sclaims disabled (%v)", prefix, cerr)
 		claimStore = nil
 	} else {
+		pipe.Claims = claimStore
 		var claimCtx context.Context
 		claimCtx, claimCancel = context.WithCancel(context.Background())
 		go func() {
