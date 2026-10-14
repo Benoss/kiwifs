@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/bootstrap"
 	"github.com/kiwifs/kiwifs/internal/config"
 	"github.com/kiwifs/kiwifs/internal/lockdir"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/storage"
 	"github.com/spf13/cobra"
@@ -38,12 +40,24 @@ Manifest (YAML or JSON):
       to:   guides/new-name.md
     - from: drafts                  # a folder and everything in it
       to:   archive/drafts/
-    - from: notes/*-meeting.md      # a glob, into a folder
-      to:   meetings/
+    - from: notes/*-meeting.md      # a glob, into a folder (** spans folders;
+      to:   meetings/               # paths below the glob's fixed prefix are kept)
+    - from_regex: journal/(\d{4})-.*\.md   # a regular expression; $1, ${name}
+      to: journal/$1/                      # expand in the destination
   merges:
     - from: faq/duplicate.md        # deleted; links, comments, state go to into
       into: faq/canonical.md
-  delete_empty_dirs: true`,
+  delete_empty_dirs: true
+  edits:                            # change frontmatter and text of selected pages
+    - select: {query: 'status = "draft"', glob: "notes/**"}
+      set: {status: archived}
+      add_tags: [archived]
+      replace: [{find: "Acme Corp", with: "Acme"}]
+  rename_tags:
+    - {from: ml, to: machine-learning}
+
+Selection sees the workspace before any change. Applying lands everything in one commit whose trailers record the actor and
+the plan's digest; "kiwifs refactor revert COMMIT" undoes it.`,
 }
 
 var refactorPlanCmd = &cobra.Command{
@@ -51,6 +65,19 @@ var refactorPlanCmd = &cobra.Command{
 	Short: "Preview a restructuring without writing anything",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runRefactorPlan,
+}
+
+var refactorRevertCmd = &cobra.Command{
+	Use:   "revert COMMIT",
+	Short: "Undo a commit as a new commit, refusing to discard later edits",
+	Long: `Shows what reverting COMMIT would change, asks, and applies it as one commit.
+
+Every page the commit changed goes back to its previous bytes, and the comment
+and personal-state files a restructuring rewrote go back to what they were. If
+any of those files changed after COMMIT, nothing is reverted. Needs git
+versioning.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runRefactorRevert,
 }
 
 var refactorApplyCmd = &cobra.Command{
@@ -65,16 +92,19 @@ index and live readers stay consistent; otherwise it is applied directly.`,
 }
 
 func init() {
-	for _, c := range []*cobra.Command{refactorPlanCmd, refactorApplyCmd} {
+	for _, c := range []*cobra.Command{refactorPlanCmd, refactorApplyCmd, refactorRevertCmd} {
 		c.Flags().StringP("root", "r", "./knowledge", "knowledge root directory")
 		c.Flags().Bool("json", false, "print the plan as JSON")
 		c.Flags().BoolP("verbose", "v", false, "list every rewritten link")
+		c.Flags().Bool("diff", false, "print a unified diff for every written page")
 	}
-	refactorApplyCmd.Flags().BoolP("yes", "y", false, "apply without asking")
-	refactorApplyCmd.Flags().String("server", "", "server URL (default: http://127.0.0.1:<port from config>)")
-	refactorApplyCmd.Flags().String("api-key", os.Getenv("KIWI_API_KEY"), "API key for the server")
-	refactorApplyCmd.Flags().String("actor", "cli:refactor", "actor recorded in the commit")
-	refactorCmd.AddCommand(refactorPlanCmd, refactorApplyCmd)
+	for _, c := range []*cobra.Command{refactorApplyCmd, refactorRevertCmd} {
+		c.Flags().BoolP("yes", "y", false, "apply without asking")
+		c.Flags().String("server", "", "server URL (default: http://127.0.0.1:<port from config>)")
+		c.Flags().String("api-key", os.Getenv("KIWI_API_KEY"), "API key for the server")
+		c.Flags().String("actor", "cli:refactor", "actor recorded in the commit")
+	}
+	refactorCmd.AddCommand(refactorPlanCmd, refactorApplyCmd, refactorRevertCmd)
 	rootCmd.AddCommand(refactorCmd)
 }
 
@@ -96,7 +126,11 @@ func loadRefactorPlan(cmd *cobra.Command, manifestPath string) (string, *refacto
 	if err != nil {
 		return "", nil, nil, err
 	}
-	plan, err := refactor.BuildPlan(cmd.Context(), refactor.Workspace{Root: abs, Store: store}, m)
+	ws := refactor.Workspace{Root: abs, Store: store}
+	if cfg, err := config.Load(abs); err == nil {
+		ws.TypedFields = cfg.Links.TypedLinkFields()
+	}
+	plan, err := refactor.BuildPlanWith(cmd.Context(), ws, m, refactor.Options{Client: "cli"})
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -113,6 +147,13 @@ func showPlan(cmd *cobra.Command, plan *refactor.Plan) error {
 		return enc.Encode(plan)
 	}
 	printPlan(out, plan, verbose)
+	if diff, _ := cmd.Flags().GetBool("diff"); diff && len(plan.Errors) == 0 {
+		for _, d := range plan.FileDiffs() {
+			if d.Diff != "" {
+				fmt.Fprint(out, d.Diff)
+			}
+		}
+	}
 	return nil
 }
 
@@ -123,6 +164,13 @@ func printPlan(w io.Writer, plan *refactor.Plan, verbose bool) {
 			fmt.Fprintf(w, "  %s\n", e)
 		}
 		return
+	}
+	for _, warning := range plan.Warnings {
+		fmt.Fprintf(w, "Warning: %s\n", warning)
+	}
+	if plan.Reverts != "" {
+		fmt.Fprintf(w, "Revert %s: restore %d pages, remove %d, restore %d comment/state files.\n",
+			plan.Reverts, len(plan.Ops.Writes), len(plan.Ops.Deletes), len(plan.Ops.Side))
 	}
 	if len(plan.Moves) > 0 {
 		fmt.Fprintf(w, "Move (%d):\n", len(plan.Moves))
@@ -145,6 +193,12 @@ func printPlan(w io.Writer, plan *refactor.Plan, verbose bool) {
 					fmt.Fprintf(w, "    %d: %s → %s\n", l.Line, l.Old, l.New)
 				}
 			}
+		}
+	}
+	if len(plan.ContentEdits) > 0 {
+		fmt.Fprintf(w, "Edit %d pages:\n", len(plan.ContentEdits))
+		for _, e := range plan.ContentEdits {
+			fmt.Fprintf(w, "  %s: %s\n", e.Path, strings.Join(e.Changes, ", "))
 		}
 	}
 	if len(plan.Comments) > 0 {
@@ -188,12 +242,8 @@ func runRefactorApply(cmd *cobra.Command, args []string) error {
 	if len(plan.Errors) > 0 {
 		os.Exit(1)
 	}
-	if yes, _ := cmd.Flags().GetBool("yes"); !yes {
-		fmt.Fprint(cmd.OutOrStdout(), "Apply this plan? [y/N] ")
-		answer, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
-			return fmt.Errorf("not applied")
-		}
+	if err := confirm(cmd, "Apply this plan?"); err != nil {
+		return err
 	}
 	actor, _ := cmd.Flags().GetString("actor")
 
@@ -213,23 +263,142 @@ func runRefactorApply(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 	defer stack.Close()
-	fresh, err := refactor.BuildPlan(cmd.Context(), refactor.Workspace{Root: abs, Store: stack.Pipeline.Store}, m)
-	if err != nil {
-		return err
-	}
-	if fresh.Digest != plan.Digest {
+	_, res, err := stack.Pipeline.Refactor(cmd.Context(), m, refactor.Options{Client: "cli"}, plan.Digest, actor)
+	if errors.Is(err, pipeline.ErrDigestMismatch) {
 		return fmt.Errorf("the workspace changed while you were reviewing; run plan again")
 	}
-	res, err := stack.Pipeline.ApplyRefactor(cmd.Context(), fresh, actor)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Applied: %d files written, %d removed, %d comment/state files updated, %d folders removed.\n",
 		res.Written, res.Deleted, res.Side, res.Dirs)
+	if res.Commit != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "Commit %s (undo with: kiwifs refactor revert %s)\n", res.Commit, res.Commit)
+	}
 	return nil
 }
 
 func applyViaServer(cmd *cobra.Command, root string, m *refactor.Manifest, digest, actor string) error {
+	status, respBody, err := postToServer(cmd, root, "/api/kiwi/refactor/apply", map[string]any{"manifest": m, "digest": digest}, actor)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("server refused (%d): %s", status, strings.TrimSpace(string(respBody)))
+	}
+	var out struct {
+		Applied struct {
+			Written int    `json:"written"`
+			Deleted int    `json:"deleted"`
+			Side    int    `json:"side_files"`
+			Dirs    int    `json:"removed_dirs"`
+			Commit  string `json:"commit"`
+		} `json:"applied"`
+	}
+	_ = json.Unmarshal(respBody, &out)
+	fmt.Fprintf(cmd.OutOrStdout(), "Applied: %d files written, %d removed, %d comment/state files updated, %d folders removed.\n",
+		out.Applied.Written, out.Applied.Deleted, out.Applied.Side, out.Applied.Dirs)
+	if out.Applied.Commit != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "Commit %s (undo with: kiwifs refactor revert %s)\n", out.Applied.Commit, out.Applied.Commit)
+	}
+	return nil
+}
+
+func confirm(cmd *cobra.Command, question string) error {
+	if yes, _ := cmd.Flags().GetBool("yes"); yes {
+		return nil
+	}
+	fmt.Fprint(cmd.OutOrStdout(), question+" [y/N] ")
+	answer, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+		return fmt.Errorf("not applied")
+	}
+	return nil
+}
+
+func runRefactorRevert(cmd *cobra.Command, args []string) error {
+	root, _ := cmd.Flags().GetString("root")
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	commit := args[0]
+	actor, _ := cmd.Flags().GetString("actor")
+
+	lock, lockErr := lockdir.Acquire(abs)
+	if lockErr != nil {
+		return revertViaServer(cmd, abs, commit, actor)
+	}
+	defer lock.Release()
+	cfg, err := config.Load(abs)
+	if err != nil {
+		cfg = &config.Config{}
+		cfg.Storage.Root = abs
+	}
+	stack, err := bootstrap.Build("refactor", abs, cfg)
+	if err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
+	}
+	defer stack.Close()
+	plan, err := stack.Pipeline.PlanRevert(cmd.Context(), commit)
+	if err != nil {
+		return err
+	}
+	if err := showPlan(cmd, plan); err != nil {
+		return err
+	}
+	if len(plan.Errors) > 0 {
+		os.Exit(1)
+	}
+	if err := confirm(cmd, "Revert "+commit+"?"); err != nil {
+		return err
+	}
+	_, res, err := stack.Pipeline.Revert(cmd.Context(), commit, plan.Digest, "cli", actor)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Reverted in %s: %d files restored, %d removed, %d comment/state files restored.\n",
+		res.Commit, res.Written, res.Deleted, res.Side)
+	return nil
+}
+
+func revertViaServer(cmd *cobra.Command, root, commit, actor string) error {
+	post := func(payload map[string]any) (int, []byte, error) {
+		return postToServer(cmd, root, "/api/kiwi/refactor/revert", payload, actor)
+	}
+	status, body, err := post(map[string]any{"commit": commit, "dry_run": true})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("server refused (%d): %s", status, strings.TrimSpace(string(body)))
+	}
+	var plan refactor.Plan
+	if err := json.Unmarshal(body, &plan); err != nil {
+		return err
+	}
+	if err := showPlan(cmd, &plan); err != nil {
+		return err
+	}
+	if len(plan.Errors) > 0 {
+		os.Exit(1)
+	}
+	if err := confirm(cmd, "Revert "+commit+"?"); err != nil {
+		return err
+	}
+	status, body, err = post(map[string]any{"commit": commit, "digest": plan.Digest})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("server refused (%d): %s", status, strings.TrimSpace(string(body)))
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Reverted.")
+	return nil
+}
+
+// postToServer sends a JSON request to the kiwifs server holding root.
+func postToServer(cmd *cobra.Command, root, path string, payload map[string]any, actor string) (int, []byte, error) {
 	server, _ := cmd.Flags().GetString("server")
 	if server == "" {
 		port := 3333
@@ -238,40 +407,27 @@ func applyViaServer(cmd *cobra.Command, root string, m *refactor.Manifest, diges
 		}
 		server = fmt.Sprintf("http://127.0.0.1:%d", port)
 	}
-	body, err := json.Marshal(map[string]any{"manifest": m, "digest": digest})
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/kiwi/refactor/apply", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+path, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Actor", actor)
+	req.Header.Set("X-Kiwi-Client", "cli")
 	if key, _ := cmd.Flags().GetString("api-key"); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("a kiwifs server holds %s but %s did not answer: %w", root, server, err)
+		return 0, nil, fmt.Errorf("a kiwifs server holds %s but %s did not answer: %w", root, server, err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server refused (%s): %s", resp.Status, strings.TrimSpace(string(respBody)))
-	}
-	var out struct {
-		Applied struct {
-			Written int `json:"written"`
-			Deleted int `json:"deleted"`
-			Side    int `json:"side_files"`
-			Dirs    int `json:"removed_dirs"`
-		} `json:"applied"`
-	}
-	_ = json.Unmarshal(respBody, &out)
-	fmt.Fprintf(cmd.OutOrStdout(), "Applied by %s: %d files written, %d removed, %d comment/state files updated, %d folders removed.\n",
-		server, out.Applied.Written, out.Applied.Deleted, out.Applied.Side, out.Applied.Dirs)
-	return nil
+	respBody, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, respBody, err
 }

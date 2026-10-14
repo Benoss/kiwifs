@@ -7,7 +7,7 @@
 //   - Heading AST — used by the /toc endpoint and by the lint engine to
 //     spot empty sections and broken anchor links.
 //
-// Built on goldmark + goldmark-meta so we stay on a battle-tested parser
+// Built on goldmark (frontmatter decoded with yaml.v2, see goldmark.go) so we stay on a battle-tested parser
 // and share configuration with the frontend wherever it uses the same
 // library.
 package markdown
@@ -19,13 +19,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/yuin/goldmark"
-	meta "github.com/yuin/goldmark-meta"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	extast "github.com/yuin/goldmark/extension/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/extension"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 // Heading is one entry in the table of contents.
@@ -60,11 +56,9 @@ func Parse(content []byte) (*Parsed, error) {
 		return parseFrontmatterless(content)
 	}
 
-	md := goldmark.New(goldmark.WithExtensions(meta.Meta))
-	ctx := parser.NewContext()
-	doc := md.Parser().Parse(text.NewReader(content), parser.WithContext(ctx))
+	doc, pc := parse(content)
 
-	out := &Parsed{Frontmatter: meta.Get(ctx)}
+	out := &Parsed{Frontmatter: frontmatterOf(pc)}
 
 	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -100,8 +94,7 @@ func parseFrontmatterless(content []byte) (*Parsed, error) {
 	if body == nil {
 		body = content
 	}
-	md := goldmark.New()
-	doc := md.Parser().Parse(text.NewReader(body))
+	doc := parser.New().Parse(body)
 	out := &Parsed{}
 	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -132,10 +125,8 @@ func Frontmatter(content []byte) (map[string]any, error) {
 	if len(fm) > MaxFrontmatterBytes {
 		return map[string]any{}, nil
 	}
-	md := goldmark.New(goldmark.WithExtensions(meta.Meta))
-	ctx := parser.NewContext()
-	md.Parser().Parse(text.NewReader(content), parser.WithContext(ctx))
-	m := meta.Get(ctx)
+	_, pc := parse(content)
+	m := frontmatterOf(pc)
 	if m == nil {
 		return map[string]any{}, nil
 	}
@@ -236,7 +227,10 @@ func (p *Parsed) DebugString() string {
 func extractText(buf *bytes.Buffer, n ast.Node, source []byte) {
 	switch v := n.(type) {
 	case *ast.Text:
-		buf.Write(v.Segment.Value(source))
+		buf.WriteString(v.Value.Str(source))
+	case *ast.CodeSpan:
+		// v1 kept code span content as child Text nodes; v2 holds it here.
+		buf.WriteString(v.Value.Value(source))
 	default:
 		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 			extractText(buf, c, source)
@@ -259,11 +253,7 @@ var inlineTagRe = regexp.MustCompile(`#([a-zA-Z0-9_/.-]+)`)
 
 // Tasks extracts task items from markdown content using goldmark's TaskList extension.
 func Tasks(content []byte) []Task {
-	md := goldmark.New(
-		goldmark.WithExtensions(meta.Meta, extension.TaskList),
-	)
-	ctx := parser.NewContext()
-	doc := md.Parser().Parse(text.NewReader(content), parser.WithContext(ctx))
+	doc, _ := parse(content, extension.TaskListItemParser)
 
 	var tasks []Task
 
@@ -272,39 +262,31 @@ func Tasks(content []byte) []Task {
 			return ast.WalkContinue, nil
 		}
 		li, ok := n.(*ast.ListItem)
-		if !ok {
+		if !ok || !extension.IsTask(li) {
 			return ast.WalkContinue, nil
 		}
 
-		var checked *bool
 		var textBuf bytes.Buffer
-
-		// Walk all descendants of the list item to find TaskCheckBox and text
 		ast.Walk(li, func(child ast.Node, childEntering bool) (ast.WalkStatus, error) {
 			if !childEntering {
 				return ast.WalkContinue, nil
 			}
-			if tc, ok := child.(*extast.TaskCheckBox); ok {
-				v := tc.IsChecked
-				checked = &v
-				return ast.WalkContinue, nil
-			}
-			if t, ok := child.(*ast.Text); ok {
-				textBuf.Write(t.Segment.Value(content))
-				return ast.WalkContinue, nil
+			switch t := child.(type) {
+			case *ast.Text:
+				textBuf.WriteString(t.Value.Str(content))
+			case *ast.CodeSpan:
+				textBuf.WriteString(t.Value.Value(content))
 			}
 			return ast.WalkContinue, nil
 		})
 
-		if checked == nil {
-			return ast.WalkContinue, nil
-		}
+		status, _ := extension.TaskStatusOf(li)
 
 		taskText := strings.TrimSpace(textBuf.String())
 
 		task := Task{
 			Text:      taskText,
-			Completed: *checked,
+			Completed: status == extension.TaskStatusCompleted,
 			Line:      lineNumber(content, li),
 		}
 
@@ -333,8 +315,8 @@ func Tasks(content []byte) []Task {
 }
 
 func lineNumber(source []byte, n ast.Node) int {
-	if n.Lines().Len() > 0 {
-		seg := n.Lines().At(0)
+	if lines := BlockLines(n); len(lines) > 0 {
+		seg := lines[0]
 		line := 1
 		for i := 0; i < seg.Start && i < len(source); i++ {
 			if source[i] == '\n' {

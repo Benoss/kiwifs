@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/kiwifs/kiwifs/internal/storage"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func TestConvertWikiLinksForMkDocs(t *testing.T) {

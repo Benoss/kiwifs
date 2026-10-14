@@ -10,6 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/kiwifs/kiwifs/internal/links"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 )
 
 type Config struct {
@@ -34,6 +35,7 @@ type Config struct {
 	Audit      AuditConfig      `toml:"audit"`
 	Import     ImportConfig     `toml:"import"`
 	Links      LinksConfig      `toml:"links"`
+	Refactor   RefactorConfig   `toml:"refactor"`
 	// Space holds per-space settings (visibility, etc.) loaded from
 	// the space's own .kiwi/config.toml [space] section.
 	Space SpaceSettingsConfig `toml:"space"`
@@ -113,6 +115,45 @@ func (l LinksConfig) TypedLinkFields() []string {
 		return links.SanitizeTypedLinkFields(l.TypedFields)
 	}
 	return links.DefaultTypedLinkFields()
+}
+
+// RefactorConfig holds the standing rules for restructuring
+// (kiwi_refactor_*, /api/kiwi/refactor/*, kiwifs refactor).
+type RefactorConfig struct {
+	// ApprovalFiles and ApprovalLinks: a plan that writes or deletes more
+	// files, or rewrites more links, needs a human's approval before an
+	// agent may apply it. 0 means the default (50 files, 200 links); -1
+	// turns the check off.
+	ApprovalFiles int `toml:"approval_files"`
+	ApprovalLinks int `toml:"approval_links"`
+	// Protect lists globs of paths no plan may write, delete or move.
+	Protect []string `toml:"protect"`
+	// Scope, when set, is the only folder plans may touch.
+	Scope string `toml:"scope"`
+	// FolderMap names the page that lists where pages belong (frontmatter
+	// folders: or "- folder" bullets); moving into an unlisted folder is
+	// a warning.
+	FolderMap string `toml:"folder_map"`
+}
+
+// Policy turns the config into the planner's rules, defaults applied.
+func (r RefactorConfig) Policy() refactor.Policy {
+	limit := func(v, def int) int {
+		switch {
+		case v < 0:
+			return 0
+		case v == 0:
+			return def
+		}
+		return v
+	}
+	return refactor.Policy{
+		ApprovalFiles: limit(r.ApprovalFiles, 50),
+		ApprovalLinks: limit(r.ApprovalLinks, 200),
+		Protect:       r.Protect,
+		Scope:         r.Scope,
+		FolderMap:     r.FolderMap,
+	}
 }
 
 // ImportConfig controls the data import subsystem — Airbyte integration,

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // fences.json is generated from the UI's fence specs by

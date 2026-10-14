@@ -69,3 +69,63 @@ func TestRefactorApplyRejectsAPlanWithErrors(t *testing.T) {
 		t.Fatalf("want 422, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRenameRefusesToOverwriteAndRelinksMarkdown(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "# A\n")
+	mustPutFile(t, s, "b.md", "# B\n")
+	mustPutFile(t, s, "index.md", "[a](a.md)\n")
+
+	if rec := postJSON(t, s, "/api/kiwi/rename", `{"from":"a.md","to":"b.md"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto existing: want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	rec := postJSON(t, s, "/api/kiwi/rename", `{"from":"a.md","to":"docs/a.md"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"updated_links":["index.md"]`) {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/kiwi/file?path=index.md", nil)
+	got := httptest.NewRecorder()
+	s.echo.ServeHTTP(got, req)
+	if body := got.Body.String(); body != "[a](docs/a.md)\n" {
+		t.Fatalf("index.md = %q", body)
+	}
+}
+
+func TestBulkWriteIfMatchConflict(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "# A\n")
+	rec := postJSON(t, s, "/api/kiwi/bulk", `{"files":[{"path":"a.md","content":"# A2\n","if_match":"stale"}]}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPublishBulkDropsRejectedPagesAndEditsLineByLine(t *testing.T) {
+	s, _ := buildSQLiteTestServer(t)
+	mustPutFile(t, s, "a.md", "---\ntitle:  Aligned   # keep\n---\nA\n")
+	mustPutFile(t, s, "log.md", "---\nappend_only: true\n---\nlog\n")
+	rec := postJSON(t, s, "/api/kiwi/publish/bulk", `{"paths":["a.md","log.md","missing.md"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("publish/bulk: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Changed int `json:"changed"`
+		Errors  []struct {
+			Path  string `json:"path"`
+			Error string `json:"error"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Changed != 1 || len(out.Errors) != 2 || out.Errors[0].Path != "log.md" || !strings.Contains(out.Errors[0].Error, "append-only") {
+		t.Fatalf("response = %s", rec.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/kiwi/file?path=a.md", nil)
+	got := httptest.NewRecorder()
+	s.echo.ServeHTTP(got, req)
+	body := got.Body.String()
+	if !strings.HasPrefix(body, "---\ntitle:  Aligned   # keep\npublished: true\npublished_at: ") {
+		t.Fatalf("a.md = %q", body)
+	}
+}

@@ -31,6 +31,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/memory"
 	"github.com/kiwifs/kiwifs/internal/pipeline"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/search"
 	"github.com/kiwifs/kiwifs/internal/similar"
 	"github.com/kiwifs/kiwifs/internal/storage"
@@ -277,6 +278,10 @@ func (b *LocalBackend) ReadFile(ctx context.Context, path string) (string, strin
 }
 
 func (b *LocalBackend) WriteFile(ctx context.Context, path, content, actor, provenance string) (string, error) {
+	return b.WriteFileIfMatch(ctx, path, content, actor, provenance, "")
+}
+
+func (b *LocalBackend) WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (string, error) {
 	if err := b.init(); err != nil {
 		return "", err
 	}
@@ -288,12 +293,71 @@ func (b *LocalBackend) WriteFile(ctx context.Context, path, content, actor, prov
 		}
 		body = injected
 	}
-	res, err := b.stack.Pipeline.Write(ctx, path, body, actor)
+	res, err := b.stack.Pipeline.WriteWithOpts(ctx, path, body, actor, pipeline.WriteOpts{IfMatch: ifMatch})
 	if err != nil {
 		return "", err
 	}
 	tracing.Record(ctx, tracing.Event{Kind: tracing.KindWrite, Path: path, ETag: res.ETag})
 	return res.ETag, nil
+}
+
+func (b *LocalBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (string, error) {
+	if err := b.init(); err != nil {
+		return "", err
+	}
+	res, err := b.stack.Pipeline.PatchFrontmatterAs(ctx, path, fields, ifMatch, actor, actor, force)
+	if err != nil {
+		return "", err
+	}
+	tracing.Record(ctx, tracing.Event{Kind: tracing.KindWrite, Path: path, ETag: res.ETag, Detail: "frontmatter patch"})
+	return res.ETag, nil
+}
+
+func (b *LocalBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	return b.stack.Pipeline.PlanRefactor(ctx, m, refactor.Options{Actor: actor, Client: clientName(ctx)})
+}
+
+func (b *LocalBackend) RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	res, plan, err := b.stack.Pipeline.RunRefactorScript(ctx, src, refactor.Options{Actor: actor, Client: clientName(ctx)})
+	if err != nil {
+		return nil, err
+	}
+	return &ScriptResult{Manifest: res.Raw, Output: res.Output, Plan: plan}, nil
+}
+
+func (b *LocalBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
+	if err := b.init(); err != nil {
+		return nil, nil, err
+	}
+	m, moves, err := b.stack.Pipeline.RawMoveFix(ctx)
+	return moves, m, err
+}
+
+func (b *LocalBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	if !apply {
+		plan, err := b.stack.Pipeline.PlanRevert(ctx, commit)
+		return &RefactorApplyResult{Plan: plan}, err
+	}
+	plan, res, err := b.stack.Pipeline.Revert(ctx, commit, digest, clientName(ctx), actor)
+	return &RefactorApplyResult{Applied: res, Plan: plan}, err
+}
+
+func (b *LocalBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error) {
+	if err := b.init(); err != nil {
+		return nil, err
+	}
+	opts := refactor.Options{Client: clientName(ctx), RequireApproval: true, Approved: approved}
+	plan, res, err := b.stack.Pipeline.Refactor(ctx, m, opts, digest, actor)
+	return &RefactorApplyResult{Applied: res, Plan: plan}, err
 }
 
 func (b *LocalBackend) DeleteFile(ctx context.Context, path, actor string) error {
@@ -670,7 +734,11 @@ func (b *LocalBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, p
 		Path    string
 		Content []byte
 	}, len(files))
+	ifMatch := map[string]string{}
 	for i, f := range files {
+		if f.IfMatch != "" {
+			ifMatch[f.Path] = f.IfMatch
+		}
 		body := []byte(f.Content)
 		if provType, provID, ok := pipeline.ParseProvenanceHeader(provenance); ok {
 			injected, perr := pipeline.InjectProvenance(body, provType, provID, actor)
@@ -682,7 +750,7 @@ func (b *LocalBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, p
 		pipeFiles[i].Path = f.Path
 		pipeFiles[i].Content = body
 	}
-	results, err := b.stack.Pipeline.BulkWrite(ctx, pipeFiles, actor, "")
+	results, err := b.stack.Pipeline.BulkWriteIfMatch(ctx, pipeFiles, ifMatch, actor, "")
 	if err != nil {
 		return nil, err
 	}
@@ -2562,8 +2630,7 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		actor = "mcp-agent"
 	}
 
-	// Read current page
-	content, _, err := b.ReadFile(ctx, path)
+	content, readETag, err := b.ReadFile(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -2591,10 +2658,7 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		return nil, err
 	}
 
-	updated, err := markdown.SetFrontmatterField([]byte(content), "state", targetState)
-	if err != nil {
-		return nil, fmt.Errorf("update state: %w", err)
-	}
+	fields := map[string]any{"state": targetState}
 	syncStatus := false
 	if _, hasStatus := fm["status"]; hasStatus {
 		if typ, _ := fm["type"].(string); typ == "adr" {
@@ -2604,13 +2668,11 @@ func (b *LocalBackend) WorkflowAdvance(ctx context.Context, path, targetState, a
 		}
 	}
 	if syncStatus {
-		updated, err = markdown.SetFrontmatterField(updated, "status", targetState)
-		if err != nil {
-			return nil, fmt.Errorf("update status: %w", err)
-		}
+		fields["status"] = targetState
 	}
-
-	etag, err := b.WriteFile(ctx, path, string(updated), actor, "")
+	// Pinned to the state the transition was validated against: if the
+	// page moved on in between, the advance fails instead of clobbering.
+	etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, actor, true)
 	if err != nil {
 		return nil, err
 	}

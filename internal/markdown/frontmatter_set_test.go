@@ -113,3 +113,60 @@ func TestSetFrontmatterField_PreservesBodyNewlines(t *testing.T) {
 		t.Errorf("body not preserved correctly, got:\n%q", body)
 	}
 }
+
+func TestSetFrontmatterField_SplicesOnlyTheChangedKey(t *testing.T) {
+	src := "---\n" +
+		"# Owner: docs team\n" +
+		"title:   Hand  Aligned   # keep me\n" +
+		"tags: [a, b]\n" +
+		"status: \"draft\"  # workflow\n" +
+		"related:\n" +
+		"- x\n" +
+		"- y\n" +
+		"\n" +
+		"weird_spacing:    {k: v}\n" +
+		"---\n" +
+		"Body\n"
+	cases := []struct {
+		key   string
+		value any
+		want  string
+	}{
+		{"tags", []string{"a", "b", "c"}, strings.Replace(src, "tags: [a, b]\n", "tags: [a, b, c]\n", 1)},
+		{"status", "done", strings.Replace(src, "status: \"draft\"  # workflow\n", "status: \"done\" # workflow\n", 1)},
+		{"related", nil, strings.Replace(src, "related:\n- x\n- y\n", "", 1)},
+		{"related", []string{"z"}, strings.Replace(src, "related:\n- x\n- y\n", "related:\n  - z\n", 1)},
+		{"new", 3, strings.Replace(src, "weird_spacing:    {k: v}\n", "weird_spacing:    {k: v}\nnew: 3\n", 1)},
+	}
+	for _, tc := range cases {
+		got, err := SetFrontmatterField([]byte(src), tc.key, tc.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("set %s=%v:\n got: %q\nwant: %q", tc.key, tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestSetFrontmatterField_CRLFAndFallback(t *testing.T) {
+	crlf := "---\r\ntitle: T\r\ntags: [a]\r\n---\r\nBody\r\n"
+	got, err := SetFrontmatterField([]byte(crlf), "tags", []string{"a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "---\r\ntitle: T\r\ntags: [a, b]\r\n---\r\nBody\r\n"; string(got) != want {
+		t.Fatalf("got %q", got)
+	}
+	// A comment inside the value cannot survive a line splice; the whole
+	// block is re-encoded instead (and still decodes to the right value).
+	odd := "---\ntags:\n  # first\n  - a\n---\n"
+	got, err = SetFrontmatterField([]byte(odd), "tags", []string{"b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm, _ := Frontmatter(got)
+	if tags, _ := fm["tags"].([]any); len(tags) != 1 || tags[0] != "b" {
+		t.Fatalf("fallback result = %q", got)
+	}
+}

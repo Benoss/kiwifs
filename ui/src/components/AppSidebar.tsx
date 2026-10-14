@@ -60,6 +60,8 @@ type AppSidebarProps = {
   onTreeSortModeChange: Dispatch<SetStateAction<TreeSortMode>>;
   onActivePathChange: (path: string | null) => void;
   onTreeRefresh: (options?: { background?: boolean; reconcile?: boolean }) => void;
+  /** Opens the restructuring review (plan, review, apply moves and merges). */
+  onOpenRefactor?: () => void;
 };
 
 export function AppSidebar({
@@ -88,6 +90,7 @@ export function AppSidebar({
   onTreeSortModeChange,
   onActivePathChange,
   onTreeRefresh,
+  onOpenRefactor,
 }: AppSidebarProps) {
   const features = useUIConfigStore((state) => state.features);
   const publishedPages = usePublishedPagesStore((state) => state.pages);
@@ -298,6 +301,11 @@ export function AppSidebar({
                   onClick={toggleShowPublishedList}
                 >
                   <Rss className="h-3.5 w-3.5" />
+                </SidebarIconButton>
+                )}
+                {features.edit && onOpenRefactor && (
+                <SidebarIconButton label="Restructure: move and merge pages" onClick={onOpenRefactor}>
+                  <FolderTree className="h-3.5 w-3.5" />
                 </SidebarIconButton>
                 )}
                 <SidebarIconButton label="Collapse all folders" onClick={() => treeRef.current?.collapseAll()}>

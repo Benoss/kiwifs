@@ -3,7 +3,7 @@
 // internal/memory/merge so both packages share a single implementation.
 package yamlutil
 
-import "gopkg.in/yaml.v3"
+import yaml "go.yaml.in/yaml/v3"
 
 // EnsureMappingDocument returns the yaml.Node representing the mapping at
 // the root of the document, creating the structure if the input was empty.

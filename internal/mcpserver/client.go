@@ -1,8 +1,10 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/brief"
 	"github.com/kiwifs/kiwifs/internal/claims"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/similar"
 )
 
@@ -150,7 +154,14 @@ func (r *RemoteBackend) ReadFile(ctx context.Context, path string) (string, stri
 }
 
 func (r *RemoteBackend) WriteFile(ctx context.Context, path, content, actor, provenance string) (string, error) {
+	return r.WriteFileIfMatch(ctx, path, content, actor, provenance, "")
+}
+
+func (r *RemoteBackend) WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (string, error) {
 	hdrs := []string{"Content-Type", "text/markdown"}
+	if ifMatch != "" {
+		hdrs = append(hdrs, "If-Match", `"`+ifMatch+`"`)
+	}
 	if actor != "" {
 		hdrs = append(hdrs, "X-Actor", actor)
 	}
@@ -163,7 +174,7 @@ func (r *RemoteBackend) WriteFile(ctx context.Context, path, content, actor, pro
 	}
 	data, err := r.readBody(resp)
 	if err != nil {
-		return "", err
+		return "", asConflict(err)
 	}
 	var result struct {
 		ETag string `json:"etag"`
@@ -434,6 +445,7 @@ func (r *RemoteBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, 
 	type reqFile struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
+		IfMatch string `json:"if_match,omitempty"`
 	}
 	req := struct {
 		Files []reqFile `json:"files"`
@@ -442,7 +454,7 @@ func (r *RemoteBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, 
 		Actor: actor,
 	}
 	for _, f := range files {
-		req.Files = append(req.Files, reqFile{Path: f.Path, Content: f.Content})
+		req.Files = append(req.Files, reqFile{Path: f.Path, Content: f.Content, IfMatch: f.IfMatch})
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -458,7 +470,7 @@ func (r *RemoteBackend) BulkWrite(ctx context.Context, files []BulkFile, actor, 
 	}
 	data, err := r.readBody(resp)
 	if err != nil {
-		return nil, err
+		return nil, asConflict(err)
 	}
 	var result struct {
 		ETags map[string]string `json:"etags"`
@@ -984,4 +996,169 @@ func (r *RemoteBackend) WorkflowBoard(ctx context.Context, workflowName string) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+// asConflict maps an HTTP 409 to pipeline.ErrConflict so callers can treat a
+// failed If-Match the same way for local and remote backends.
+func asConflict(err error) error {
+	var he *httpError
+	if errors.As(err, &he) && he.StatusCode == http.StatusConflict {
+		if strings.Contains(he.Message, "managed by") {
+			return fmt.Errorf("%w: %s", pipeline.ErrFieldConflict, he.Message)
+		}
+		return fmt.Errorf("%w: %s", pipeline.ErrConflict, he.Message)
+	}
+	return err
+}
+
+func (r *RemoteBackend) PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (string, error) {
+	body, err := json.Marshal(map[string]any{"fields": fields})
+	if err != nil {
+		return "", err
+	}
+	hdrs := []string{"Content-Type", "application/json"}
+	if actor != "" {
+		hdrs = append(hdrs, "X-Actor", actor)
+	}
+	if ifMatch != "" {
+		hdrs = append(hdrs, "If-Match", `"`+ifMatch+`"`)
+	}
+	if actor != "" {
+		hdrs = append(hdrs, "X-Field-Manager", actor)
+	}
+	q := r.apiPrefix + "/file/frontmatter?path=" + url.QueryEscape(path)
+	if force {
+		q += "&force=true"
+	}
+	resp, err := r.do(ctx, http.MethodPatch, q, bytes.NewReader(body), hdrs...)
+	if err != nil {
+		return "", err
+	}
+	data, err := r.readBody(resp)
+	if err != nil {
+		return "", asConflict(err)
+	}
+	var result struct {
+		ETag string `json:"etag"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", err
+	}
+	return result.ETag, nil
+}
+
+func (r *RemoteBackend) RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error) {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/plan", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor, "X-Kiwi-Client", clientName(ctx))
+	if err != nil {
+		return nil, err
+	}
+	data, err := r.readBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	var plan refactor.Plan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+// RefactorApply keeps the server's 409 and 422 bodies: both carry the plan
+// the agent has to look at next.
+func (r *RemoteBackend) RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error) {
+	return r.refactorCall(ctx, "/refactor/apply", map[string]any{"manifest": m, "digest": digest, "approved": approved}, actor, false)
+}
+
+func (r *RemoteBackend) RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error) {
+	body, err := json.Marshal(map[string]string{"script": src})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+"/refactor/script", bytes.NewReader(body), "Content-Type", "application/json", "X-Actor", actor, "X-Kiwi-Client", clientName(ctx))
+	if err != nil {
+		return nil, err
+	}
+	data, err := r.readBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	var out ScriptResult
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (r *RemoteBackend) RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error) {
+	var out struct {
+		Moves    []pipeline.RawMove `json:"moves"`
+		Manifest *refactor.Manifest `json:"manifest"`
+	}
+	if err := r.getJSON(ctx, r.apiPrefix+"/refactor/raw-moves", &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Moves, out.Manifest, nil
+}
+
+func (r *RemoteBackend) RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error) {
+	return r.refactorCall(ctx, "/refactor/revert", map[string]any{"commit": commit, "digest": digest, "dry_run": !apply}, actor, !apply)
+}
+
+// refactorCall posts to a refactor endpoint and maps its answers back to
+// the pipeline errors a local backend would return. A dry run answers with
+// the bare plan.
+func (r *RemoteBackend) refactorCall(ctx context.Context, endpoint string, payload map[string]any, actor string, bare bool) (*RefactorApplyResult, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	hdrs := []string{"Content-Type", "application/json", "X-Kiwi-Client", clientName(ctx)}
+	if actor != "" {
+		hdrs = append(hdrs, "X-Actor", actor)
+	}
+	resp, err := r.do(ctx, http.MethodPost, r.apiPrefix+endpoint, bytes.NewReader(body), hdrs...)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return nil, err
+	}
+	if bare && resp.StatusCode < 400 {
+		var plan refactor.Plan
+		if err := json.Unmarshal(data, &plan); err != nil {
+			return nil, err
+		}
+		return &RefactorApplyResult{Plan: &plan}, nil
+	}
+	var out struct {
+		Error   any                     `json:"error"`
+		Message string                  `json:"message"`
+		Applied pipeline.RefactorResult `json:"applied"`
+		Plan    *refactor.Plan          `json:"plan"`
+	}
+	_ = json.Unmarshal(data, &out)
+	res := &RefactorApplyResult{Applied: out.Applied, Plan: out.Plan}
+	msg, _ := out.Error.(string)
+	if msg == "" {
+		msg = out.Message
+	}
+	switch {
+	case resp.StatusCode < 400:
+		return res, nil
+	case resp.StatusCode == http.StatusUnprocessableEntity && out.Plan != nil:
+		return res, fmt.Errorf("%w: %s", pipeline.ErrPlanInvalid, strings.Join(out.Plan.Errors, "; "))
+	case resp.StatusCode == http.StatusPreconditionRequired:
+		return res, fmt.Errorf("%w: %s", pipeline.ErrApprovalRequired, msg)
+	case resp.StatusCode == http.StatusConflict && out.Plan != nil:
+		return res, pipeline.ErrDigestMismatch
+	case resp.StatusCode == http.StatusConflict:
+		return res, fmt.Errorf("%w: %s", pipeline.ErrPlanStale, msg)
+	}
+	return res, &httpError{StatusCode: resp.StatusCode, Message: msg}
 }

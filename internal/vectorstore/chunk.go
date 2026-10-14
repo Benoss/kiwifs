@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	"github.com/kiwifs/kiwifs/internal/markdown"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 const (
@@ -163,9 +163,7 @@ func chunkMarkdownWithContext(content string, maxSize, minSize int, dc *docConte
 	}
 
 	src := []byte(content)
-	md := goldmark.New()
-	reader := text.NewReader(src)
-	doc := md.Parser().Parse(reader)
+	doc := parser.New().Parse(src)
 
 	var sections []headingSection
 	var current *headingSection
@@ -181,7 +179,7 @@ func chunkMarkdownWithContext(content string, maxSize, minSize int, dc *docConte
 				sections = append(sections, *current)
 			}
 
-			headingText := string(n.Text(src))
+			headingText := string(markdown.AppendInlineText(nil, n, src))
 
 			// Update ancestry: trim to this level, then set
 			if h.Level <= len(ancestry) {
@@ -203,7 +201,7 @@ func chunkMarkdownWithContext(content string, maxSize, minSize int, dc *docConte
 			return ast.WalkSkipChildren, nil
 		}
 
-		if n.Type() == ast.TypeBlock && n.Kind() != ast.KindDocument {
+		if _, block := n.(ast.BlockNode); block && n.Kind() != ast.KindDocument {
 			text := strings.TrimSpace(string(extractNodeText(n, src)))
 			if text == "" {
 				return ast.WalkSkipChildren, nil
@@ -274,10 +272,8 @@ func headingParts(ancestry []string) []string {
 
 func extractNodeText(n ast.Node, src []byte) []byte {
 	var buf []byte
-	lines := n.Lines()
-	for i := 0; i < lines.Len(); i++ {
-		seg := lines.At(i)
-		buf = append(buf, seg.Value(src)...)
+	for _, seg := range markdown.BlockLines(n) {
+		buf = append(buf, seg.Bytes(src)...)
 	}
 	if len(buf) > 0 {
 		return buf

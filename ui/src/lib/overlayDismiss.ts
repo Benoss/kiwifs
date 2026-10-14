@@ -6,6 +6,7 @@ export type OverlayState = {
   graphOpen: boolean;
   historyOpen: boolean;
   dataOpen: boolean;
+  refactorOpen?: boolean;
   basesOpen: boolean;
   canvasOpen: boolean;
   whiteboardOpen: boolean;
@@ -20,6 +21,7 @@ export type OverlayDismissTarget =
   | "graph"
   | "history"
   | "data"
+  | "refactor"
   | "bases"
   | "canvas"
   | "whiteboard"
@@ -34,6 +36,7 @@ export function resolveOverlayDismiss(state: OverlayState): OverlayDismissTarget
   if (state.graphOpen) return "graph";
   if (state.historyOpen) return "history";
   if (state.dataOpen) return "data";
+  if (state.refactorOpen) return "refactor";
   if (state.basesOpen) return "bases";
   if (state.canvasOpen) return "canvas";
   if (state.whiteboardOpen) return "whiteboard";

@@ -25,6 +25,15 @@ type linkRef struct {
 	End   int
 	Path  string // the raw path bytes, content[Start:End]
 	Line  int    // 1-based, for reports
+	// Frag is the #fragment after the path (without "#"), and FragEnd the
+	// offset just past it; FragEnd == End when there is none.
+	Frag    string
+	FragEnd int
+	// Typed marks a reference held in a typed-link frontmatter field.
+	Typed bool
+	// Unsplicable marks a typed reference whose YAML spelling (a block or
+	// escaped scalar) cannot be rewritten byte for byte; Start and End are -1.
+	Unsplicable bool
 }
 
 // maskCode returns a copy of content in which YAML frontmatter, fenced code
@@ -158,6 +167,26 @@ var (
 	schemeRe   = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 )
 
+// scanAll returns the references in the body (scanLinks) and in the
+// typed-link frontmatter fields, in document order.
+func scanAll(content []byte, typedFields []string) []linkRef {
+	refs := scanTypedLinks(content, typedFields)
+	if len(refs) == 0 {
+		return scanLinks(content)
+	}
+	lineAt := newLineIndex(content)
+	for i := range refs {
+		if !refs[i].Unsplicable {
+			refs[i].Line = lineAt(refs[i].Start)
+		}
+	}
+	refs = append(refs, scanLinks(content)...)
+	sort.SliceStable(refs, func(i, j int) bool {
+		return refs[i].Line < refs[j].Line || refs[i].Line == refs[j].Line && refs[i].Start < refs[j].Start
+	})
+	return refs
+}
+
 // scanLinks returns every wiki and markdown reference outside code, in
 // document order.
 func scanLinks(content []byte) []linkRef {
@@ -177,7 +206,9 @@ func scanLinks(content []byte) []linkRef {
 			}
 		}
 		target := inner[:targetEnd]
+		frag, hasFrag := "", false
 		if h := strings.IndexByte(target, '#'); h >= 0 {
+			frag, hasFrag = target[h+1:], true
 			target = target[:h]
 		}
 		lead := len(target) - len(strings.TrimLeft(target, " \t"))
@@ -186,7 +217,13 @@ func scanLinks(content []byte) []linkRef {
 			continue
 		}
 		start := innerStart + lead
-		refs = append(refs, linkRef{Kind: kindWiki, Start: start, End: start + len(page), Path: page})
+		ref := linkRef{Kind: kindWiki, Start: start, End: start + len(page), Path: page}
+		ref.FragEnd = ref.End
+		if hasFrag {
+			ref.Frag = strings.TrimSpace(frag)
+			ref.FragEnd = innerStart + targetEnd
+		}
+		refs = append(refs, ref)
 	}
 
 	for _, m := range markdownRe.FindAllSubmatchIndex(masked, -1) {
@@ -197,13 +234,22 @@ func scanLinks(content []byte) []linkRef {
 			continue
 		}
 		page := href
+		ref := linkRef{Kind: kindMarkdown, Start: hrefStart}
 		if i := strings.IndexAny(page, "#?"); i >= 0 {
+			if page[i] == '#' {
+				ref.Frag = decodeHref(page[i+1:])
+				ref.FragEnd = hrefEnd
+			}
 			page = page[:i]
 		}
 		if page == "" {
 			continue
 		}
-		refs = append(refs, linkRef{Kind: kindMarkdown, Start: hrefStart, End: hrefStart + len(page), Path: page})
+		ref.End, ref.Path = hrefStart+len(page), page
+		if ref.FragEnd == 0 {
+			ref.FragEnd = ref.End
+		}
+		refs = append(refs, ref)
 	}
 
 	sortRefs(refs)

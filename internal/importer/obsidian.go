@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
-	"gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 var (

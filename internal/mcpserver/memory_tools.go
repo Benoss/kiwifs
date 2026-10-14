@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/memory"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -118,7 +117,7 @@ func handleForget(b Backend) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		content, _, err := b.ReadFile(ctx, path)
+		_, readETag, err := b.ReadFile(ctx, path)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to read %s: %v", path, err)), nil
 		}
@@ -127,23 +126,11 @@ func handleForget(b Backend) server.ToolHandlerFunc {
 		reason, _ := args["reason"].(string)
 		reason = strings.TrimSpace(reason)
 
-		updated := []byte(content)
-		updated, err = markdown.SetFrontmatterField(updated, "memory_status", memory.StatusSuperseded)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("update memory_status: %v", err)), nil
-		}
-		updated, err = markdown.SetFrontmatterField(updated, "valid_until", now)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("update valid_until: %v", err)), nil
-		}
+		fields := map[string]any{"memory_status": memory.StatusSuperseded, "valid_until": now}
 		if reason != "" {
-			updated, err = markdown.SetFrontmatterField(updated, "superseded_reason", reason)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("update superseded_reason: %v", err)), nil
-			}
+			fields["superseded_reason"] = reason
 		}
-
-		etag, err := b.WriteFile(ctx, path, string(updated), "mcp-agent", "")
+		etag, err := b.PatchFrontmatter(ctx, path, fields, readETag, "mcp-agent", true)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to write %s: %v", path, err)), nil
 		}

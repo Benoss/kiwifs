@@ -5,12 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yuin/goldmark"
-	meta "github.com/yuin/goldmark-meta"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
-	"gopkg.in/yaml.v3"
+	"github.com/yuin/goldmark/v2/ast"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // DataBlockFence is the fenced-code info string that marks a block as
@@ -61,9 +57,7 @@ type dataBlockBody struct {
 // still returned. Callers indexing a page should log the error and index
 // what came back rather than dropping the whole page.
 func ExtractDataBlocks(content []byte) ([]DataBlock, error) {
-	md := goldmark.New(goldmark.WithExtensions(meta.Meta))
-	ctx := parser.NewContext()
-	doc := md.Parser().Parse(text.NewReader(content), parser.WithContext(ctx))
+	doc, _ := parse(content)
 
 	var blocks []DataBlock
 	var errs []error
@@ -73,8 +67,8 @@ func ExtractDataBlocks(content []byte) ([]DataBlock, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
-		fcb, ok := n.(*ast.FencedCodeBlock)
-		if !ok {
+		fcb, ok := n.(*ast.CodeBlock)
+		if !ok || fcb.CodeBlockKind != ast.CodeBlockKindFenced {
 			return ast.WalkContinue, nil
 		}
 		lang, infoKind := parseDataFenceInfo(fcb, content)
@@ -109,11 +103,8 @@ func ExtractDataBlocks(content []byte) ([]DataBlock, error) {
 
 // parseDataFenceInfo splits the fence info string into its language word and
 // an optional kind hint ("kiwi-data dataset-schema" / "kiwi-data kind=x").
-func parseDataFenceInfo(fcb *ast.FencedCodeBlock, source []byte) (lang, kind string) {
-	if fcb.Info == nil {
-		return "", ""
-	}
-	fields := strings.Fields(string(fcb.Info.Segment.Value(source)))
+func parseDataFenceInfo(fcb *ast.CodeBlock, source []byte) (lang, kind string) {
+	fields := strings.Fields(fcb.Info.Str(source))
 	if len(fields) == 0 {
 		return "", ""
 	}
@@ -124,12 +115,10 @@ func parseDataFenceInfo(fcb *ast.FencedCodeBlock, source []byte) (lang, kind str
 	return lang, kind
 }
 
-func fencedBlockText(fcb *ast.FencedCodeBlock, source []byte) []byte {
+func fencedBlockText(fcb *ast.CodeBlock, source []byte) []byte {
 	var buf []byte
-	lines := fcb.Lines()
-	for i := 0; i < lines.Len(); i++ {
-		seg := lines.At(i)
-		buf = append(buf, seg.Value(source)...)
+	for _, seg := range fcb.Value.Segments() {
+		buf = append(buf, seg.Bytes(source)...)
 	}
 	return buf
 }

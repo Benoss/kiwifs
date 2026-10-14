@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"github.com/kiwifs/kiwifs/internal/events"
 	"github.com/kiwifs/kiwifs/internal/links"
 	"github.com/kiwifs/kiwifs/internal/markdown"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/search"
 	"github.com/kiwifs/kiwifs/internal/storage"
 	"github.com/kiwifs/kiwifs/internal/vectorstore"
@@ -73,9 +75,31 @@ type Pipeline struct {
 	Store     storage.Storage
 	Versioner versioning.Versioner
 	Searcher  search.Searcher
-	Linker    links.Linker            // may be nil (grep search has no link index)
-	Hub       *events.Hub             // may be nil (tests / protocols that don't broadcast)
-	Vectors   *vectorstore.Service    // may be nil when vector search is disabled
+	Linker    links.Linker         // may be nil (grep search has no link index)
+	Hub       *events.Hub          // may be nil (tests / protocols that don't broadcast)
+	Vectors   *vectorstore.Service // may be nil when vector search is disabled
+
+	// TypedLinkFields are the frontmatter keys whose values are page
+	// references ([links] typed_fields); restructuring rewrites them like
+	// body links. Nil means links.DefaultTypedLinkFields.
+	TypedLinkFields []string
+
+	// Claims, when set, keeps task claims attached to pages that a
+	// restructuring moves, and lets plans refuse to move claimed pages.
+	Claims ClaimTracker
+
+	// SelectPages, when set, resolves a restructuring edit's select.query
+	// (a DQL query) to page paths.
+	SelectPages refactor.SelectFunc
+
+	// RefactorPolicy is the workspace's [refactor] rules: protected paths,
+	// scope, folder map, and the size above which agents need approval.
+	RefactorPolicy refactor.Policy
+	approvals      sync.Map // plan digest → approval expiry (time.Time)
+	// pendingApprovals: plan digest → PendingApproval an agent is waiting on.
+	pendingApprovals sync.Map
+	rawMoves         rawMoveTracker
+	fieldOwners      fieldOwnerStore
 
 	// Root is the absolute storage root. WriteStream spools oversized
 	// uploads into `.kiwi-stream-*` tempfiles under this directory so
@@ -707,6 +731,7 @@ func (p *Pipeline) Observe(ctx context.Context, path string, content []byte, act
 	actor = coalesce(actor)
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	p.watchCreated(ctx, path, etag, actor)
 	p.commitAndTrack(ctx, path, actor)
 	p.indexFile(ctx, path, content)
 	// Stamp the etag so a second fsnotify batch for the same content
@@ -728,6 +753,7 @@ func (p *Pipeline) ObserveDelete(ctx context.Context, path, actor string) {
 	actor = coalesce(actor)
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	p.watchDeleted(ctx, path, actor)
 	p.tryPreDelete(path)
 	if err := p.Versioner.CommitDelete(ctx, path, actor); err != nil {
 		log.Printf("pipeline: versioner.CommitDelete(%s): %v", path, err)
@@ -823,6 +849,16 @@ func (p *Pipeline) BulkWrite(ctx context.Context, files []struct {
 	Path    string
 	Content []byte
 }, actor, message string) ([]Result, error) {
+	return p.BulkWriteIfMatch(ctx, files, nil, actor, message)
+}
+
+// BulkWriteIfMatch is BulkWrite with per-file If-Match preconditions, keyed
+// by path. They are checked inside the write lock, all before anything is
+// written, so one stale file fails the whole batch with ErrConflict.
+func (p *Pipeline) BulkWriteIfMatch(ctx context.Context, files []struct {
+	Path    string
+	Content []byte
+}, ifMatch map[string]string, actor, message string) ([]Result, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("files is required and must be non-empty")
 	}
@@ -852,6 +888,14 @@ func (p *Pipeline) BulkWrite(ctx context.Context, files []struct {
 	defer p.writeMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	for path, want := range ifMatch {
+		if want == "" || want == "*" {
+			continue
+		}
+		if current, err := p.Store.Read(ctx, path); err == nil && ETag(current) != want {
+			return nil, fmt.Errorf("%w: %s", ErrConflict, path)
+		}
 	}
 	if err := p.rejectAppendOnlyBulkOverwrite(ctx, files); err != nil {
 		return nil, err
@@ -1044,115 +1088,90 @@ func (p *Pipeline) Rename(ctx context.Context, oldPath, newPath, actor string) (
 	p.broadcast(events.Event{Op: "write", Path: newPath, Actor: actor, ETag: etag})
 	p.broadcast(events.Event{Op: "delete", Path: oldPath, Actor: actor})
 
+	// A plain rename relinks nothing; remember it if anything pointed at
+	// the old path, so RawMoveFix can offer the repair.
+	if p.referenced(ctx, oldPath) {
+		p.noteRawMove(oldPath, newPath, actor, "rename")
+	}
 	return Result{Path: newPath, ETag: etag}, nil
 }
 
-// RenameWithLinks atomically renames a file and optionally rewrites all
-// [[wiki-links]] that reference the old path. The rename and all link updates
-// are committed as a single git operation.
-func (p *Pipeline) RenameWithLinks(ctx context.Context, oldPath, newPath, actor string, updateLinks bool) (Result, []string, error) {
-	if !updateLinks || p.Linker == nil {
-		res, err := p.Rename(ctx, oldPath, newPath, actor)
-		return res, nil, err
+// workspacePath turns a caller-supplied path into the clean,
+// workspace-relative form the refactor engine plans with. Traversal is
+// neutralized and hidden paths are refused exactly as storage does.
+func (p *Pipeline) workspacePath(userPath string) (string, error) {
+	root := p.Store.AbsPath("")
+	abs, err := storage.GuardPath(root, userPath)
+	if err != nil {
+		return "", err
 	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == "." {
+		return "", fmt.Errorf("%w: %q is not a path inside the workspace", storage.ErrPathDenied, userPath)
+	}
+	return filepath.ToSlash(rel), nil
+}
 
+// RenameWithLinks renames a file through the refactor engine: every
+// reference to it, wiki or markdown, anywhere in the workspace (the page's
+// own relative links included) is respelled and verified to still resolve
+// to it, and the move plus every rewritten page land in one commit. The
+// destination must not exist. updated lists the other pages whose links
+// changed. With updateLinks false the file moves and references are left
+// exactly as written.
+func (p *Pipeline) RenameWithLinks(ctx context.Context, oldPath, newPath, actor string, updateLinks bool) (Result, []string, error) {
 	if oldPath == "" || newPath == "" {
 		return Result{}, nil, fmt.Errorf("both oldPath and newPath are required")
 	}
-	if oldPath == newPath {
-		content, err := p.Store.Read(ctx, oldPath)
-		if err != nil {
-			return Result{}, nil, fmt.Errorf("read %s: %w", oldPath, err)
-		}
-		return Result{Path: oldPath, ETag: ETag(content)}, nil, nil
-	}
-	if err := ctx.Err(); err != nil {
+	from, err := p.workspacePath(oldPath)
+	if err != nil {
 		return Result{}, nil, err
 	}
-	actor = coalesce(actor)
-
-	backlinks, err := p.Linker.Backlinks(ctx, oldPath)
+	to, err := p.workspacePath(newPath)
 	if err != nil {
-		backlinks = nil
+		return Result{}, nil, err
 	}
-
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-
-	content, err := p.Store.Read(ctx, oldPath)
+	content, err := p.Store.Read(ctx, from)
 	if err != nil {
-		return Result{}, nil, fmt.Errorf("read %s: %w", oldPath, err)
+		return Result{}, nil, fmt.Errorf("read %s: %w", from, err)
 	}
-
-	type fileUpdate struct {
-		Path    string
-		Content []byte
+	if from == to {
+		return Result{Path: from, ETag: ETag(content)}, nil, nil
 	}
-	var updates []fileUpdate
-	var updatedPaths []string
-
-	newStem := strings.TrimSuffix(newPath, ".md")
-	if idx := strings.LastIndex(newStem, "/"); idx >= 0 {
-		newStem = newStem[idx+1:]
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: from, To: to}}}
+	plan, _, err := p.Refactor(ctx, m, refactor.Options{LeaveLinks: !updateLinks}, "", actor)
+	if err != nil {
+		return Result{}, nil, err
 	}
-
-	for _, bl := range backlinks {
-		if bl.Path == oldPath {
-			continue
-		}
-		src, err := p.Store.Read(ctx, bl.Path)
-		if err != nil {
-			continue
-		}
-		rewritten, changed := links.RewriteLinks(string(src), oldPath, newStem)
-		if changed {
-			updates = append(updates, fileUpdate{Path: bl.Path, Content: []byte(rewritten)})
-			updatedPaths = append(updatedPaths, bl.Path)
+	res := Result{Path: to}
+	for _, w := range plan.Ops.Writes {
+		if w.Path == to {
+			res.ETag = ETag(w.Content)
 		}
 	}
-
-	p.markInflightEtag(newPath, ETag(content))
-	p.markInflight(oldPath)
-
-	if err := p.Store.Write(ctx, newPath, content); err != nil {
-		return Result{}, nil, fmt.Errorf("write %s: %w", newPath, err)
-	}
-	if err := p.Store.Delete(ctx, oldPath); err != nil {
-		log.Printf("pipeline: Rename delete(%s) after write(%s) succeeded: %v", oldPath, newPath, err)
-		p.trackUncommitted(oldPath)
-	}
-
-	for _, u := range updates {
-		p.markInflightEtag(u.Path, ETag(u.Content))
-		if err := p.Store.Write(ctx, u.Path, u.Content); err != nil {
-			log.Printf("pipeline: RenameWithLinks write(%s): %v", u.Path, err)
+	var updated []string
+	for _, e := range plan.Edits {
+		if e.Path != to {
+			updated = append(updated, e.Path)
 		}
 	}
+	return res, updated, nil
+}
 
-	allPaths := []string{newPath, oldPath}
-	allPaths = append(allPaths, updatedPaths...)
-	msg := fmt.Sprintf("%s: rename %s → %s", actor, oldPath, newPath)
-	if len(updatedPaths) > 0 {
-		msg += fmt.Sprintf(" (updated %d links)", len(updatedPaths))
+// RenameReplacing is rename(2) for protocol clients: when newPath exists it
+// is replaced, as an editor's "write temp, rename over the original" save
+// expects, and references to it stay valid because it keeps its path.
+// Otherwise it is RenameWithLinks.
+func (p *Pipeline) RenameReplacing(ctx context.Context, oldPath, newPath, actor string) (Result, []string, error) {
+	to, err := p.workspacePath(newPath)
+	if err != nil {
+		return Result{}, nil, err
 	}
-	if err := p.Versioner.BulkCommit(ctx, allPaths, actor, msg); err != nil {
-		log.Printf("pipeline: RenameWithLinks BulkCommit: %v", err)
-		for _, pa := range allPaths {
-			p.trackUncommitted(pa)
-		}
+	if p.Store.Exists(ctx, to) {
+		res, err := p.Rename(ctx, oldPath, newPath, actor)
+		return res, nil, err
 	}
-
-	p.indexFile(ctx, newPath, content)
-	p.deindexFile(ctx, oldPath)
-	for _, u := range updates {
-		p.indexFile(ctx, u.Path, u.Content)
-	}
-
-	etag := ETag(content)
-	p.broadcast(events.Event{Op: "write", Path: newPath, Actor: actor, ETag: etag})
-	p.broadcast(events.Event{Op: "delete", Path: oldPath, Actor: actor})
-
-	return Result{Path: newPath, ETag: etag}, updatedPaths, nil
+	return p.RenameWithLinks(ctx, oldPath, newPath, actor, true)
 }
 
 // RenameDirResult holds the outcome of a directory rename with link updates.
@@ -1161,8 +1180,7 @@ type RenameDirResult struct {
 	UpdatedLinks []string `json:"updated_links,omitempty"`
 }
 
-// RenameDir atomically renames a directory on disk and commits all affected
-// paths via git. Re-indexes all files under the new directory.
+// RenameDir moves a directory without touching references to its files.
 func (p *Pipeline) RenameDir(ctx context.Context, from, to, actor string) (int, error) {
 	res, err := p.RenameDirWithLinks(ctx, from, to, actor, false)
 	if err != nil {
@@ -1171,10 +1189,96 @@ func (p *Pipeline) RenameDir(ctx context.Context, from, to, actor string) (int, 
 	return res.Renamed, nil
 }
 
-// RenameDirWithLinks renames a directory and optionally rewrites wiki-links
-// in all pages that reference any file under the old directory. Each moved
-// file's backlinks are looked up and [[old-path]] references are rewritten
-// to the new path stem (matching RenameWithLinks behavior for single files).
+// ErrDirNotEmpty is returned by RenameDirPOSIX when the destination is a
+// folder that already holds files, as rename(2) answers ENOTEMPTY.
+var ErrDirNotEmpty = errors.New("destination directory is not empty")
+
+// RenameDirPOSIX renames a folder for a protocol client (WebDAV, NFS) with
+// rename(2) semantics: an empty destination is replaced, a non-empty one is
+// an error, and references are left as they are (a rename is not a
+// restructuring; RawMoveFix offers the repair). It goes through the refactor
+// engine — one journaled commit, indexes updated — unless the folder holds
+// hidden files storage cannot move (an .obsidian/ inside it), in which case
+// the folder is renamed on disk and the moved pages committed and reindexed.
+func (p *Pipeline) RenameDirPOSIX(ctx context.Context, from, to, actor string) error {
+	src, err := p.workspacePath(from)
+	if err != nil {
+		return err
+	}
+	dst, err := p.workspacePath(to)
+	if err != nil {
+		return err
+	}
+	if info, err := p.Store.Stat(ctx, dst); err == nil && info != nil {
+		if !info.IsDir {
+			return fmt.Errorf("rename %s: %w", dst, os.ErrExist)
+		}
+		if entries, _ := os.ReadDir(p.Store.AbsPath(dst)); len(entries) > 0 {
+			return fmt.Errorf("rename %s: %w", dst, ErrDirNotEmpty)
+		}
+	}
+	if !hasHiddenData(p.Store.AbsPath(src)) {
+		_, err := p.RenameDir(ctx, src, dst, actor)
+		return err
+	}
+
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	absOld, absNew := p.Store.AbsPath(src), p.Store.AbsPath(dst)
+	if err := os.MkdirAll(filepath.Dir(absNew), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(absOld, absNew); err != nil {
+		return err
+	}
+	var paths []string
+	_ = storage.WalkAll(ctx, p.Store, dst, func(e storage.Entry) error {
+		newRel := strings.TrimPrefix(e.Path, "/")
+		oldRel := src + strings.TrimPrefix(newRel, dst)
+		p.markInflight(newRel)
+		p.markInflight(oldRel)
+		if content, err := p.Store.Read(ctx, newRel); err == nil {
+			p.indexFile(ctx, newRel, content)
+		}
+		p.deindexFile(ctx, oldRel)
+		paths = append(paths, newRel, oldRel)
+		return nil
+	})
+	if len(paths) > 0 {
+		msg := fmt.Sprintf("%s: rename dir %s → %s", coalesce(actor), src, dst)
+		if err := p.Versioner.BulkCommit(ctx, paths, coalesce(actor), msg); err != nil {
+			log.Printf("pipeline: RenameDirPOSIX commit: %v", err)
+			for _, pa := range paths {
+				p.trackUncommitted(pa)
+			}
+		}
+	}
+	p.noteRawMove(src, dst, coalesce(actor), "rename")
+	return nil
+}
+
+// hasHiddenData reports whether a folder holds hidden files or folders
+// other than .DS_Store, which storage cannot move one by one.
+func hasHiddenData(abs string) bool {
+	found := false
+	_ = filepath.WalkDir(abs, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return filepath.SkipAll
+		}
+		if name := d.Name(); strings.HasPrefix(name, ".") && name != ".DS_Store" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// RenameDirWithLinks moves a directory through the refactor engine, file by
+// file through storage, in one commit. With updateLinks, references from
+// outside the folder are respelled to the new paths and relative links
+// inside the moved pages are fixed too, since their own location changes.
+// The folder left behind is removed once nothing but junk remains in it.
 func (p *Pipeline) RenameDirWithLinks(ctx context.Context, from, to, actor string, updateLinks bool) (RenameDirResult, error) {
 	if from == "" || to == "" {
 		return RenameDirResult{}, fmt.Errorf("both from and to are required")
@@ -1182,194 +1286,62 @@ func (p *Pipeline) RenameDirWithLinks(ctx context.Context, from, to, actor strin
 	if err := ctx.Err(); err != nil {
 		return RenameDirResult{}, err
 	}
-	actor = coalesce(actor)
-
-	root := p.Store.AbsPath("")
-	absFrom, err := storage.GuardPath(root, from)
+	src, err := p.workspacePath(from)
 	if err != nil {
 		return RenameDirResult{}, err
 	}
-	absTo, err := storage.GuardPath(root, to)
+	dst, err := p.workspacePath(to)
 	if err != nil {
 		return RenameDirResult{}, err
 	}
-
-	info, err := os.Stat(absFrom)
+	info, err := p.Store.Stat(ctx, src)
 	if err != nil {
 		return RenameDirResult{}, fmt.Errorf("stat source: %w", err)
 	}
-	if !info.IsDir() {
+	if !info.IsDir {
 		return RenameDirResult{}, fmt.Errorf("source is not a directory: %s", from)
 	}
-
-	// Collect backlinks for all files in the source dir BEFORE rename
-	// (the link index still knows the old paths).
-	type pathMapping struct{ Old, New string }
-	var mappingsPreCompute []pathMapping
-	if updateLinks && p.Linker != nil {
-		_ = filepath.Walk(absFrom, func(path string, fi os.FileInfo, werr error) error {
-			if werr != nil || fi.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(root, path)
-			rel = filepath.ToSlash(rel)
-			fromNorm := strings.TrimSuffix(from, "/") + "/"
-			toNorm := strings.TrimSuffix(to, "/") + "/"
-			newRel := toNorm + strings.TrimPrefix(rel, fromNorm)
-			mappingsPreCompute = append(mappingsPreCompute, pathMapping{Old: rel, New: newRel})
-			return nil
-		})
+	if src == dst {
+		return RenameDirResult{}, nil
+	}
+	if strings.HasPrefix(dst+"/", src+"/") {
+		return RenameDirResult{}, fmt.Errorf("cannot move %s into itself (%s)", src, dst)
 	}
 
-	// Gather backlinks for each old path before we move anything.
-	type backlinkSet struct {
-		OldPath  string
-		NewStem  string
-		Entries  []links.Entry
-	}
-	var blSets []backlinkSet
-	if updateLinks && p.Linker != nil {
-		movedSet := make(map[string]bool, len(mappingsPreCompute))
-		for _, m := range mappingsPreCompute {
-			movedSet[m.Old] = true
-		}
-		for _, m := range mappingsPreCompute {
-			entries, berr := p.Linker.Backlinks(ctx, m.Old)
-			if berr != nil || len(entries) == 0 {
-				continue
-			}
-			newStem := strings.TrimSuffix(m.New, ".md")
-			if idx := strings.LastIndex(newStem, "/"); idx >= 0 {
-				newStem = newStem[idx+1:]
-			}
-			var external []links.Entry
-			for _, e := range entries {
-				if !movedSet[e.Path] {
-					external = append(external, e)
-				}
-			}
-			if len(external) > 0 {
-				blSets = append(blSets, backlinkSet{OldPath: m.Old, NewStem: newStem, Entries: external})
-			}
-		}
-	}
-
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-
-	if err := os.MkdirAll(filepath.Dir(absTo), 0755); err != nil {
-		return RenameDirResult{}, fmt.Errorf("mkdir parent: %w", err)
-	}
-	if err := os.Rename(absFrom, absTo); err != nil {
-		return RenameDirResult{}, fmt.Errorf("rename dir: %w", err)
-	}
-
-	var newPaths []string
-	_ = filepath.Walk(absTo, func(path string, fi os.FileInfo, werr error) error {
-		if werr != nil || fi.IsDir() {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		newPaths = append(newPaths, rel)
+	files := 0
+	if err := storage.WalkAll(ctx, p.Store, src, func(storage.Entry) error {
+		files++
 		return nil
-	})
-
-	fromNorm := strings.TrimSuffix(from, "/") + "/"
-	toNorm := strings.TrimSuffix(to, "/") + "/"
-	oldPaths := make([]string, 0, len(newPaths))
-	for _, np := range newPaths {
-		op := fromNorm + strings.TrimPrefix(np, toNorm)
-		oldPaths = append(oldPaths, op)
+	}); err != nil {
+		return RenameDirResult{}, fmt.Errorf("list %s: %w", src, err)
+	}
+	if files == 0 {
+		// Nothing to commit or relink; only the empty folder itself moves.
+		p.writeMu.Lock()
+		defer p.writeMu.Unlock()
+		if err := os.MkdirAll(p.Store.AbsPath(dst), 0o755); err != nil {
+			return RenameDirResult{}, fmt.Errorf("mkdir %s: %w", dst, err)
+		}
+		_ = os.Remove(p.Store.AbsPath(src))
+		return RenameDirResult{}, nil
 	}
 
-	for _, np := range newPaths {
-		p.markInflight(np)
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: src, To: dst}}, DeleteEmptyDirs: true}
+	plan, _, err := p.Refactor(ctx, m, refactor.Options{LeaveLinks: !updateLinks}, "", actor)
+	if err != nil {
+		return RenameDirResult{}, err
 	}
-	for _, op := range oldPaths {
-		p.markInflight(op)
+	moved := map[string]bool{}
+	for _, mv := range plan.Moves {
+		moved[mv.To] = true
 	}
-
-	// Rewrite backlinks in external pages (outside the moved dir).
-	type fileUpdate struct {
-		Path    string
-		Content []byte
-	}
-	var linkUpdates []fileUpdate
-	updatedSet := make(map[string]bool)
-	if updateLinks && len(blSets) > 0 {
-		for _, bl := range blSets {
-			for _, entry := range bl.Entries {
-				src, rerr := p.Store.Read(ctx, entry.Path)
-				if rerr != nil {
-					continue
-				}
-				content := string(src)
-				rewritten, changed := links.RewriteLinks(content, bl.OldPath, bl.NewStem)
-				if changed {
-					if updatedSet[entry.Path] {
-						// Already queued — apply on top of the queued version.
-						for i, u := range linkUpdates {
-							if u.Path == entry.Path {
-								r2, _ := links.RewriteLinks(string(u.Content), bl.OldPath, bl.NewStem)
-								linkUpdates[i].Content = []byte(r2)
-								break
-							}
-						}
-					} else {
-						linkUpdates = append(linkUpdates, fileUpdate{Path: entry.Path, Content: []byte(rewritten)})
-						updatedSet[entry.Path] = true
-					}
-				}
-			}
+	var updated []string
+	for _, e := range plan.Edits {
+		if !moved[e.Path] {
+			updated = append(updated, e.Path)
 		}
 	}
-
-	for _, u := range linkUpdates {
-		p.markInflightEtag(u.Path, ETag(u.Content))
-		if werr := p.Store.Write(ctx, u.Path, u.Content); werr != nil {
-			log.Printf("pipeline: RenameDirWithLinks write(%s): %v", u.Path, werr)
-		}
-	}
-
-	var updatedPaths []string
-	for path := range updatedSet {
-		updatedPaths = append(updatedPaths, path)
-	}
-
-	allPaths := append(append(newPaths, oldPaths...), updatedPaths...)
-	msg := fmt.Sprintf("%s: rename dir %s → %s", actor, from, to)
-	if len(updatedPaths) > 0 {
-		msg += fmt.Sprintf(" (updated %d links)", len(updatedPaths))
-	}
-	if err := p.Versioner.BulkCommit(ctx, allPaths, actor, msg); err != nil {
-		log.Printf("pipeline: RenameDirWithLinks BulkCommit: %v", err)
-		for _, p2 := range allPaths {
-			p.trackUncommitted(p2)
-		}
-	}
-
-	for _, np := range newPaths {
-		content, rerr := p.Store.Read(ctx, np)
-		if rerr == nil {
-			p.indexFile(ctx, np, content)
-		}
-	}
-	for _, op := range oldPaths {
-		p.deindexFile(ctx, op)
-	}
-	for _, u := range linkUpdates {
-		p.indexFile(ctx, u.Path, u.Content)
-	}
-
-	for _, np := range newPaths {
-		p.broadcast(events.Event{Op: "write", Path: np, Actor: actor})
-	}
-	for _, op := range oldPaths {
-		p.broadcast(events.Event{Op: "delete", Path: op, Actor: actor})
-	}
-
-	return RenameDirResult{Renamed: len(newPaths), UpdatedLinks: updatedPaths}, nil
+	return RenameDirResult{Renamed: len(plan.Moves), UpdatedLinks: updated}, nil
 }
 
 // DeferredDelete records a deletion in git and removes from indexes, without

@@ -15,7 +15,6 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/analytics"
 	"github.com/kiwifs/kiwifs/internal/config"
-	"github.com/kiwifs/kiwifs/internal/markdown"
 	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/preferences"
 	"github.com/kiwifs/kiwifs/internal/search"
@@ -210,7 +209,6 @@ func pageViewSource(c echo.Context) string {
 	return source
 }
 
-
 type patchFrontmatterRequest struct {
 	Fields map[string]any `json:"fields"`
 }
@@ -267,20 +265,19 @@ func (h *Handlers) patchFrontmatterFields(c echo.Context, path string, fields ma
 	if len(fields) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "at least one frontmatter field is required")
 	}
-	content, err := readFileOr404(c.Request().Context(), h.store, path)
-	if err != nil {
+	if _, err := readFileOr404(c.Request().Context(), h.store, path); err != nil {
 		return err
-	}
-	for key, value := range fields {
-		content, err = markdown.SetFrontmatterField(content, key, normalizeFrontmatterPatchValue(value))
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-		}
 	}
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
 	ifMatch := strings.Trim(c.Request().Header.Get("If-Match"), `"`)
-	res, err := h.pipe.WriteWithOpts(c.Request().Context(), path, content, actor, pipeline.WriteOpts{IfMatch: ifMatch})
+	manager := pipeline.NormalizeActor(c.Request().Header.Get("X-Field-Manager"))
+	force := c.QueryParam("force") == "true"
+	res, err := h.pipe.PatchFrontmatterAs(c.Request().Context(), path, fields, ifMatch, actor, manager, force)
 	if err != nil {
+		var fc *pipeline.FieldConflictError
+		if errors.As(err, &fc) {
+			return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "conflicts": fc.Conflicts})
+		}
 		if errors.Is(err, storage.ErrPathDenied) {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
@@ -304,17 +301,6 @@ func (h *Handlers) patchFrontmatterFields(c echo.Context, path string, fields ma
 	c.Response().Header().Set("ETag", fmt.Sprintf(`"%s"`, res.ETag))
 	tracing.Record(c.Request().Context(), tracing.Event{Kind: tracing.KindWrite, Path: path, ETag: res.ETag, Detail: "frontmatter patch"})
 	return c.JSON(http.StatusOK, map[string]string{"path": res.Path, "etag": res.ETag})
-}
-
-func normalizeFrontmatterPatchValue(v any) any {
-	switch x := v.(type) {
-	case float64:
-		n := int(x)
-		if float64(n) == x {
-			return n
-		}
-	}
-	return v
 }
 
 // Readlink godoc
@@ -467,6 +453,9 @@ func (h *Handlers) WriteFile(c echo.Context) error {
 type bulkFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	// IfMatch, when set, is the ETag this file must still have; otherwise
+	// the whole batch fails with 409 and nothing is written.
+	IfMatch string `json:"if_match,omitempty"`
 }
 
 type bulkRequest struct {
@@ -519,8 +508,12 @@ func (h *Handlers) BulkWrite(c echo.Context) error {
 		Path    string
 		Content []byte
 	}, len(req.Files))
+	ifMatch := map[string]string{}
 	for i, f := range req.Files {
 		files[i].Path = f.Path
+		if f.IfMatch != "" {
+			ifMatch[f.Path] = strings.Trim(f.IfMatch, `"`)
+		}
 		content := []byte(f.Content)
 		if hasProv {
 			injected, perr := pipeline.InjectProvenance(content, provType, provID, actor)
@@ -531,10 +524,13 @@ func (h *Handlers) BulkWrite(c echo.Context) error {
 		}
 		files[i].Content = content
 	}
-	pipeResults, err := h.pipe.BulkWrite(c.Request().Context(), files, actor, req.Message)
+	pipeResults, err := h.pipe.BulkWriteIfMatch(c.Request().Context(), files, ifMatch, actor, req.Message)
 	if err != nil {
 		if errors.Is(err, storage.ErrPathDenied) {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if errors.Is(err, pipeline.ErrConflict) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error()+" — re-read and retry")
 		}
 		if errors.Is(err, pipeline.ErrTransitionDenied) {
 			return echo.NewHTTPError(http.StatusConflict, err.Error())
@@ -815,10 +811,11 @@ type renameRequest struct {
 // RenameFile godoc
 //
 //	@Summary		Rename a file
-//	@Description	Renames a file from one path to another, optionally updating wiki links pointing to it in other files.
+//	@Description	Renames a file through the refactor engine: wiki and markdown links to it are respelled and verified, and the move and every relinked page land in one commit. Fails with 409 if the destination exists or a link could not be kept.
 //	@Tags			files
 //	@Security		BearerAuth
 //	@Param			update_links	query		bool			false	"If true, automatically updates links to the renamed file (default true)"
+//	@Param			overwrite		query		bool			false	"Replace an existing destination, like rename(2) (for protocol clients' atomic saves)"
 //	@Param			body			body		renameRequest	true	"Rename request body containing source and target paths"
 //	@Param			X-Actor			header		string			false	"Actor identity performing the rename"
 //	@Success		200				{object}	map[string]interface{}
@@ -838,13 +835,23 @@ func (h *Handlers) RenameFile(c echo.Context) error {
 	updateLinks := c.QueryParam("update_links") != "false"
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
 
-	res, updatedLinks, err := h.pipe.RenameWithLinks(c.Request().Context(), req.From, req.To, actor, updateLinks)
+	var res pipeline.Result
+	var updatedLinks []string
+	var err error
+	if c.QueryParam("overwrite") == "true" {
+		res, updatedLinks, err = h.pipe.RenameReplacing(c.Request().Context(), req.From, req.To, actor)
+	} else {
+		res, updatedLinks, err = h.pipe.RenameWithLinks(c.Request().Context(), req.From, req.To, actor, updateLinks)
+	}
 	if err != nil {
 		if errors.Is(err, storage.ErrPathDenied) {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return echo.NewHTTPError(http.StatusNotFound, "source file not found")
+		}
+		if errors.Is(err, pipeline.ErrPlanInvalid) || errors.Is(err, pipeline.ErrPlanStale) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -863,7 +870,7 @@ func (h *Handlers) RenameFile(c echo.Context) error {
 // RenameDir godoc
 //
 //	@Summary		Rename a directory
-//	@Description	Renames a directory and all files inside it.
+//	@Description	Moves a directory through the refactor engine, relinking references from outside and relative links inside, in one commit. Fails with 409 if any destination exists.
 //	@Tags			files
 //	@Security		BearerAuth
 //	@Param			body	body		renameRequest	true	"Rename request body containing source and target directory paths"
@@ -892,6 +899,9 @@ func (h *Handlers) RenameDir(c echo.Context) error {
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return echo.NewHTTPError(http.StatusNotFound, "source directory not found")
+		}
+		if errors.Is(err, pipeline.ErrPlanInvalid) || errors.Is(err, pipeline.ErrPlanStale) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

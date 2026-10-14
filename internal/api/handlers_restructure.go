@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/refactor"
@@ -21,10 +22,21 @@ type RefactorApplyRequest struct {
 	// reviewed. If the workspace changed since, the request fails with 409
 	// and returns the new plan instead of applying something unreviewed.
 	Digest string `json:"digest,omitempty"`
+	// Approved says the agent's user confirmed this plan through MCP
+	// elicitation. It only matters for agent callers (X-Kiwi-Client
+	// mcp/…), which need approval for plans over the workspace's limits.
+	Approved bool `json:"approved,omitempty"`
+}
+
+// RefactorApproveRequest is the body of POST /api/kiwi/refactor/approve.
+type RefactorApproveRequest struct {
+	Manifest refactor.Manifest `json:"manifest"`
+	Digest   string            `json:"digest"`
 }
 
 func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*refactor.Plan, error) {
-	plan, err := refactor.BuildPlan(c.Request().Context(), refactor.Workspace{Root: h.root, Store: h.store}, m)
+	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
+	plan, err := h.pipe.PlanRefactor(c.Request().Context(), m, refactor.Options{Actor: actor, Client: requestClient(c)})
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -39,6 +51,8 @@ func (h *Handlers) buildRefactorPlan(c echo.Context, m *refactor.Manifest) (*ref
 //	@Security		BearerAuth
 //	@Accept			json
 //	@Param			body	body		refactor.Manifest	true	"Manifest"
+//	@Param			diffs	query		bool				false	"Include a unified diff for every written page"
+//	@Param			format	query		string				false	"workspace-edit: answer with the plan as an LSP WorkspaceEdit"
 //	@Success		200		{object}	refactor.Plan
 //	@Failure		400		{object}	map[string]string
 //	@Router			/api/kiwi/refactor/plan [post]
@@ -54,6 +68,18 @@ func (h *Handlers) RefactorPlan(c echo.Context) error {
 	plan, err := h.buildRefactorPlan(c, m)
 	if err != nil {
 		return err
+	}
+	if c.QueryParam("format") == "workspace-edit" {
+		if len(plan.Errors) > 0 {
+			return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
+		}
+		return c.JSON(http.StatusOK, plan.WorkspaceEdit(h.root))
+	}
+	if c.QueryParam("diffs") == "true" {
+		return c.JSON(http.StatusOK, struct {
+			*refactor.Plan
+			Diffs []refactor.FileDiff `json:"diffs"`
+		}{plan, plan.FileDiffs()})
 	}
 	return c.JSON(http.StatusOK, plan)
 }
@@ -82,25 +108,217 @@ func (h *Handlers) RefactorApply(c echo.Context) error {
 	if err := dec.Decode(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid body: "+err.Error())
 	}
-	if len(req.Manifest.Moves) == 0 && len(req.Manifest.Merges) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves or merges")
+	if req.Manifest.Empty() {
+		return echo.NewHTTPError(http.StatusBadRequest, "manifest has no moves, merges, edits or tag renames")
+	}
+	client := requestClient(c)
+	opts := refactor.Options{Client: client, RequireApproval: strings.HasPrefix(client, "mcp"), Approved: req.Approved}
+	plan, res, err := h.pipe.Refactor(c.Request().Context(), &req.Manifest, opts, req.Digest, sanitizeActor(c.Request().Header.Get("X-Actor")))
+	switch {
+	case errors.Is(err, pipeline.ErrApprovalRequired):
+		return c.JSON(http.StatusPreconditionRequired, map[string]any{"error": err.Error(), "plan": plan})
+	case errors.Is(err, pipeline.ErrPlanInvalid):
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
+	case errors.Is(err, pipeline.ErrDigestMismatch):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "plan": plan})
+	case errors.Is(err, pipeline.ErrPlanStale):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
+	case err != nil:
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{"applied": res, "plan": plan})
+}
+
+// requestClient names the tool behind a request for the commit trailers:
+// X-Kiwi-Client when the caller says (the MCP remote backend, the web UI),
+// else "rest". Sanitized like an actor, since it lands in a commit message.
+func requestClient(c echo.Context) string {
+	if v := c.Request().Header.Get("X-Kiwi-Client"); v != "" {
+		return sanitizeActor(v)
+	}
+	return "rest"
+}
+
+// RefactorApprove godoc
+//
+//	@Summary		Approve a restructuring for an agent
+//	@Description	Records a human's approval of the plan with this digest, so an agent may apply it once within the hour even though it exceeds the workspace's [refactor] approval limits. The manifest is planned again and must still produce the digest.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		RefactorApproveRequest	true	"Manifest and the digest being approved"
+//	@Success		200		{object}	map[string]any
+//	@Failure		409		{object}	map[string]any
+//	@Router			/api/kiwi/refactor/approve [post]
+func (h *Handlers) RefactorApprove(c echo.Context) error {
+	var req RefactorApproveRequest
+	if err := bindJSON(c, &req); err != nil {
+		return err
+	}
+	if req.Digest == "" || req.Manifest.Empty() {
+		return echo.NewHTTPError(http.StatusBadRequest, "manifest and digest are required")
 	}
 	plan, err := h.buildRefactorPlan(c, &req.Manifest)
 	if err != nil {
 		return err
 	}
-	if len(plan.Errors) > 0 {
-		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "plan has errors", "plan": plan})
+	if len(plan.Errors) > 0 || plan.Digest != req.Digest {
+		return c.JSON(http.StatusConflict, map[string]any{"error": "the plan no longer matches that digest; review it again", "plan": plan})
 	}
-	if req.Digest != "" && req.Digest != plan.Digest {
-		return c.JSON(http.StatusConflict, map[string]any{"error": "the workspace changed since the plan was reviewed", "plan": plan})
+	h.pipe.ApproveRefactor(plan.Digest)
+	return c.JSON(http.StatusOK, map[string]any{"approved": plan.Digest, "expires_in": "1h"})
+}
+
+// RefactorRevertRequest is the body of POST /api/kiwi/refactor/revert.
+type RefactorRevertRequest struct {
+	Commit string `json:"commit"`
+	// Digest, when set, must equal the digest of the revert plan the
+	// caller reviewed (from a dry run).
+	Digest string `json:"digest,omitempty"`
+	// DryRun returns the revert plan without applying it.
+	DryRun bool `json:"dry_run,omitempty"`
+}
+
+// RefactorRevert godoc
+//
+//	@Summary		Undo a commit as a plan
+//	@Description	Puts every page the commit changed back to its previous bytes, and the comment and personal-state files a restructuring rewrote back to what they were, as one new commit. Refused (422) if any of those files changed since. dry_run returns the plan; a digest pins the reviewed plan (409 with the fresh plan on drift).
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		RefactorRevertRequest	true	"Commit to revert"
+//	@Param			X-Actor	header		string					false	"Actor identity performing the revert"
+//	@Success		200		{object}	map[string]any
+//	@Failure		409		{object}	map[string]any
+//	@Failure		422		{object}	map[string]any
+//	@Router			/api/kiwi/refactor/revert [post]
+func (h *Handlers) RefactorRevert(c echo.Context) error {
+	var req RefactorRevertRequest
+	if err := bindJSON(c, &req); err != nil {
+		return err
 	}
-	res, err := h.pipe.ApplyRefactor(c.Request().Context(), plan, sanitizeActor(c.Request().Header.Get("X-Actor")))
-	if err != nil {
-		if errors.Is(err, pipeline.ErrPlanStale) {
-			return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
+	if req.Commit == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "commit is required")
+	}
+	ctx := c.Request().Context()
+	if req.DryRun {
+		plan, err := h.pipe.PlanRevert(ctx, req.Commit)
+		if err != nil {
+			return revertError(err)
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return c.JSON(http.StatusOK, plan)
+	}
+	plan, res, err := h.pipe.Revert(ctx, req.Commit, req.Digest, requestClient(c), sanitizeActor(c.Request().Header.Get("X-Actor")))
+	switch {
+	case errors.Is(err, pipeline.ErrPlanInvalid):
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{"error": "the revert plan has errors", "plan": plan})
+	case errors.Is(err, pipeline.ErrDigestMismatch):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "plan": plan})
+	case errors.Is(err, pipeline.ErrPlanStale):
+		return c.JSON(http.StatusConflict, map[string]any{"error": err.Error()})
+	case err != nil:
+		return revertError(err)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"applied": res, "plan": plan})
+}
+
+func revertError(err error) error {
+	if errors.Is(err, pipeline.ErrRevertUnsupported) {
+		return echo.NewHTTPError(http.StatusNotImplemented, err.Error())
+	}
+	if strings.Contains(err.Error(), "invalid commit id") {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+}
+
+// RefactorRawMoves godoc
+//
+//	@Summary		Moves that left references behind
+//	@Description	Lists moves made without relinking (WebDAV/NFS renames, update_links=false, files moved on disk while the server watched) whose old paths are still referenced, with the relinks manifest that repairs them. Plan and apply that manifest like any other.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]any
+//	@Router			/api/kiwi/refactor/raw-moves [get]
+func (h *Handlers) RefactorRawMoves(c echo.Context) error {
+	m, moves, err := h.pipe.RawMoveFix(c.Request().Context())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	if moves == nil {
+		moves = []pipeline.RawMove{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"moves": moves, "manifest": m})
+}
+
+// RefactorPending godoc
+//
+//	@Summary		Restructurings waiting for approval
+//	@Description	Lists the plans agents tried to apply that exceed the workspace's [refactor] approval limits, with their manifests, so a human can review and approve them.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]any
+//	@Router			/api/kiwi/refactor/pending [get]
+func (h *Handlers) RefactorPending(c echo.Context) error {
+	pending := h.pipe.PendingApprovals()
+	if pending == nil {
+		pending = []pipeline.PendingApproval{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"pending": pending})
+}
+
+// RefactorFromWorkspaceEdit godoc
+//
+//	@Summary		Plan an editor's file renames
+//	@Description	Takes an LSP WorkspaceEdit (an editor's rename refactoring), keeps its file renames as a manifest — its text edits are recomputed by the planner, not trusted — and answers with that manifest and its plan.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		refactor.WorkspaceEdit	true	"LSP WorkspaceEdit"
+//	@Success		200		{object}	map[string]any
+//	@Failure		400		{object}	map[string]string
+//	@Router			/api/kiwi/refactor/from-workspace-edit [post]
+func (h *Handlers) RefactorFromWorkspaceEdit(c echo.Context) error {
+	var we refactor.WorkspaceEdit
+	if err := bindJSON(c, &we); err != nil {
+		return err
+	}
+	m, ignored, err := refactor.ManifestFromWorkspaceEdit(h.root, we)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	plan, err := h.buildRefactorPlan(c, m)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]any{"manifest": m, "plan": plan, "ignored": ignored})
+}
+
+// RefactorScript godoc
+//
+//	@Summary		Compute a manifest with a script
+//	@Description	Runs a Starlark script, out of process and read-only (query, files, read, frontmatter, links), that returns a restructuring manifest, and answers with the manifest, what the script printed, and its plan. Nothing is written; apply the manifest with /refactor/apply and the plan's digest.
+//	@Tags			refactor
+//	@Security		BearerAuth
+//	@Accept			json
+//	@Param			body	body		map[string]string	true	"{\"script\": \"def main(): ...\"}"
+//	@Success		200		{object}	map[string]any
+//	@Failure		422		{object}	map[string]string
+//	@Router			/api/kiwi/refactor/script [post]
+func (h *Handlers) RefactorScript(c echo.Context) error {
+	var req struct {
+		Script string `json:"script"`
+	}
+	if err := bindJSON(c, &req); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Script) == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "script is required")
+	}
+	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
+	res, plan, err := h.pipe.RunRefactorScript(c.Request().Context(), req.Script, refactor.Options{Actor: actor, Client: requestClient(c)})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{"manifest": res.Raw, "output": res.Output, "plan": plan})
 }

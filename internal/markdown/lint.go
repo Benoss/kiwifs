@@ -6,13 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	extast "github.com/yuin/goldmark/extension/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
-	"gopkg.in/yaml.v3"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/extension"
+	extast "github.com/yuin/goldmark/v2/extension/ast"
+	"github.com/yuin/goldmark/v2/parser"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // LintIssue is a single finding from LintMarkdown.
@@ -70,8 +68,7 @@ func LintMarkdownWithOptions(content []byte, opts FenceOptions) []LintIssue {
 	if body == nil {
 		body = content
 	}
-	md := goldmark.New(goldmark.WithExtensions(extension.Table))
-	doc := md.Parser().Parse(text.NewReader(body), parser.WithContext(parser.NewContext()))
+	doc := parser.New(parser.WithExtensions(extension.TableParser)).Parse(body)
 
 	// Calculate frontmatter line offset so reported line numbers are
 	// relative to the full file, not just the body.
@@ -207,8 +204,12 @@ func lintTables(body []byte, doc ast.Node, lineOffset int) []LintIssue {
 			headerCols++
 		}
 
-		// Check each row.
-		for row := header.NextSibling(); row != nil; row = row.NextSibling() {
+		// Check each row. v2 nests the data rows in a TableBody.
+		var firstRow ast.Node
+		if tbody, ok := header.NextSibling().(*extast.TableBody); ok {
+			firstRow = tbody.FirstChild()
+		}
+		for row := firstRow; row != nil; row = row.NextSibling() {
 			tr, ok := row.(*extast.TableRow)
 			if !ok {
 				continue
@@ -509,8 +510,12 @@ func lintHeadings(body []byte, doc ast.Node, lineOffset int) []LintIssue {
 }
 
 func extractInlineText(buf *strings.Builder, n ast.Node, source []byte) {
-	if t, ok := n.(*ast.Text); ok {
-		buf.Write(t.Segment.Value(source))
+	switch t := n.(type) {
+	case *ast.Text:
+		buf.WriteString(t.Value.Str(source))
+		return
+	case *ast.CodeSpan:
+		buf.WriteString(t.Value.Value(source))
 		return
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
@@ -565,8 +570,8 @@ func lintBrokenImages(body []byte, _ ast.Node, lineOffset int) []LintIssue {
 
 // nodeLineNumber returns the 1-based line number of a block node in the source.
 func nodeLineNumber(src []byte, n ast.Node) int {
-	if n.Lines().Len() > 0 {
-		seg := n.Lines().At(0)
+	if lines := BlockLines(n); len(lines) > 0 {
+		seg := lines[0]
 		return countNewlines(src, seg.Start) + 1
 	}
 	return 0

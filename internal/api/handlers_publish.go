@@ -1,14 +1,15 @@
 package api
 
 import (
-	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/kiwifs/kiwifs/internal/markdown"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
 	"github.com/kiwifs/kiwifs/internal/rbac"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/storage"
 	"github.com/labstack/echo/v4"
 )
@@ -31,11 +32,6 @@ type publishResponse struct {
 type publishBulkError struct {
 	Path  string `json:"path"`
 	Error string `json:"error"`
-}
-
-type publishBulkFile = struct {
-	Path    string
-	Content []byte
 }
 
 type publishBulkResponse struct {
@@ -94,28 +90,18 @@ func (h *Handlers) Publish(c echo.Context) error {
 		return err
 	}
 
-	// Set published: true
-	content, err = markdown.SetFrontmatterField(content, "published", true)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update frontmatter: "+err.Error())
-	}
-
-	// Set published_at only if not already present (preserve original publish date).
-	existingAt := rbac.PagePublishedAt(content)
+	fields := map[string]any{"published": true}
+	// published_at is set only once, so republishing keeps the original
+	// date.
 	now := time.Now().UTC()
-	if existingAt == nil {
-		content, err = markdown.SetFrontmatterField(content, "published_at", now)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to set published_at: "+err.Error())
-		}
-	} else {
+	if existingAt := rbac.PagePublishedAt(content); existingAt != nil {
 		now = *existingAt
+	} else {
+		fields["published_at"] = now
 	}
-
-	// Write back through the pipeline (triggers search index, webhooks, events).
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
-	if _, err := h.pipe.Write(ctx, req.Path, content, actor); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "write failed: "+err.Error())
+	if _, err := h.pipe.PatchFrontmatter(ctx, req.Path, fields, pipeline.ETag(content), actor); err != nil {
+		return publishWriteError(err)
 	}
 
 	return c.JSON(http.StatusOK, publishResponse{
@@ -154,22 +140,24 @@ func (h *Handlers) Unpublish(c echo.Context) error {
 		return err
 	}
 
-	// Set published: false
-	content, err = markdown.SetFrontmatterField(content, "published", false)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update frontmatter: "+err.Error())
-	}
-
-	// Write back through the pipeline.
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
-	if _, err := h.pipe.Write(ctx, req.Path, content, actor); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "write failed: "+err.Error())
+	if _, err := h.pipe.PatchFrontmatter(ctx, req.Path, map[string]any{"published": false}, pipeline.ETag(content), actor); err != nil {
+		return publishWriteError(err)
 	}
 
 	return c.JSON(http.StatusOK, publishResponse{
 		Path:      req.Path,
 		Published: false,
 	})
+}
+
+// publishWriteError maps a failed publish write: a page edited between
+// the read and the write is a conflict to retry, not a server error.
+func publishWriteError(err error) error {
+	if errors.Is(err, pipeline.ErrConflict) {
+		return echo.NewHTTPError(http.StatusConflict, "page changed while publishing; retry")
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, "write failed: "+err.Error())
 }
 
 // PublishBulk godoc
@@ -217,12 +205,15 @@ func (h *Handlers) publishBulk(c echo.Context, publish bool) error {
 	actor := sanitizeActor(c.Request().Header.Get("X-Actor"))
 	now := time.Now().UTC()
 	seen := make(map[string]struct{}, len(req.Paths))
-	files := make([]publishBulkFile, 0, len(req.Paths))
 	responses := make([]publishResponse, 0, len(req.Paths))
 	errors := make([]publishBulkError, 0)
+	// The pages that change, grouped by what changes, become one
+	// restructuring manifest: one commit, each file pinned to the bytes
+	// it was read with, and frontmatter edited line by line.
+	var stamp, republish, unpublish []string
 
 	for _, path := range req.Paths {
-		path = strings.TrimSpace(path)
+		path = strings.TrimPrefix(strings.TrimSpace(path), "/")
 		if path == "" {
 			return echo.NewHTTPError(http.StatusBadRequest, "paths contains an empty path")
 		}
@@ -239,62 +230,50 @@ func (h *Handlers) publishBulk(c echo.Context, publish bool) error {
 		currentlyPublished := rbac.PagePublished(content)
 		if publish {
 			publishedAt := rbac.PagePublishedAt(content)
-			if currentlyPublished && publishedAt != nil {
+			switch {
+			case currentlyPublished && publishedAt != nil:
 				responses = append(responses, publishResponse{Path: path, Published: true, PublishedAt: publishedAt.Format(time.RFC3339), PublicURL: "/p/" + path})
 				continue
+			case publishedAt != nil:
+				republish = append(republish, path)
+				responses = append(responses, publishResponse{Path: path, Published: true, PublishedAt: publishedAt.Format(time.RFC3339), PublicURL: "/p/" + path})
+			default:
+				stamp = append(stamp, path)
+				responses = append(responses, publishResponse{Path: path, Published: true, PublishedAt: now.Format(time.RFC3339), PublicURL: "/p/" + path})
 			}
-			content, err = markdown.SetFrontmatterField(content, "published", true)
-			if err != nil {
-				errors = append(errors, publishBulkError{Path: path, Error: "failed to update frontmatter: " + err.Error()})
-				continue
-			}
-			effectiveAt := now
-			if publishedAt != nil {
-				effectiveAt = *publishedAt
-			} else {
-				content, err = markdown.SetFrontmatterField(content, "published_at", now)
-				if err != nil {
-					errors = append(errors, publishBulkError{Path: path, Error: "failed to set published_at: " + err.Error()})
-					continue
-				}
-			}
-			files = append(files, publishBulkFile{Path: path, Content: content})
-			responses = append(responses, publishResponse{Path: path, Published: true, PublishedAt: effectiveAt.Format(time.RFC3339), PublicURL: "/p/" + path})
 			continue
 		}
-
 		if !currentlyPublished {
 			responses = append(responses, publishResponse{Path: path, Published: false})
 			continue
 		}
-		content, err = markdown.SetFrontmatterField(content, "published", false)
-		if err != nil {
-			errors = append(errors, publishBulkError{Path: path, Error: "failed to update frontmatter: " + err.Error()})
-			continue
-		}
-		files = append(files, publishBulkFile{Path: path, Content: content})
+		unpublish = append(unpublish, path)
 		responses = append(responses, publishResponse{Path: path, Published: false})
 	}
 
-	if len(files) > 0 {
-		message := "publish bulk update"
-		if !publish {
-			message = "unpublish bulk update"
+	m := &refactor.Manifest{}
+	addEdit := func(paths []string, set map[string]any) {
+		if len(paths) > 0 {
+			m.Edits = append(m.Edits, refactor.Edit{Select: refactor.Selector{Paths: paths}, Set: set})
 		}
-		failed := h.bulkWriteTolerant(ctx, files, actor, message)
-		if len(failed) > 0 {
-			kept := files[:0]
-			for _, f := range files {
-				if err, ok := failed[f.Path]; ok {
-					errors = append(errors, publishBulkError{Path: f.Path, Error: err})
-					continue
-				}
-				kept = append(kept, f)
-			}
-			files = kept
+	}
+	addEdit(stamp, map[string]any{"published": true, "published_at": now})
+	addEdit(republish, map[string]any{"published": true})
+	addEdit(unpublish, map[string]any{"published": false})
+	changed := len(stamp) + len(republish) + len(unpublish)
 
-			// Remove failed paths from responses so clients don't see
-			// a path reported as both successful and errored.
+	if !m.Empty() {
+		_, _, failed, err := h.pipe.RefactorDropping(ctx, m, refactor.Options{Client: requestClient(c)}, actor)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		if len(failed) > 0 {
+			for path, msg := range failed {
+				errors = append(errors, publishBulkError{Path: path, Error: msg})
+			}
+			sort.Slice(errors, func(i, j int) bool { return errors[i].Path < errors[j].Path })
+			changed -= len(failed)
+			// A path is either reported as done or as failed, never both.
 			cleaned := responses[:0]
 			for _, r := range responses {
 				if _, ok := failed[r.Path]; !ok {
@@ -308,35 +287,11 @@ func (h *Handlers) publishBulk(c echo.Context, publish bool) error {
 	return c.JSON(http.StatusOK, publishBulkResponse{
 		Published: publish,
 		Requested: len(req.Paths),
-		Changed:   len(files),
-		Skipped:   len(seen) - len(files),
+		Changed:   changed,
+		Skipped:   len(seen) - changed,
 		Paths:     responses,
 		Errors:    errors,
 	})
-}
-
-func (h *Handlers) bulkWriteTolerant(ctx context.Context, files []publishBulkFile, actor, message string) map[string]string {
-	failed := make(map[string]string)
-	var writeBatch func([]publishBulkFile)
-	writeBatch = func(batch []publishBulkFile) {
-		if len(batch) == 0 {
-			return
-		}
-		if _, err := h.pipe.BulkWrite(ctx, batch, actor, message); err == nil {
-			return
-		} else if len(batch) == 1 {
-			failed[batch[0].Path] = err.Error()
-			return
-		}
-		mid := len(batch) / 2
-		writeBatch(batch[:mid])
-		writeBatch(batch[mid:])
-	}
-	writeBatch(files)
-	if len(failed) == 0 {
-		return nil
-	}
-	return failed
 }
 
 // PublishStatus godoc

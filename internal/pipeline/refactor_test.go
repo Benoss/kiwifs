@@ -5,8 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/kiwifs/kiwifs/internal/claims"
 	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/search"
 	"github.com/kiwifs/kiwifs/internal/storage"
@@ -135,5 +138,268 @@ func TestApplyRefactorRestoresPagesWhenAWriteFails(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "old/page.md")); err != nil {
 		t.Fatal("old/page.md must still exist")
+	}
+}
+
+func writeFixture(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for p, c := range files {
+		abs := filepath.Join(dir, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRenameWithLinksUsesTheRefactorEngine(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{
+		"guide.md": "[md](old/page.md) [[page]] `[[page]]`\n~~~\n[[page]]\n~~~\n",
+	})
+	res, updated, err := p.RenameWithLinks(context.Background(), "old/page.md", "new/renamed.md", "test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != "new/renamed.md" || res.ETag == "" {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := readFile(t, dir, "guide.md"); got != "[md](new/renamed.md) [[renamed]] `[[page]]`\n~~~\n[[page]]\n~~~\n" {
+		t.Fatalf("guide.md = %q", got)
+	}
+	if got := readFile(t, dir, ".me/progress.json"); got != `{"new/renamed.md":{"done":true}}` {
+		t.Fatalf("personal state did not follow the page: %s", got)
+	}
+	want := map[string]bool{"guide.md": true, "index.md": true, "old/_index.md": true}
+	if len(updated) != len(want) {
+		t.Fatalf("updated = %v", updated)
+	}
+	for _, u := range updated {
+		if !want[u] {
+			t.Fatalf("unexpected relinked page %s", u)
+		}
+	}
+}
+
+func TestRenameWithLinksRefusesToOverwrite(t *testing.T) {
+	p, dir := refactorFixture(t)
+	_, _, err := p.RenameWithLinks(context.Background(), "old/page.md", "index.md", "test", true)
+	if !errors.Is(err, ErrPlanInvalid) {
+		t.Fatalf("err = %v, want ErrPlanInvalid", err)
+	}
+	if got := readFile(t, dir, "index.md"); got != "[[old/page|Page]] [[old/_index|Old]]\n" {
+		t.Fatalf("destination changed: %q", got)
+	}
+}
+
+func TestRenameWithoutLinksLeavesReferences(t *testing.T) {
+	p, dir := refactorFixture(t)
+	if _, _, err := p.RenameWithLinks(context.Background(), "old/page.md", "elsewhere.md", "test", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "index.md"); got != "[[old/page|Page]] [[old/_index|Old]]\n" {
+		t.Fatalf("update_links=false must not touch references: %q", got)
+	}
+	if got := readFile(t, dir, "elsewhere.md"); got != "# Page\n" {
+		t.Fatalf("moved content = %q", got)
+	}
+}
+
+func TestRenameDirWithLinksFixesRelativeLinksInsideTheFolder(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{
+		"old/sub/deep.md": "[up](../page.md) [root](../../index.md)\n",
+	})
+	res, err := p.RenameDirWithLinks(context.Background(), "old", "archive/2026/old", "test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Renamed != 3 {
+		t.Fatalf("renamed = %d", res.Renamed)
+	}
+	if got := readFile(t, dir, "archive/2026/old/sub/deep.md"); got != "[up](../page.md) [root](../../../../index.md)\n" {
+		t.Fatalf("deep.md = %q", got)
+	}
+	if got := readFile(t, dir, "index.md"); got != "[[archive/2026/old/page|Page]] [[archive/2026/old/_index|Old]]\n" {
+		t.Fatalf("index.md = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old")); !os.IsNotExist(err) {
+		t.Fatalf("source folder should be gone: %v", err)
+	}
+	if len(res.UpdatedLinks) != 1 || res.UpdatedLinks[0] != "index.md" {
+		t.Fatalf("updated = %v", res.UpdatedLinks)
+	}
+}
+
+func TestRenameDirRejectsMovingIntoItself(t *testing.T) {
+	p, _ := refactorFixture(t)
+	if _, err := p.RenameDir(context.Background(), "old", "old/inner", "test"); err == nil {
+		t.Fatal("moving a folder into itself must fail")
+	}
+}
+
+func TestRefactorDigestMismatchReturnsFreshPlan(t *testing.T) {
+	p, _ := refactorFixture(t)
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: "old/page.md", To: "new.md"}}}
+	plan, _, err := p.Refactor(context.Background(), m, refactor.Options{}, "deadbeef", "test")
+	if !errors.Is(err, ErrDigestMismatch) || plan == nil || plan.Digest == "" {
+		t.Fatalf("err = %v, plan = %+v", err, plan)
+	}
+	if _, _, err := p.Refactor(context.Background(), m, refactor.Options{}, plan.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPatchFrontmatterIsPinnedToWhatItRead(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{"fm.md": "---\ntitle: T\n---\nbody\n"})
+	if _, err := p.PatchFrontmatter(context.Background(), "fm.md", map[string]any{"status": "done"}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "fm.md"); got != "---\ntitle: T\nstatus: done\n---\nbody\n" {
+		t.Fatalf("fm.md = %q", got)
+	}
+	if _, err := p.PatchFrontmatter(context.Background(), "fm.md", map[string]any{"status": "x"}, "stale", "t"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+}
+
+func TestBulkWriteIfMatch(t *testing.T) {
+	p, dir := refactorFixture(t)
+	files := []struct {
+		Path    string
+		Content []byte
+	}{{Path: "a.md", Content: []byte("a\n")}, {Path: "index.md", Content: []byte("x\n")}}
+	if _, err := p.BulkWriteIfMatch(context.Background(), files, map[string]string{"index.md": "stale"}, "t", ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.md")); !os.IsNotExist(err) {
+		t.Fatal("nothing may be written when a precondition fails")
+	}
+	cur := ETag([]byte(readFile(t, dir, "index.md")))
+	if _, err := p.BulkWriteIfMatch(context.Background(), files, map[string]string{"index.md": cur}, "t", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefactorMovesClaimsAndRespectsOtherHolders(t *testing.T) {
+	p, dir := refactorFixture(t)
+	store, err := claims.NewStoreFromRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	p.Claims = store
+	ctx := context.Background()
+	if _, err := store.Claim(ctx, "old/page.md", "alice", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Claim(ctx, "index.md", "bob", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: "old/page.md", To: "new/page.md"}}}
+
+	plan, _, err := p.Refactor(ctx, m, refactor.Options{}, "", "carol")
+	if !errors.Is(err, ErrPlanInvalid) || !strings.Contains(plan.Errors[0], "claimed by alice") {
+		t.Fatalf("err = %v, errors = %v", err, plan.Errors)
+	}
+
+	plan, _, err = p.Refactor(ctx, m, refactor.Options{}, "", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "index.md is claimed by bob") {
+		t.Fatalf("warnings = %v", plan.Warnings)
+	}
+	c, err := store.ActiveClaim(ctx, "new/page.md")
+	if err != nil || c == nil || c.ClaimedBy != "alice" {
+		t.Fatalf("claim did not follow the page: %+v %v", c, err)
+	}
+	if c, _ := store.ActiveClaim(ctx, "old/page.md"); c != nil {
+		t.Fatalf("old claim left behind: %+v", c)
+	}
+}
+
+func TestCaseOnlyRenameKeepsThePage(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{"Notes.md": "# Notes\n", "ref.md": "[[Notes]]\n"})
+	if _, _, err := p.RenameWithLinks(context.Background(), "Notes.md", "notes.md", "t", true); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if got := readFile(t, dir, "notes.md"); got != "# Notes\n" {
+		t.Fatalf("notes.md = %q (dir: %v)", got, names)
+	}
+	for _, n := range names {
+		if n == "Notes.md" {
+			t.Fatalf("old spelling still listed: %v", names)
+		}
+	}
+	// Wiki links match case-insensitively, so this one still lands firmly.
+	if got := readFile(t, dir, "ref.md"); got != "[[Notes]]\n" {
+		t.Fatalf("ref.md = %q", got)
+	}
+}
+
+func TestSwapAndChainApply(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{"a.md": "A\n", "b.md": "B\n", "c.md": "C\n", "i.md": "[[a]] [[b]] [[c]]\n"})
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: "a.md", To: "b.md"}, {From: "b.md", To: "a.md"}}}
+	if _, _, err := p.Refactor(context.Background(), m, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if readFile(t, dir, "a.md") != "B\n" || readFile(t, dir, "b.md") != "A\n" || readFile(t, dir, "i.md") != "[[b]] [[a]] [[c]]\n" {
+		t.Fatalf("swap: a=%q b=%q i=%q", readFile(t, dir, "a.md"), readFile(t, dir, "b.md"), readFile(t, dir, "i.md"))
+	}
+	m = &refactor.Manifest{Moves: []refactor.Move{{From: "a.md", To: "b.md"}, {From: "b.md", To: "c.md"}, {From: "c.md", To: "d.md"}}}
+	if _, _, err := p.Refactor(context.Background(), m, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.md")); !os.IsNotExist(err) {
+		t.Fatal("a.md should be gone after the chain")
+	}
+	if readFile(t, dir, "b.md") != "B\n" || readFile(t, dir, "c.md") != "A\n" || readFile(t, dir, "d.md") != "C\n" {
+		t.Fatalf("chain: b=%q c=%q d=%q", readFile(t, dir, "b.md"), readFile(t, dir, "c.md"), readFile(t, dir, "d.md"))
+	}
+}
+
+func TestSwapMovesCommentsWithTheirPages(t *testing.T) {
+	p, dir := refactorFixture(t)
+	writeFixture(t, dir, map[string]string{
+		"a.md": "A\n", "b.md": "B\n",
+		".kiwi/comments/a.md.json": `[{"id":"ca","body":"on a"}]`,
+		".kiwi/comments/b.md.json": `[{"id":"cb","body":"on b"}]`,
+	})
+	m := &refactor.Manifest{Moves: []refactor.Move{{From: "a.md", To: "b.md"}, {From: "b.md", To: "a.md"}}}
+	if _, _, err := p.Refactor(context.Background(), m, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, ".kiwi/comments/b.md.json"); !strings.Contains(got, "on a") || strings.Contains(got, "on b") {
+		t.Fatalf("b.md comments = %s", got)
+	}
+	if got := readFile(t, dir, ".kiwi/comments/a.md.json"); !strings.Contains(got, "on b") || strings.Contains(got, "on a") {
+		t.Fatalf("a.md comments = %s", got)
+	}
+}
+
+func TestApplyReportsProgress(t *testing.T) {
+	p, dir := refactorFixture(t)
+	var calls [][2]int
+	ctx := WithProgress(context.Background(), func(done, total int) { calls = append(calls, [2]int{done, total}) })
+	if _, _, err := p.Refactor(ctx, &refactor.Manifest{Moves: []refactor.Move{{From: "old", To: "new"}}}, refactor.Options{}, "", "t"); err != nil {
+		t.Fatal(err)
+	}
+	_ = dir
+	if len(calls) == 0 || calls[len(calls)-1][0] != calls[len(calls)-1][1] {
+		t.Fatalf("progress = %v", calls)
 	}
 }

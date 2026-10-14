@@ -1,0 +1,510 @@
+package mcpserver
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for p, c := range files {
+		abs := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func readTree(t *testing.T, root, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	return string(b)
+}
+
+func callTool(t *testing.T, h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error), name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	res, err := h(context.Background(), callToolReq(name, args))
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return res
+}
+
+func resultText(r *mcp.CallToolResult) string {
+	if len(r.Content) == 0 {
+		return ""
+	}
+	return r.Content[0].(mcp.TextContent).Text
+}
+
+func planOf(t *testing.T, r *mcp.CallToolResult) planView {
+	t.Helper()
+	var v planView
+	if err := json.Unmarshal([]byte(resultText(r)), &v); err != nil {
+		t.Fatalf("decode plan: %v\n%s", err, resultText(r))
+	}
+	return v
+}
+
+func TestRefactorTools_PlanThenApply(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{
+		"notes/target.md": "# Target\n\nSee [the index](../index.md).\n",
+		"other/intro.md":  "# Another intro\n",
+		"hub.md": "# Hub\n\n" +
+			"- [[target]]\n" +
+			"- [md link](notes/target.md#top)\n" +
+			"| a | b |\n|---|---|\n| [[target\\|alias]] | x |\n\n" +
+			"~~~\n[[target]] stays literal\n~~~\n",
+	})
+
+	manifest := "moves:\n  - from: notes/target.md\n    to: archive/intro.md\n"
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest, "detail": "full"}))
+	if !plan.Applicable || plan.Digest == "" {
+		t.Fatalf("plan not applicable: %+v", plan)
+	}
+	if plan.Counts.Moves != 1 || plan.Moves[0].To != "archive/intro.md" {
+		t.Fatalf("moves = %+v", plan.Moves)
+	}
+
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply: %s", resultText(res))
+	}
+
+	hub := readTree(t, root, "hub.md")
+	// "intro" alone would now be ambiguous with other/intro.md, so the wiki
+	// links are qualified; the markdown link keeps its relative style and
+	// its anchor; the table link keeps its escaped pipe; the fence is text.
+	for _, want := range []string{
+		"- [[archive/intro]]\n",
+		"[md link](archive/intro.md#top)",
+		"| [[archive/intro\\|alias]] | x |",
+		"~~~\n[[target]] stays literal\n~~~",
+	} {
+		if !strings.Contains(hub, want) {
+			t.Errorf("hub.md missing %q:\n%s", want, hub)
+		}
+	}
+	moved := readTree(t, root, "archive/intro.md")
+	if !strings.Contains(moved, "[the index](../index.md)") {
+		t.Errorf("relative link inside the moved page broke:\n%s", moved)
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes/target.md")); !os.IsNotExist(err) {
+		t.Errorf("old path still exists")
+	}
+}
+
+func TestRefactorTools_StaleDigestReturnsFreshPlan(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{
+		"a.md": "# A\n\n[[b]]\n",
+		"b.md": "# B\n",
+	})
+	manifest := map[string]any{"moves": []any{map[string]any{"from": "b.md", "to": "c.md"}}}
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest}))
+
+	// Another agent edits a page the plan rewrites.
+	if _, err := b.WriteFile(context.Background(), "a.md", "# A\n\n[[b]] and more\n", "other", ""); err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if !res.IsError {
+		t.Fatalf("stale apply succeeded: %s", resultText(res))
+	}
+	var body struct {
+		Plan planView `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Plan.Digest == "" || body.Plan.Digest == plan.Digest {
+		t.Fatalf("want a fresh digest, got %q (old %q)", body.Plan.Digest, plan.Digest)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.md")); err != nil {
+		t.Fatalf("nothing should have moved: %v", err)
+	}
+	res = callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": body.Plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply with fresh digest: %s", resultText(res))
+	}
+	if got := readTree(t, root, "a.md"); got != "# A\n\n[[c]] and more\n" {
+		t.Fatalf("a.md = %q", got)
+	}
+}
+
+func TestRefactorTools_ApplyRequiresDigestAndRejectsErrors(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{"x.md": "x\n", "y.md": "y\n"})
+
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": "moves: [{from: x.md, to: z.md}]"})
+	if !res.IsError || !strings.Contains(resultText(res), "digest is required") {
+		t.Fatalf("want digest error, got %s", resultText(res))
+	}
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": "moves: [{from: x.md, to: y.md}]"}))
+	if plan.Applicable || len(plan.Errors) == 0 {
+		t.Fatalf("moving onto an existing page must be an error: %+v", plan)
+	}
+	res = callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": "moves: [{from: x.md, to: z.md}]\nbogus: 1\n"})
+	if !res.IsError {
+		t.Fatal("unknown manifest keys must be rejected")
+	}
+}
+
+func TestRefactorTools_PlanPaging(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	files := map[string]string{}
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		files["batch/"+n+".md"] = "# " + n + "\n"
+	}
+	writeTree(t, root, files)
+	args := map[string]any{"manifest": "moves: [{from: batch/, to: done/}]", "limit": 2}
+	first := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", args))
+	if first.Counts.Moves != 5 || len(first.Moves) != 2 || first.NextOffset != 2 {
+		t.Fatalf("page 1 = %+v", first)
+	}
+	args["offset"] = 4
+	last := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", args))
+	if len(last.Moves) != 1 || last.NextOffset != 0 || last.Digest != first.Digest {
+		t.Fatalf("last page = %+v", last)
+	}
+}
+
+func TestRenameTool_RewritesMarkdownLinks(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{
+		"guide.md": "# Guide\n\nRead [auth](concepts/auth.md) and [[auth]].\n",
+	})
+	res := callTool(t, handleRename(b), "kiwi_rename", map[string]any{"from": "concepts/auth.md", "to": "security/authentication.md"})
+	if res.IsError {
+		t.Fatalf("rename: %s", resultText(res))
+	}
+	got := readTree(t, root, "guide.md")
+	if want := "Read [auth](security/authentication.md) and [[authentication]].\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("guide.md = %q, want suffix %q", got, want)
+	}
+	if !strings.Contains(resultText(res), "guide.md") {
+		t.Errorf("result should list the relinked page: %s", resultText(res))
+	}
+
+	writeTree(t, root, map[string]string{"taken.md": "# Taken\n"})
+	res = callTool(t, handleRename(b), "kiwi_rename", map[string]any{"from": "guide.md", "to": "taken.md"})
+	if !res.IsError {
+		t.Fatal("rename onto an existing page must fail")
+	}
+	if readTree(t, root, "taken.md") != "# Taken\n" {
+		t.Fatal("existing destination was overwritten")
+	}
+}
+
+func TestWriteTool_IfMatch(t *testing.T) {
+	b, _ := setupTestBackend(t)
+	defer b.Close()
+	ctx := context.Background()
+	_, etag, err := b.ReadFile(ctx, "index.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.WriteFile(ctx, "index.md", "# Index\n\nsomeone else\n", "other", ""); err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, handleWrite(b), "kiwi_write", map[string]any{"path": "index.md", "content": "# mine\n", "if_match": etag})
+	if !res.IsError || !strings.Contains(resultText(res), "changed since you read it") {
+		t.Fatalf("stale if_match should fail: %s", resultText(res))
+	}
+	_, fresh, _ := b.ReadFile(ctx, "index.md")
+	res = callTool(t, handleWrite(b), "kiwi_write", map[string]any{"path": "index.md", "content": "# mine\n", "if_match": fresh})
+	if res.IsError {
+		t.Fatalf("fresh if_match should succeed: %s", resultText(res))
+	}
+}
+
+func TestBulkWriteTool_IfMatchFailsWholeBatch(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	res := callTool(t, handleBulkWrite(b), "kiwi_bulk_write", map[string]any{"files": []any{
+		map[string]any{"path": "new.md", "content": "# new\n"},
+		map[string]any{"path": "index.md", "content": "# clobber\n", "if_match": "0000"},
+	}})
+	if !res.IsError {
+		t.Fatalf("stale if_match should fail the batch: %s", resultText(res))
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.md")); !os.IsNotExist(err) {
+		t.Fatal("no file in a failed batch may be written")
+	}
+}
+
+func TestPatchFrontmatterTool(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	ctx := context.Background()
+	_, etag, _ := b.ReadFile(ctx, "concepts/auth.md")
+	res := callTool(t, handlePatchFrontmatter(b), "kiwi_patch_frontmatter", map[string]any{
+		"path":     "concepts/auth.md",
+		"fields":   map[string]any{"status": "draft", "priority": float64(2), "tags": nil},
+		"if_match": etag,
+	})
+	if res.IsError {
+		t.Fatalf("patch: %s", resultText(res))
+	}
+	got := readTree(t, root, "concepts/auth.md")
+	if !strings.Contains(got, "status: draft") || !strings.Contains(got, "priority: 2\n") || strings.Contains(got, "tags:") {
+		t.Fatalf("frontmatter not patched:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "# Authentication\n\nAuth overview.\n") {
+		t.Fatalf("body changed:\n%s", got)
+	}
+	res = callTool(t, handlePatchFrontmatter(b), "kiwi_patch_frontmatter", map[string]any{
+		"path": "concepts/auth.md", "fields": map[string]any{"status": "x"}, "if_match": etag,
+	})
+	if !res.IsError {
+		t.Fatal("stale if_match must fail")
+	}
+}
+
+func TestRefactorTools_ApplyThenRevertWithGit(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		".kiwi/config.toml": "[search]\nengine = \"sqlite\"\n[versioning]\nstrategy = \"git\"\n",
+		"a/page.md":         "# Page\n",
+		"index.md":          "[[a/page]]\n",
+	})
+	b := NewLocalBackend(tmp)
+	defer b.Close()
+	manifest := "moves: [{from: a/page.md, to: b/page.md}]\ndelete_empty_dirs: true\n"
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest}))
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply: %s", resultText(res))
+	}
+	var applied struct {
+		Applied struct {
+			Commit string `json:"commit"`
+		} `json:"applied"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &applied); err != nil || applied.Applied.Commit == "" {
+		t.Fatalf("apply result must name the commit: %s", resultText(res))
+	}
+	if readTree(t, tmp, "index.md") != "[[b/page]]\n" {
+		t.Fatalf("index.md = %q", readTree(t, tmp, "index.md"))
+	}
+
+	preview := planOf(t, callTool(t, handleRefactorRevert(b), "kiwi_refactor_revert", map[string]any{"commit": applied.Applied.Commit}))
+	if !preview.Applicable || preview.Digest == "" {
+		t.Fatalf("revert preview = %+v", preview)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "b/page.md")); err != nil {
+		t.Fatal("a preview must not change anything")
+	}
+	res = callTool(t, handleRefactorRevert(b), "kiwi_refactor_revert", map[string]any{"commit": applied.Applied.Commit, "digest": preview.Digest})
+	if res.IsError {
+		t.Fatalf("revert: %s", resultText(res))
+	}
+	if readTree(t, tmp, "index.md") != "[[a/page]]\n" || readTree(t, tmp, "a/page.md") != "# Page\n" {
+		t.Fatal("revert did not restore the tree")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "b")); !os.IsNotExist(err) {
+		t.Fatal("the folder the refactor created should be gone")
+	}
+}
+
+func TestRefactorTools_EditsSelectByQueryRightAfterAWrite(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	ctx := context.Background()
+	if _, err := b.WriteFile(ctx, "fresh.md", "---\nstatus: review\ntags: [x]\n---\n# Fresh\n", "agent", ""); err != nil {
+		t.Fatal(err)
+	}
+	// No sleep: the async indexer is flushed before selecting.
+	manifest := map[string]any{"edits": []any{map[string]any{
+		"select":   map[string]any{"query": `status = "review"`},
+		"set":      map[string]any{"status": "done"},
+		"add_tags": []any{"reviewed"},
+	}}}
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest, "detail": "diff"}))
+	if !plan.Applicable || plan.Counts.ContentEdits != 1 || len(plan.Diffs) != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("apply: %s", resultText(res))
+	}
+	if got := readTree(t, root, "fresh.md"); got != "---\nstatus: done\ntags: [x, reviewed]\n---\n# Fresh\n" {
+		t.Fatalf("fresh.md = %q", got)
+	}
+}
+
+func approvalBackend(t *testing.T) (*LocalBackend, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		".kiwi/config.toml": "[search]\nengine = \"sqlite\"\n[versioning]\nstrategy = \"none\"\n[refactor]\napproval_files = 1\n",
+		"a.md":              "# A\n",
+		"index.md":          "[a](a.md)\n",
+	})
+	return NewLocalBackend(tmp), tmp
+}
+
+func TestRefactorApply_LargePlanNeedsHumanApproval(t *testing.T) {
+	b, root := approvalBackend(t)
+	defer b.Close()
+	manifest := "moves: [{from: a.md, to: x/a.md}]"
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest}))
+	res := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if !res.IsError || !strings.Contains(resultText(res), "approve plan "+plan.Digest) {
+		t.Fatalf("want an approval request, got %s", resultText(res))
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.md")); err != nil {
+		t.Fatal("nothing may move before approval")
+	}
+	pending := b.stack.Pipeline.PendingApprovals()
+	if len(pending) != 1 || pending[0].Digest != plan.Digest || pending[0].Manifest == nil || len(pending[0].Manifest.Moves) != 1 {
+		t.Fatalf("the request should wait for a human: %+v", pending)
+	}
+	// A human approves the digest (the REST endpoint does exactly this).
+	b.stack.Pipeline.ApproveRefactor(plan.Digest)
+	if left := b.stack.Pipeline.PendingApprovals(); len(left) != 0 {
+		t.Fatalf("approved requests leave the queue: %+v", left)
+	}
+	res = callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+	if res.IsError {
+		t.Fatalf("approved apply failed: %s", resultText(res))
+	}
+	if readTree(t, root, "index.md") != "[a](x/a.md)\n" {
+		t.Fatalf("index.md = %q", readTree(t, root, "index.md"))
+	}
+}
+
+func TestRefactorApply_ElicitedConfirmation(t *testing.T) {
+	b, root := approvalBackend(t)
+	defer b.Close()
+	manifest := "moves: [{from: a.md, to: x/a.md}]"
+	plan := planOf(t, callTool(t, handleRefactorPlan(b, nil), "kiwi_refactor_plan", map[string]any{"manifest": manifest}))
+	answer := func(action mcp.ElicitationResponseAction, approve bool, state string) *mcp.CallToolResult {
+		req := callToolReq("kiwi_refactor_apply", map[string]any{"manifest": manifest, "digest": plan.Digest})
+		req.Params.InputResponses = mcp.InputResponses{approveInput: mcp.NewElicitationInputResponse(mcp.ElicitationResult{
+			ElicitationResponse: mcp.ElicitationResponse{Action: action, Content: map[string]any{"approve": approve}},
+		})}
+		req.Params.RequestState = state
+		res, err := handleRefactorApply(b)(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if res := answer(mcp.ElicitationResponseActionDecline, false, plan.Digest); !res.IsError || !strings.Contains(resultText(res), "declined") {
+		t.Fatalf("decline: %s", resultText(res))
+	}
+	if res := answer(mcp.ElicitationResponseActionAccept, true, "other-digest"); !res.IsError {
+		t.Fatal("a confirmation for another plan must not apply this one")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.md")); err != nil {
+		t.Fatal("nothing may move before a matching confirmation")
+	}
+	if res := answer(mcp.ElicitationResponseActionAccept, true, plan.Digest); res.IsError {
+		t.Fatalf("accepted apply failed: %s", resultText(res))
+	}
+	if readTree(t, root, "index.md") != "[a](x/a.md)\n" {
+		t.Fatalf("index.md = %q", readTree(t, root, "index.md"))
+	}
+}
+
+func TestRefactorPlanIsReadableAsAResource(t *testing.T) {
+	tmp := t.TempDir()
+	writeTree(t, tmp, map[string]string{
+		".kiwi/config.toml": "[search]\nengine = \"sqlite\"\n[versioning]\nstrategy = \"none\"\n",
+		"a.md":              "# A\n",
+		"b.md":              "[a](a.md)\n",
+	})
+	s, b, err := New(Options{Root: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	ctx := context.Background()
+	call := func(msg string) mcp.JSONRPCMessage {
+		return s.HandleMessage(ctx, []byte(msg))
+	}
+	res, ok := call(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kiwi_refactor_plan","arguments":{"manifest":"moves: [{from: a.md, to: z/a.md}]"}}}`).(mcp.JSONRPCResponse)
+	if !ok {
+		t.Fatal("tools/call failed")
+	}
+	data, _ := json.Marshal(res.Result)
+	var out struct {
+		StructuredContent planView `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil || out.StructuredContent.Resource == "" {
+		t.Fatalf("plan result = %s", data)
+	}
+	read, ok := call(`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"` + out.StructuredContent.Resource + `"}}`).(mcp.JSONRPCResponse)
+	if !ok {
+		t.Fatalf("resources/read failed")
+	}
+	body, _ := json.Marshal(read.Result)
+	if !strings.Contains(string(body), `+[a](z/a.md)`) || !strings.Contains(string(body), out.StructuredContent.Digest) {
+		t.Fatalf("resource = %s", body)
+	}
+}
+
+func TestRefactorScriptToolPlansWhatTheScriptReturns(t *testing.T) {
+	b, root := setupTestBackend(t)
+	defer b.Close()
+	writeTree(t, root, map[string]string{
+		"notes/2024-a.md": "---\nstatus: done\n---\n# A\n",
+		"notes/2025-b.md": "---\nstatus: open\n---\n# B\n",
+		"index.md":        "[a](notes/2024-a.md)\n",
+	})
+	src := `
+def main():
+    moves = []
+    for p in files("notes/*.md"):
+        if frontmatter(p).get("status") == "done":
+            moves.append({"from": p, "to": "archive/" + p.split("/")[-1][:4] + "/"})
+    print(len(moves), "to archive")
+    return {"moves": moves}
+`
+	res := callTool(t, handleRefactorScript(b, nil), "kiwi_refactor_script", map[string]any{"script": src})
+	if res.IsError {
+		t.Fatalf("script: %s", resultText(res))
+	}
+	var out struct {
+		Manifest json.RawMessage `json:"manifest"`
+		Output   string          `json:"output"`
+		Plan     planView        `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Output != "1 to archive\n" || out.Plan.Counts.Moves != 1 || out.Plan.Moves[0].To != "archive/2024/2024-a.md" {
+		t.Fatalf("result = %s", resultText(res))
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes/2024-a.md")); err != nil {
+		t.Fatal("a script must not change anything")
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out.Manifest, &m)
+	apply := callTool(t, handleRefactorApply(b), "kiwi_refactor_apply", map[string]any{"manifest": m, "digest": out.Plan.Digest})
+	if apply.IsError {
+		t.Fatalf("apply: %s", resultText(apply))
+	}
+	if readTree(t, root, "index.md") != "[a](archive/2024/2024-a.md)\n" {
+		t.Fatalf("index.md = %q", readTree(t, root, "index.md"))
+	}
+}

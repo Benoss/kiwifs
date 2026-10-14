@@ -282,6 +282,53 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   return (await res.text()) as unknown as T;
 }
 
+// ─── Restructuring (refactor plan / apply / revert) ──────────────────────────
+
+export type RefactorPathChange = { from: string; to: string };
+export type RefactorLinkEdit = { line: number; old: string; new: string };
+export type RefactorFileDiff = { path: string; from?: string; diff?: string; binary?: boolean };
+export type RefactorPlan = {
+  digest: string;
+  moves: RefactorPathChange[];
+  merges: RefactorPathChange[];
+  edits: { path: string; from?: string; links: RefactorLinkEdit[] }[];
+  content_edits?: { path: string; from?: string; changes: string[] }[];
+  comments?: RefactorPathChange[];
+  state?: { file: string; changes: number; conflicts?: string[] }[];
+  removed_dirs?: string[];
+  errors?: string[];
+  warnings?: string[];
+  conflicts?: { code: string; path: string; from?: string; with?: string; detail: string }[];
+  rejected?: { path: string; error: string }[];
+  stats: { pages: number; links: number; rewritten: number; unresolved: number };
+  approval?: { required: boolean; reason?: string };
+  integrity?: { unresolved: number; orphaned?: string[]; complete: boolean };
+  now?: string;
+  reverts?: string;
+  diffs?: RefactorFileDiff[];
+  splits?: { from: string; pages: string[] }[];
+  plan_only?: string[];
+};
+export type RefactorManifest = Record<string, unknown>;
+export type RefactorApplied = {
+  written: number;
+  deleted: number;
+  side_files: number;
+  removed_dirs: number;
+  commit?: string;
+};
+export type RefactorPending = {
+  digest: string;
+  manifest: RefactorManifest;
+  actor: string;
+  client?: string;
+  reason: string;
+  at: string;
+};
+export type RefactorRawMove = { from: string; to: string; actor: string; at: string; via: string };
+
+const refactorHeaders = { "Content-Type": "application/json", "X-Kiwi-Client": "web" };
+
 export const api = {
   // ─── Space Management ───────────────────────────────────────────────────────
 
@@ -806,14 +853,63 @@ export const api = {
     return request(`${kiwiBase()}/views/${encodeURIComponent(name)}/execute`);
   },
 
+  async refactorPlan(manifest: RefactorManifest, diffs = true): Promise<RefactorPlan> {
+    return request(`${kiwiBase()}/refactor/plan${diffs ? "?diffs=true" : ""}`, {
+      method: "POST",
+      headers: refactorHeaders,
+      body: JSON.stringify(manifest),
+    });
+  },
+
+  async refactorApply(
+    manifest: RefactorManifest,
+    digest: string,
+  ): Promise<{ applied: RefactorApplied; plan: RefactorPlan }> {
+    return request(`${kiwiBase()}/refactor/apply`, {
+      method: "POST",
+      headers: refactorHeaders,
+      body: JSON.stringify({ manifest, digest }),
+    });
+  },
+
+  async refactorApprove(manifest: RefactorManifest, digest: string): Promise<{ approved: string }> {
+    return request(`${kiwiBase()}/refactor/approve`, {
+      method: "POST",
+      headers: refactorHeaders,
+      body: JSON.stringify({ manifest, digest }),
+    });
+  },
+
+  async refactorPending(): Promise<{ pending: RefactorPending[] }> {
+    return request(`${kiwiBase()}/refactor/pending`);
+  },
+
+  async refactorRawMoves(): Promise<{ moves: RefactorRawMove[]; manifest: RefactorManifest | null }> {
+    return request(`${kiwiBase()}/refactor/raw-moves`);
+  },
+
+  async refactorRevert(
+    commit: string,
+    opts: { digest?: string; dryRun?: boolean } = {},
+  ): Promise<RefactorPlan | { applied: RefactorApplied; plan: RefactorPlan }> {
+    return request(`${kiwiBase()}/refactor/revert`, {
+      method: "POST",
+      headers: refactorHeaders,
+      body: JSON.stringify({ commit, digest: opts.digest, dry_run: opts.dryRun }),
+    });
+  },
+
+  // Moves one file in a single commit. The server rewrites every link to it
+  // and refuses (409) to overwrite an existing destination.
   async renameFile(
     oldPath: string,
     newPath: string,
-  ): Promise<{ path: string; etag: string }> {
-    const { content } = await this.readFile(oldPath);
-    const result = await this.writeFile(newPath, content);
-    await this.deleteFile(oldPath);
-    return result;
+  ): Promise<{ from: string; to: string; etag: string; updated_links?: string[] }> {
+    return request(`${kiwiBase()}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: oldPath, to: newPath }),
+    });
   },
 
   async renameDir(

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/kiwifs/kiwifs/internal/markdown"
+	yaml "go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/yaml.v3"
 )
 
 const (

@@ -14,6 +14,7 @@ For the full interactive API reference, see [docs.kiwifs.com/api-reference](http
 
 - [Health](#health)
 - [Files](#files)
+- [Restructuring](#restructuring)
 - [Rendering](#rendering)
 - [Search](#search)
 - [Versioning](#versioning)
@@ -41,14 +42,121 @@ GET    /api/kiwi/tree?path=                → directory tree (JSON)
 GET    /api/kiwi/file?path=                → raw markdown + ETag
 PUT    /api/kiwi/file?path=                → write + git commit + re-index
 DELETE /api/kiwi/file?path=                → delete + git commit
-POST   /api/kiwi/bulk                      → multi-file write, one commit
-POST   /api/kiwi/rename                    → atomic rename ({"from":"...","to":"..."})
+PATCH  /api/kiwi/file/frontmatter?path=    → set/remove frontmatter fields ({"fields":{...}}, null removes; X-Field-Manager + ?force for ownership)
+POST   /api/kiwi/bulk                      → multi-file write, one commit (per-file "if_match")
+POST   /api/kiwi/rename                    → rename one file, relinking ({"from":"...","to":"..."})
+POST   /api/kiwi/rename-dir                → move a folder, relinking ({"from":"...","to":"..."})
 POST   /api/kiwi/file/append?path=         → append content to file
 GET    /api/kiwi/toc?path=                 → heading outline
 GET    /api/kiwi/backlinks?path=           → pages that link to this page
 GET    /api/kiwi/context                   → schema + playbook + index in one call
 GET    /api/kiwi/changes?since=&limit=     → git-based change feed
 ```
+
+---
+
+## Restructuring
+
+```
+POST   /api/kiwi/refactor/plan             → preview a manifest of moves and merges (nothing written)
+POST   /api/kiwi/refactor/apply            → apply it as one commit ({"manifest":{...},"digest":"..."})
+POST   /api/kiwi/refactor/revert           → undo a commit as a plan ({"commit":"...","dry_run":true} to preview)
+POST   /api/kiwi/refactor/approve          → a person approves a plan for an agent ({"manifest":{...},"digest":"..."})
+GET    /api/kiwi/refactor/pending          → plans agents are waiting to have approved
+GET    /api/kiwi/refactor/raw-moves        → moves made without relinking, and the relinks manifest that repairs them
+POST   /api/kiwi/refactor/from-workspace-edit → an editor's LSP WorkspaceEdit renames as a manifest + plan
+POST   /api/kiwi/refactor/script           → run a read-only Starlark script that returns a manifest; answers manifest + plan
+POST   /api/kiwi/refactor/fix-broken       → repair links that already point nowhere
+```
+
+Every reorganization — a single rename, a folder move, a glob move, a merge —
+runs through one engine (`internal/refactor`). The plan is computed from disk:
+each wiki and markdown link to a moved page is respelled in its original style
+and re-resolved to prove it still lands on the same page; comments and personal
+state move with the page. Apply re-checks every file's ETag inside the write
+lock and lands everything in a single commit, rolling back on failure.
+
+`apply` with a `digest` applies only the plan that was reviewed: if the
+workspace changed since, it answers `409` with the fresh plan. A plan with
+errors (a taken destination, a link that cannot be kept) answers `422`.
+`rename` and `rename-dir` answer `409` for the same reasons and never
+overwrite an existing destination (protocol clients that need rename(2)
+semantics pass `?overwrite=true`). Agents get the same engine through
+`kiwi_refactor_plan` / `kiwi_refactor_apply` / `kiwi_refactor_revert`.
+
+Beyond moves and merges, a manifest can carry `edits` — `select` pages by
+`paths`, `glob` and/or a DQL `query` (all criteria narrow; at least one is
+required), then `set`/`unset` frontmatter keys, `add_tags`/`remove_tags`, and
+`replace` body text outside code — and `rename_tags` (frontmatter lists and
+inline `#tags`; renaming into an existing tag is a warning). Selection sees the
+workspace before any change. Frontmatter is edited line by line, so comments,
+key order and alignment survive and a retag is a one-line diff per page.
+`POST /refactor/plan?diffs=true` adds a unified diff per written page.
+
+`[refactor]` in `.kiwi/config.toml` sets standing rules: `protect` (globs no
+plan may touch), `scope` (the only folder plans may touch), `folder_map` (a page
+listing where pages belong; moving elsewhere warns), and `approval_files` /
+`approval_links` (default 50 / 200; `-1` disables). An agent (MCP, or REST with
+`X-Kiwi-Client: mcp/…`) applying a bigger plan is asked to confirm through MCP
+elicitation when its client supports it; otherwise the request waits in
+`/refactor/pending` until a person approves it — in the web UI's **Restructure**
+view (sidebar) or with `/refactor/approve`. Plans also report `integrity`: links
+that point nowhere in the pages written, and pages a merge leaves unlinked.
+
+`split: [{from: page.md, level: 2, into: folder/, confirm: true}]` breaks a
+page into a page per heading: the original becomes an index linking to them,
+references to `page#heading` follow their section, and the section's own links
+are re-resolved from its new folder. A split is a preview until `confirm: true`.
+
+Editors: `POST /refactor/plan?format=workspace-edit` answers with the plan as an
+LSP `WorkspaceEdit` (renames, minimal text edits, a `needsConfirmation`
+annotation); `kiwifs lsp` is a language server that answers
+`workspace/willRenameFiles`, so renaming a page in VS Code, Zed or Neovim
+relinks it through the same planner.
+
+Frontmatter keys have owners, as in Kubernetes server-side apply: a patch sent
+as a field manager (`X-Field-Manager`, or the actor of `kiwi_patch_frontmatter`
+and of manifest edits) owns the keys it changes, and another manager changing
+them gets `409` naming the owner unless it forces (`?force=true`,
+`force: true`). A person's edit that changes the value makes the ownership
+stale, so people always win. Ownership follows moved pages.
+
+When selection needs real logic, `POST /refactor/script` (MCP
+`kiwi_refactor_script`) runs a [Starlark](https://github.com/google/starlark-go)
+program in a separate, sandboxed process. It can only read — `query(dql)`,
+`files(glob)`, `read(path)`, `frontmatter(path)`, `links(path)`, `slug()`,
+`json` — and returns a manifest from `main()`; steps, memory, time and reads
+are bounded. Nothing is written: the manifest is planned, and applied like any
+other.
+
+Moves that bypass the engine — WebDAV/NFS renames, `update_links=false`, files
+moved on disk while the watcher runs — are logged when anything referenced the
+old path. `relinks: [{from, to}]` repairs them without moving anything;
+`/refactor/raw-moves` builds that manifest for you.
+
+Edits can also compute: `when:` keeps only pages for which an expression is
+true, `compute: {key: expr}` sets a value per page, and
+`move_to: "archive/{{year}}/{{slug}}.md"` moves each page to a templated path,
+with `on_conflict: suffix("-%d")` to number collisions deterministically
+(otherwise they are conflicts). Expressions are [expr](https://expr-lang.org)
+over the page as it was before the manifest — `path`, `dir`, `name`, `stem`,
+`title`, `tags`, `fm`, `links`, `date`, `modified`, `now` — with `slug()`,
+`year()`, `month()`, `day()`, `date(t, layout)`. A plan that uses expressions
+reports the `now` it used; put it in the manifest (`now:`) when applying so the
+digest still matches.
+
+Plans also cover typed-link frontmatter fields (`[links] typed_fields`),
+`**` globs, `from_regex` moves with `$1` captures, and task claims: a page
+claimed by another actor cannot be moved. Destinations that collide by case or
+Unicode normalization, or are not portable names, are reported as
+`conflicts` with a code (`exists`, `many_to_one`, `case_or_normalization`, …).
+
+Applying writes a journal of pre-images first (`.kiwi/state/refactor-journal.json`,
+rolled back on the next start if the process dies mid-apply), and the commit
+carries trailers (`Kiwi-Actor`, `Kiwi-Client`, `Kiwi-Refactor-Digest`,
+`Kiwi-Manifest`, `Kiwi-Base`). The apply response names the commit; `revert`
+puts every page and comment/state file back byte for byte, and refuses if any
+of them changed since.
 
 ---
 

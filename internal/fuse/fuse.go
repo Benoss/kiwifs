@@ -521,6 +521,9 @@ func (n *kiwiNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	return n.Unlink(ctx, name)
 }
 
+// renameNoReplace is RENAME_NOREPLACE from renameat2(2).
+const renameNoReplace = 1
+
 // Rename moves a file from one path to another via the atomic rename endpoint.
 func (n *kiwiNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	oldPath := childPath(n.path, name)
@@ -560,8 +563,14 @@ func (n *kiwiNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		io.Copy(io.Discard, resp.Body)
 	}
 
+	// rename(2) replaces the destination unless the caller asked otherwise;
+	// editors save by writing a temp file and renaming it over the original.
+	endpoint := n.client.remote + "/api/kiwi/rename"
+	if flags&renameNoReplace == 0 {
+		endpoint += "?overwrite=true"
+	}
 	bodyBytes, _ := json.Marshal(map[string]string{"from": oldPath, "to": newPath})
-	req, _ := http.NewRequest("POST", n.client.remote+"/api/kiwi/rename", bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequest("POST", endpoint, bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Actor", "fuse")
 	resp, err := n.client.do(req)
@@ -569,6 +578,11 @@ func (n *kiwiNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		return syscall.EIO
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		// The destination exists (RENAME_NOREPLACE) or a link could not
+		// be kept.
+		return syscall.EEXIST
+	}
 	if resp.StatusCode != http.StatusOK {
 		return httpErrno(resp.StatusCode)
 	}

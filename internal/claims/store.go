@@ -138,6 +138,40 @@ func (s *Store) ListActive(ctx context.Context) ([]Claim, error) {
 	return out, rows.Err()
 }
 
+// Rename moves claims along with the pages they cover, in one
+// transaction. A path mapped to "" lost its page (merged away) and its claim
+// is dropped. Expired rows at a destination are cleared first so a stale
+// lease cannot block the move.
+func (s *Store) Rename(ctx context.Context, renames map[string]string) error {
+	if len(renames) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339)
+	for from, to := range renames {
+		if to == "" {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM claims WHERE path = ?`, from); err != nil {
+				return fmt.Errorf("drop claim %s: %w", from, err)
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM claims WHERE path = ? AND expires_at < ?`, to, now); err != nil {
+			return fmt.Errorf("clear stale claim %s: %w", to, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE claims SET path = ? WHERE path = ?`, to, from); err != nil {
+			return fmt.Errorf("move claim %s: %w", from, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM claims WHERE path = ?`, from); err != nil {
+			return fmt.Errorf("drop claim %s: %w", from, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
 }

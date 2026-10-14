@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -14,9 +15,9 @@ import (
 	"github.com/kiwifs/kiwifs/internal/rbac"
 	"github.com/kiwifs/kiwifs/internal/readertheme"
 	"github.com/labstack/echo/v4"
-	goldmark "github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/extension"
-	gmhtml "github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/v2/extension"
+	gmparser "github.com/yuin/goldmark/v2/parser"
+	gmhtml "github.com/yuin/goldmark/v2/renderer/html"
 )
 
 type publishedPageJSON struct {
@@ -25,10 +26,16 @@ type publishedPageJSON struct {
 	Markdown    string         `json:"markdown"`
 }
 
-var mdRenderer = goldmark.New(
-	goldmark.WithExtensions(extension.GFM),
-	goldmark.WithRendererOptions(gmhtml.WithUnsafe()),
+var (
+	mdParser   = gmparser.New(gmparser.WithExtensions(extension.GFMParser))
+	mdRenderer = gmhtml.New(gmhtml.WithUnsafe(), gmhtml.WithExtensions(extension.GFMHTMLRenderer))
 )
+
+// renderMarkdown converts a page body to HTML (GFM, raw HTML passed
+// through, as published pages always have).
+func renderMarkdown(w io.Writer, source []byte) error {
+	return mdRenderer.Render(w, source, mdParser.Parse(source))
+}
 
 type tocEntry struct {
 	ID    string
@@ -167,7 +174,7 @@ func (h *Handlers) PublishedPage(c echo.Context) error {
 	bodyStr := rewriteRelativeAssets(string(bodyBytes), pageDir)
 
 	var htmlBuf bytes.Buffer
-	if err := mdRenderer.Convert([]byte(bodyStr), &htmlBuf); err != nil {
+	if err := renderMarkdown(&htmlBuf, []byte(bodyStr)); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "render failed")
 	}
 

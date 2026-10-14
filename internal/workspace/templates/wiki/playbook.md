@@ -89,7 +89,11 @@ For standard operating procedures in `processes/`:
 When restructuring or cleaning up:
 
 1. `kiwi_tree` to understand current layout.
-2. `kiwi_rename` to move pages — links auto-update.
+2. One page: `kiwi_rename` — every link to it is rewritten.
+   Several pages, a folder, a glob or a merge: write a manifest and run
+   `kiwi_refactor_plan`, show the user the moves and link counts, then
+   `kiwi_refactor_apply` with the plan's digest. One plan, one commit;
+   never move files by rewriting and deleting them.
 3. Ensure every folder has an `index.md` landing page.
 4. Keep folder depth ≤ 3 levels for discoverability.
 

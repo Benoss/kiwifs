@@ -3,11 +3,10 @@ package markdown
 import (
 	"strings"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
-	"github.com/yuin/goldmark/util"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
+	"github.com/yuin/goldmark/v2/text"
+	"github.com/yuin/goldmark/v2/util"
 )
 
 // CommonMark generic directives (https://talk.commonmark.org/t/generic-directives-plugins-syntax/444)
@@ -50,8 +49,14 @@ type ContainerDirective struct {
 
 func (n *ContainerDirective) Kind() ast.NodeKind { return KindContainerDirective }
 
-func (n *ContainerDirective) Dump(source []byte, level int) {
-	ast.DumpHelper(n, source, level, map[string]string{"Name": n.Name}, nil)
+func (n *ContainerDirective) Dump(_ []byte) *ast.NodeDump {
+	return ast.NewNodeDump(n, map[string]any{"Name": n.Name})
+}
+
+func newContainerDirective(name string, attrs map[string]string, offset int) *ContainerDirective {
+	n := &ContainerDirective{Name: name, Attrs: attrs, Offset: offset}
+	n.Init(n)
+	return n
 }
 
 // TextDirective is an inline `:name[label]{attrs}`.
@@ -68,8 +73,37 @@ type TextDirective struct {
 
 func (n *TextDirective) Kind() ast.NodeKind { return KindTextDirective }
 
-func (n *TextDirective) Dump(source []byte, level int) {
-	ast.DumpHelper(n, source, level, map[string]string{"Name": n.Name, "Label": n.Label}, nil)
+func (n *TextDirective) Dump(_ []byte) *ast.NodeDump {
+	return ast.NewNodeDump(n, map[string]any{"Name": n.Name, "Label": n.Label})
+}
+
+func newTextDirective(name, label string, attrs map[string]string, offset int) *TextDirective {
+	n := &TextDirective{Name: name, Label: label, Attrs: attrs, Offset: offset}
+	n.Init(n)
+	return n
+}
+
+// kindDirectiveLabel is the AST kind of a text directive's label.
+var kindDirectiveLabel = ast.NewNodeKind("KiwiDirectiveLabel")
+
+// directiveLabel holds a text directive's label as literal text. It is its
+// own node, not an ast.Text, because the heading and task extractors only
+// read source-backed Text and have always skipped labels; nodeText reads it.
+type directiveLabel struct {
+	ast.BaseInline
+	Value string
+}
+
+func (n *directiveLabel) Kind() ast.NodeKind { return kindDirectiveLabel }
+
+func (n *directiveLabel) Dump(_ []byte) *ast.NodeDump {
+	return ast.NewNodeDump(n, map[string]any{"Value": n.Value})
+}
+
+func newDirectiveLabel(v string) *directiveLabel {
+	n := &directiveLabel{Value: v}
+	n.Init(n)
+	return n
 }
 
 // --- block parser ---
@@ -102,7 +136,9 @@ func (p *containerDirectiveParser) Open(_ ast.Node, reader text.Reader, _ parser
 	}
 	start := segment.Start + pos
 	reader.Advance(segment.Len() - 1)
-	return &ContainerDirective{Name: name, Attrs: attrs, Offset: start}, parser.HasChildren
+	node := newContainerDirective(name, attrs, start)
+	node.SetPos(start)
+	return node, parser.HasChildren
 }
 
 func (p *containerDirectiveParser) Continue(_ ast.Node, reader text.Reader, _ parser.Context) parser.State {
@@ -178,12 +214,13 @@ func (p *textDirectiveParser) Parse(_ ast.Node, block text.Reader, _ parser.Cont
 
 	start := lineSeg.Start
 	block.Advance(i)
-	node := &TextDirective{Name: name, Label: label, Attrs: attrs, Offset: start}
+	node := newTextDirective(name, label, attrs, start)
+	node.SetPos(start)
 	// The label renders as its literal text. Parsing it as inline markdown
 	// would be closer to remark, but a claim's label is an assertion, not a
 	// place for nested emphasis, and keeping it flat keeps the indexed text
 	// identical to what a reader sees.
-	node.AppendChild(node, ast.NewString([]byte(label)))
+	node.AppendChild(newDirectiveLabel(label))
 	return node
 }
 
@@ -315,12 +352,13 @@ func pos1stNonSpace(line []byte) int {
 
 type directivesExtension struct{}
 
-// Directives is the goldmark extension adding container and text directives.
-var Directives goldmark.Extender = &directivesExtension{}
+// Directives is the goldmark parser extension adding container and text
+// directives.
+var Directives parser.Extension = &directivesExtension{}
 
-func (e *directivesExtension) Extend(m goldmark.Markdown) {
-	m.Parser().AddOptions(
-		parser.WithBlockParsers(util.Prioritized(&containerDirectiveParser{}, containerDirectiveParserPriority)),
-		parser.WithInlineParsers(util.Prioritized(&textDirectiveParser{}, textDirectiveParserPriority)),
-	)
+func (e *directivesExtension) ParserOptions(_ *parser.Config) []parser.Option {
+	return []parser.Option{
+		parser.WithBlockParsers(util.Prioritized[parser.BlockParser](&containerDirectiveParser{}, containerDirectiveParserPriority)),
+		parser.WithInlineParsers(util.Prioritized[parser.InlineParser](&textDirectiveParser{}, textDirectiveParserPriority)),
+	}
 }

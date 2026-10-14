@@ -8,6 +8,8 @@ import (
 
 	"github.com/kiwifs/kiwifs/internal/brief"
 	"github.com/kiwifs/kiwifs/internal/claims"
+	"github.com/kiwifs/kiwifs/internal/pipeline"
+	"github.com/kiwifs/kiwifs/internal/refactor"
 	"github.com/kiwifs/kiwifs/internal/similar"
 )
 
@@ -65,6 +67,22 @@ type Backlink struct {
 type BulkFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	IfMatch string `json:"if_match,omitempty"`
+}
+
+// ScriptResult is a refactor script's manifest, what it printed, and the
+// plan of that manifest.
+type ScriptResult struct {
+	Manifest json.RawMessage `json:"manifest"`
+	Output   string          `json:"output,omitempty"`
+	Plan     *refactor.Plan  `json:"plan"`
+}
+
+// RefactorApplyResult is what applying a restructuring did, with the plan
+// that was applied (or, on ErrDigestMismatch, the fresh plan to review).
+type RefactorApplyResult struct {
+	Applied pipeline.RefactorResult `json:"applied"`
+	Plan    *refactor.Plan          `json:"plan"`
 }
 
 var (
@@ -161,6 +179,30 @@ type Backend interface {
 	Changes(ctx context.Context, since string, limit int) (*ChangesResult, error)
 	ReadFile(ctx context.Context, path string) (content string, etag string, err error)
 	WriteFile(ctx context.Context, path, content, actor string, provenance string) (etag string, err error)
+	// WriteFileIfMatch is WriteFile that fails with pipeline.ErrConflict
+	// when the file exists and its ETag is not ifMatch.
+	WriteFileIfMatch(ctx context.Context, path, content, actor, provenance, ifMatch string) (etag string, err error)
+	// PatchFrontmatter sets fields (nil removes) without touching the body,
+	// as field manager actor: keys another manager set are refused with
+	// pipeline.ErrFieldConflict unless force.
+	PatchFrontmatter(ctx context.Context, path string, fields map[string]any, ifMatch, actor string, force bool) (etag string, err error)
+	// RefactorPlan previews a restructuring; nothing is written.
+	RefactorPlan(ctx context.Context, m *refactor.Manifest, actor string) (*refactor.Plan, error)
+	// RefactorApply applies a restructuring as one commit. A non-empty
+	// digest must match the reviewed plan, else pipeline.ErrDigestMismatch
+	// comes back with the fresh plan in the result. Plans over the
+	// workspace's approval limits fail with pipeline.ErrApprovalRequired
+	// unless approved (the user said yes through elicitation) or a human
+	// approved the digest.
+	RefactorApply(ctx context.Context, m *refactor.Manifest, digest, actor string, approved bool) (*RefactorApplyResult, error)
+	// RefactorScript runs a read-only Starlark script that returns a
+	// manifest, and plans it. Nothing is written.
+	RefactorScript(ctx context.Context, src, actor string) (*ScriptResult, error)
+	// RawMoves lists moves that left references behind, with the relinks
+	// manifest that repairs them (nil when nothing needs repair).
+	RawMoves(ctx context.Context) ([]pipeline.RawMove, *refactor.Manifest, error)
+	// RefactorRevert previews (apply false) or applies the undo of commit.
+	RefactorRevert(ctx context.Context, commit, digest, actor string, apply bool) (*RefactorApplyResult, error)
 	DeleteFile(ctx context.Context, path, actor string) error
 	Tree(ctx context.Context, path string) (json.RawMessage, error)
 	Search(ctx context.Context, query string, limit, offset int, pathPrefix string) ([]SearchResult, error)

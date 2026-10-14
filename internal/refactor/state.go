@@ -41,7 +41,25 @@ func (p *planner) migrateSideFiles() error {
 	if err := p.migrateComments(renames); err != nil {
 		return err
 	}
-	return p.migrateState(renames)
+	if err := p.migrateState(renames); err != nil {
+		return err
+	}
+	// In a swap or chain one page's old comment file is another's new one;
+	// the write replaces it, so its delete must go.
+	written := map[string]bool{}
+	for _, s := range p.plan.Ops.Side {
+		if !s.Delete {
+			written[s.Path] = true
+		}
+	}
+	kept := p.plan.Ops.Side[:0]
+	for _, s := range p.plan.Ops.Side {
+		if !s.Delete || !written[s.Path] {
+			kept = append(kept, s)
+		}
+	}
+	p.plan.Ops.Side = kept
+	return nil
 }
 
 func (p *planner) migrateComments(renames map[string]string) error {

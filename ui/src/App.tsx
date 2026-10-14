@@ -26,6 +26,7 @@ import { KiwiSearch } from "./components/KiwiSearch";
 import { KiwiGraph } from "./components/KiwiGraph";
 import { KiwiHistory } from "./components/KiwiHistory";
 import { KiwiData } from "./components/KiwiData";
+import { KiwiRefactor } from "./components/KiwiRefactor";
 import { KiwiBases } from "./components/KiwiBases";
 import { KiwiCanvasScreen } from "./components/KiwiCanvasScreen";
 import { KiwiWhiteboardScreen } from "./components/KiwiWhiteboardScreen";
@@ -126,6 +127,7 @@ export default function App() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [dataOpen, setDataOpen] = useState(false);
+  const [refactorOpen, setRefactorOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [basesOpen, setBasesOpen] = useState(false);
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -157,6 +159,7 @@ export default function App() {
     setTimelineOpen(false);
     setKanbanOpen(false);
     setDataOpen(false);
+    setRefactorOpen(false);
     setGraphOpen(false);
     setHistoryOpen(false);
   }, []);
@@ -234,6 +237,7 @@ export default function App() {
     graphOpen,
     historyOpen,
     dataOpen,
+    refactorOpen,
     basesOpen,
     canvasOpen,
     whiteboardOpen,
@@ -249,6 +253,7 @@ export default function App() {
     graphOpen,
     historyOpen,
     dataOpen,
+    refactorOpen,
     basesOpen,
     canvasOpen,
     whiteboardOpen,
@@ -376,8 +381,8 @@ export default function App() {
           break;
         case "toggle_editor": {
           if (!features.edit) return;
-          const { activePath, graphOpen, historyOpen, dataOpen } = state;
-          if (!activePath || graphOpen || historyOpen || dataOpen) return;
+          const { activePath, graphOpen, historyOpen, dataOpen, refactorOpen } = state;
+          if (!activePath || graphOpen || historyOpen || dataOpen || refactorOpen) return;
           e.preventDefault();
           setEditing((v) => !v);
           break;
@@ -468,6 +473,9 @@ export default function App() {
               break;
             case "data":
               setDataOpen(false);
+              break;
+            case "refactor":
+              setRefactorOpen(false);
               break;
             case "bases":
               setBasesOpen(false);
@@ -873,6 +881,10 @@ const handleSpaceSwitch = useCallback(() => {
             onTreeSortModeChange={setTreeSortMode}
             onActivePathChange={setActivePath}
             onTreeRefresh={refreshTree}
+            onOpenRefactor={() => {
+              closeAllViews();
+              setRefactorOpen(true);
+            }}
           />
 
           {/* Sidebar resize handle (desktop only) */}
@@ -934,6 +946,14 @@ const handleSpaceSwitch = useCallback(() => {
               />
             ) : dataOpen ? (
               <KiwiData onClose={() => setDataOpen(false)} />
+            ) : refactorOpen ? (
+              <KiwiRefactor
+                onClose={() => setRefactorOpen(false)}
+                onApplied={() => {
+                  refreshTree({ reconcile: true });
+                  setRefreshKey((k) => k + 1);
+                }}
+              />
             ) : graphOpen ? (
               <KiwiGraph
                 tree={tree}
