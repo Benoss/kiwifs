@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.76](https://github.com/kiwifs/kiwifs/compare/v0.19.75...v0.19.76) (2026-10-14)
+
+
+### Features
+
+* agent-driven restructuring — refactor over MCP, edits, selection, revert and review ([#537](https://github.com/kiwifs/kiwifs/issues/537)) ([8900833](https://github.com/kiwifs/kiwifs/commit/8900833a137a26a168601d69513c89d46f998c5a))
+
 ## [0.19.75](https://github.com/kiwifs/kiwifs/compare/v0.19.74...v0.19.75) (2026-10-13)
 
 
