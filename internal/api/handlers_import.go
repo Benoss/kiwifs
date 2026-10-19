@@ -592,6 +592,7 @@ type previewRequest struct {
 	URI           string                  `json:"uri"`
 	DB            string                  `json:"db"`
 	File          string                  `json:"file"`
+	Path          string                  `json:"path"`
 	URL           string                  `json:"url"`
 	Table         string                  `json:"table"`
 	Collection    string                  `json:"collection"`
@@ -600,6 +601,7 @@ type previewRequest struct {
 	BaseID        string                  `json:"base_id"`
 	TableID       string                  `json:"table_id"`
 	Project       string                  `json:"project"`
+	Query         string                  `json:"query"`
 	Credentials   json.RawMessage         `json:"credentials,omitempty" swaggertype:"object"`
 	APIKey        string                  `json:"api_key,omitempty"`
 	Prefix        string                  `json:"prefix,omitempty"`
@@ -718,6 +720,7 @@ func previewToImportRequest(req previewRequest) importRequest {
 		URI:           req.URI,
 		DB:            req.DB,
 		File:          req.File,
+		Path:          req.Path,
 		URL:           req.URL,
 		Table:         req.Table,
 		Collection:    req.Collection,
@@ -726,6 +729,7 @@ func previewToImportRequest(req previewRequest) importRequest {
 		BaseID:        req.BaseID,
 		TableID:       req.TableID,
 		Project:       req.Project,
+		Query:         req.Query,
 		Credentials:   req.Credentials,
 		APIKey:        req.APIKey,
 		AirbyteConfig: req.AirbyteConfig,
